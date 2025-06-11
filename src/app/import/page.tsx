@@ -53,7 +53,8 @@ export default function ImportPage() {
     formData.append('file', file);
 
     try {
-      const res = await fetch('/api/import-kg', {
+      const AI_BACKEND_URL = process.env.NEXT_PUBLIC_AI_BACKEND_URL || 'http://localhost:8000';
+      const res = await fetch(`${AI_BACKEND_URL}/api/ai/import-kg`, {
         method: 'POST',
         body: formData,
       });
@@ -61,7 +62,7 @@ export default function ImportPage() {
       const data = await res.json();
 
       if (!res.ok) {
-        setError(data.error || 'An error occurred during upload.');
+        setError(data.detail || 'An error occurred during upload.');
       } else {
         setSuccess(`Successfully imported: ${data.counts.cases} cases, ${data.counts.parties} parties, ${data.counts.provisions} provisions.`);
         setFile(null);
