@@ -39,7 +39,7 @@ SECTIONS = [
     'Ruling', 'Relief', 'Evidence'
 ]
 
-async def parse_docx_to_knowledge_graph(file_content: bytes) -> KnowledgeGraph:
+def parse_docx_to_knowledge_graph(file_content: bytes) -> KnowledgeGraph:
     """
     Parse a Word document (.docx) into a structured knowledge graph.
     

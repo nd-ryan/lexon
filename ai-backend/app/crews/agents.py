@@ -1,13 +1,17 @@
-from crewai import Agent
+from crewai import Agent, LLM
+from crewai.tools import tool
 from crewai_tools import MCPServerAdapter
 from mcp import StdioServerParameters
 import os
 import sys
+import logging
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from ..lib.cypher_generator import generate_cypher_query_async
 from ..lib.neo4j_client import neo4j_client
 from ..lib.embeddings import find_similar_cases, generate_embeddings_for_cases
+
+logger = logging.getLogger(__name__)
 
 # MCP Configuration - Updated to use Neo4j's official MCP server
 def get_neo4j_mcp_server_params():
@@ -56,28 +60,189 @@ def agent_step_callback(step):
 
 # Search and Query Agent (MCP-enabled)
 def create_search_agent(tools: Optional[List] = None) -> Agent:
-    """Create a search agent with optional MCP tools"""
-    agent_tools = tools or []
+    """Create a search agent with proper search tools"""
+    # Default tools that every search agent should have
+    default_tools = [search_knowledge_graph_tool, find_similar_cases_tool]
+    
+    # Add any additional tools passed in (like MCP tools)
+    agent_tools = default_tools + (tools or [])
     
     return Agent(
         role="Knowledge Graph Search Specialist",
-        goal="Execute precise searches against Neo4j knowledge graphs using available tools",
-        backstory="You are an expert at navigating and querying knowledge graphs. You understand how to use both direct database queries and MCP tools to find relevant information efficiently.",
+        goal="Execute precise searches against Neo4j knowledge graphs using available tools to find relevant information efficiently",
+        backstory="You are an expert at navigating and querying knowledge graphs. You have access to specialized tools for natural language search and similarity analysis.",
         tools=agent_tools,
         verbose=True,
         allow_delegation=False
     )
 
+# Search and Query Tools
+@tool
+def search_knowledge_graph_tool(query: str) -> Dict[str, Any]:
+    """
+    Search the knowledge graph using natural language queries.
+    
+    Args:
+        query: Natural language question about the knowledge graph
+        
+    Returns:
+        Dictionary containing the generated Cypher query and results
+    """
+    try:
+        # Generate Cypher query from natural language
+        cypher_query = generate_cypher_query_async.__wrapped__(query)
+        
+        # Execute the query
+        results = neo4j_client.execute_query(cypher_query)
+        
+        return {
+            "cypher_query": cypher_query,
+            "results": results,
+            "count": len(results)
+        }
+    except Exception as e:
+        return {
+            "error": str(e),
+            "cypher_query": None,
+            "results": [],
+            "count": 0
+        }
+
+@tool 
+def find_similar_cases_tool(case_id: str, limit: int = 5) -> Dict[str, Any]:
+    """
+    Find cases similar to the given case using vector similarity.
+    
+    Args:
+        case_id: ID of the case to find similarities for
+        limit: Maximum number of similar cases to return
+        
+    Returns:
+        Dictionary containing similar cases with similarity scores
+    """
+    try:
+        import asyncio
+        
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            similar_cases = loop.run_until_complete(find_similar_cases(case_id, limit))
+            return {
+                "case_id": case_id,
+                "similar_cases": similar_cases,
+                "count": len(similar_cases)
+            }
+        finally:
+            loop.close()
+            
+    except Exception as e:
+        return {
+            "error": str(e),
+            "case_id": case_id,
+            "similar_cases": [],
+            "count": 0
+        }
+
+# Document Processing Tool - Convert to CrewAI tool
+@tool
+def process_document_tool(file_path: str, filename: str) -> Dict[str, Any]:
+    """
+    Process a document using AI-powered dynamic extraction that adapts to existing Neo4j schema.
+    
+    Args:
+        file_path: Path to the document file
+        filename: Name of the file being processed
+        
+    Returns:
+        Dictionary with processing results and statistics
+    """
+    try:
+        from ..lib.dynamic_document_processor import dynamic_processor
+        
+        # Set MCP tools if available
+        mcp_tools = get_mcp_tools()
+        if mcp_tools:
+            dynamic_processor.set_mcp_tools(mcp_tools)
+            logger.info("Dynamic processor configured with MCP tools")
+        
+        # Read the file content
+        with open(file_path, 'rb') as f:
+            file_content = f.read()
+        
+        # Process document using dynamic AI-powered approach
+        result = dynamic_processor.process_document(file_content, filename)
+        
+        return result
+            
+    except Exception as e:
+        return {
+            "success": False,
+            "filename": filename,
+            "error": str(e),
+            "extracted_counts": {}
+        }
+
+@tool
+def generate_embeddings_tool(case_ids: List[str]) -> Dict[str, Any]:
+    """
+    Generate embeddings for the specified cases.
+    
+    Args:
+        case_ids: List of case IDs to generate embeddings for
+        
+    Returns:
+        Dictionary with generation results and statistics
+    """
+    try:
+        import asyncio
+        
+        # Generate embeddings
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            results = loop.run_until_complete(generate_embeddings_for_cases(case_ids))
+            return {
+                "success": True,
+                "case_ids": case_ids,
+                "results": results,
+                "count": len(case_ids)
+            }
+        finally:
+            loop.close()
+            
+    except Exception as e:
+        return {
+            "success": False,
+            "case_ids": case_ids,
+            "error": str(e),
+            "results": [],
+            "count": 0
+        }
+
 # Document Processing Agent
 def create_document_agent(tools: Optional[List] = None) -> Agent:
-    """Create a document processing agent with optional MCP tools"""
-    agent_tools = tools or []
+    """Create a document processing agent with AI-powered dynamic extraction"""
+    # Default tools that every document agent should have
+    default_tools = [process_document_tool, generate_embeddings_tool]
+    
+    # Add any additional tools passed in (like MCP tools)
+    agent_tools = default_tools + (tools or [])
+    
+    llm = LLM(model="o3-mini", temperature=0)
     
     return Agent(
-        role="Document Processing Specialist", 
-        goal="Process and analyze documents using available tools to extract meaningful information",
-        backstory="You are an expert at processing various document types and extracting structured information. You understand how to work with different document formats and databases.",
+        role="AI-Powered Document Processing Specialist", 
+        goal="Intelligently process documents using AI to dynamically adapt extraction to existing knowledge graph schema while discovering new entity types and relationships",
+        backstory="""You are an advanced AI document processing specialist with the ability to:
+        1. Analyze existing Neo4j knowledge graph schema to understand current data structure
+        2. Intelligently analyze new documents to identify entities and relationships  
+        3. Adapt extraction to fit existing schema while also discovering new data types
+        4. Use AI-powered content extraction that goes beyond rigid templates
+        5. Generate appropriate Cypher queries for seamless data integration
+        
+        Your approach is dynamic and context-aware, ensuring both consistency with existing data and flexibility for new document types.""",
         tools=agent_tools,
+        llm=llm,
         verbose=True,
         allow_delegation=False
     )
@@ -102,13 +267,17 @@ def create_embeddings_agent():
 
 # Research Agent  
 def create_research_agent(tools: Optional[List] = None) -> Agent:
-    """Create a research agent with optional MCP tools"""
-    agent_tools = tools or []
+    """Create a research agent with comprehensive research tools"""
+    # Default tools that every research agent should have
+    default_tools = [search_knowledge_graph_tool, find_similar_cases_tool, generate_embeddings_tool]
+    
+    # Add any additional tools passed in (like MCP tools)
+    agent_tools = default_tools + (tools or [])
     
     return Agent(
         role="Research Analyst",
         goal="Conduct comprehensive research using available tools and synthesize findings into clear, actionable insights",
-        backstory="You are a skilled research analyst who can work with various data sources and tools. You excel at finding patterns, connections, and insights from complex information.",
+        backstory="You are a skilled research analyst with access to powerful knowledge graph search, similarity analysis, and embedding generation tools. You excel at finding patterns, connections, and insights from complex legal information.",
         tools=agent_tools,
         verbose=True,
         allow_delegation=False
@@ -178,142 +347,5 @@ def create_mcp_enabled_agents():
         "writer_agent": create_writer_agent()
     }
 
-# Fallback functions (keep existing functionality for backward compatibility)
-def search_knowledge_graph_tool(query: str) -> Dict[str, Any]:
-    """
-    Search the knowledge graph using natural language queries.
-    
-    Args:
-        query: Natural language question about the knowledge graph
-        
-    Returns:
-        Dictionary containing the generated Cypher query and results
-    """
-    try:
-        # Generate Cypher query from natural language
-        cypher_query = generate_cypher_query_async.__wrapped__(query)
-        
-        # Execute the query
-        results = neo4j_client.execute_query(cypher_query)
-        
-        return {
-            "cypher_query": cypher_query,
-            "results": results,
-            "count": len(results)
-        }
-    except Exception as e:
-        return {
-            "error": str(e),
-            "cypher_query": None,
-            "results": [],
-            "count": 0
-        }
-
-def find_similar_cases_tool(query_text: str, limit: int = 5) -> List[Dict[str, Any]]:
-    """
-    Find cases similar to the given text using semantic similarity.
-    
-    Args:  
-        query_text: Text to find similar cases for
-        limit: Maximum number of similar cases to return (default 5)
-        
-    Returns:
-        List of similar cases with similarity scores
-    """
-    try:
-        import asyncio
-        # Run the async function
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            results = loop.run_until_complete(find_similar_cases(query_text, limit))
-            return results
-        finally:
-            loop.close()
-    except Exception as e:
-        return [{"error": str(e)}]
-
-def process_document_tool(file_content: bytes, filename: str) -> Dict[str, Any]:
-    """
-    Process a document and extract knowledge graph data.
-    
-    Args:
-        file_content: Raw bytes of the document
-        filename: Name of the file being processed
-        
-    Returns:
-        Dictionary with processing results and statistics
-    """
-    try:
-        from ..lib.document_processor import parse_docx_to_knowledge_graph, knowledge_graph_to_dict
-        import asyncio
-        
-        # Parse document
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            kg = loop.run_until_complete(parse_docx_to_knowledge_graph(file_content))
-            
-            # Convert to dict for serialization
-            kg_dict = knowledge_graph_to_dict(kg)
-            
-            # Load into Neo4j
-            neo4j_client.load_knowledge_graph(kg_dict)
-            
-            return {
-                "success": True,
-                "filename": filename,
-                "counts": {
-                    "cases": len(kg.cases),
-                    "parties": len(kg.parties), 
-                    "provisions": len(kg.provisions),
-                    "doctrines": len(kg.doctrines),
-                },
-                "message": f"Successfully processed {filename} and loaded into knowledge graph"
-            }
-        finally:
-            loop.close()
-            
-    except Exception as e:
-        return {
-            "success": False,
-            "filename": filename,
-            "error": str(e),
-            "counts": {}
-        }
-
-def generate_embeddings_tool(case_ids: List[str]) -> Dict[str, Any]:
-    """
-    Generate embeddings for the specified cases.
-    
-    Args:
-        case_ids: List of case IDs to generate embeddings for
-        
-    Returns:
-        Dictionary with generation results and statistics
-    """
-    try:
-        import asyncio
-        
-        # Generate embeddings
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            results = loop.run_until_complete(generate_embeddings_for_cases(case_ids))
-            return {
-                "success": True,
-                "case_ids": case_ids,
-                "results": results,
-                "count": len(case_ids)
-            }
-        finally:
-            loop.close()
-            
-    except Exception as e:
-        return {
-            "success": False,
-            "case_ids": case_ids,
-            "error": str(e),
-            "results": [],
-            "count": 0
-        }
+# All tools are now properly decorated with @tool above
+# No need for fallback functions

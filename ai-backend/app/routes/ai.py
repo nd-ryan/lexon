@@ -314,74 +314,117 @@ async def test_mcp_tools():
             "tools": []
         }
 
-# Import endpoints (keeping existing functionality)
+# Import endpoints - Using CrewAI approach only
 @router.post("/import-kg")
 async def import_knowledge_graph(file: UploadFile = File(...)):
     """
-    Import and process a document to extract knowledge graph data.
-    Migrated from Next.js /api/import-kg endpoint.
+    Import and process a document to extract knowledge graph data using CrewAI agents.
     """
+    import tempfile
+    import os
+    
     try:
         file_content = await file.read()
         
-        # Parse document using existing functionality
-        kg = await parse_docx_to_knowledge_graph(file_content)
+        # Create a temporary file to store the document
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as temp_file:
+            temp_file.write(file_content)
+            temp_file_path = temp_file.name
         
-        # Convert to dict for JSON serialization
-        kg_dict = knowledge_graph_to_dict(kg)
-        
-        # Load into Neo4j
-        neo4j_client.load_knowledge_graph(kg_dict)
-        
-        return {
-            "success": True,
-            "filename": file.filename,
-            "counts": {
-                "cases": len(kg.cases),
-                "parties": len(kg.parties),
-                "provisions": len(kg.provisions),
-                "doctrines": len(kg.doctrines)
+        try:
+            # Create document processing agent and task
+            doc_agent = create_document_agent()
+            doc_task = create_document_processing_task(doc_agent, temp_file_path, file.filename)
+            
+            # Create crew
+            crew = Crew(
+                agents=[doc_agent],
+                tasks=[doc_task],
+                process=Process.sequential,
+                verbose=True
+            )
+            
+            # Execute
+            result = crew.kickoff()
+            
+            return {
+                "success": True,
+                "filename": file.filename,
+                "analysis": result.raw,  # Extract the human-readable output
+                "type": "crew_processing",
+                "tasks_output": [{"description": task.description, "raw": task.raw} for task in result.tasks_output] if result.tasks_output else [],
+                "token_usage": result.token_usage if hasattr(result, 'token_usage') else {}
             }
-        }
+        finally:
+            # Clean up temporary file
+            if os.path.exists(temp_file_path):
+                os.unlink(temp_file_path)
     
     except Exception as e:
         logger.error(f"Error in import endpoint: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/import-kg/crew")
-async def import_with_crew(file: UploadFile = File(...)):
+@router.post("/import-kg/advanced")
+async def import_with_mcp_tools(file: UploadFile = File(...)):
     """
-    Import and process documents using CrewAI agents.
+    Import and process documents using CrewAI agents with MCP integration for enhanced capabilities.
     """
+    import tempfile
+    import os
+    
     try:
         file_content = await file.read()
         
-        # Create document processing agent and task
-        doc_agent = create_document_agent()
-        doc_task = create_document_processing_task(doc_agent, file_content, file.filename)
+        # Create a temporary file to store the document
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as temp_file:
+            temp_file.write(file_content)
+            temp_file_path = temp_file.name
         
-        # Create crew
-        crew = Crew(
-            agents=[doc_agent],
-            tasks=[doc_task],
-            process=Process.sequential,
-            verbose=True
-        )
-        
-        # Execute
-        result = crew.kickoff()
-        
-        return {
-            "success": True,
-            "filename": file.filename,
-            "analysis": result.raw,  # Extract the human-readable output
-            "type": "crew_processing",
-            "tasks_output": [{"description": task.description, "raw": task.raw} for task in result.tasks_output] if result.tasks_output else [],
-            "token_usage": result.token_usage if hasattr(result, 'token_usage') else {}
-        }
+        try:
+            # Try to use MCP tools for enhanced processing
+            mcp_tools_used = False
+            doc_agent = None
+            
+            # Use the global MCP context manager approach (same as search endpoints)
+            with MCPEnabledAgents() as mcp_context:
+                mcp_tools = get_mcp_tools()
+                
+                if mcp_tools:
+                    doc_agent = create_document_agent(tools=mcp_tools)
+                    mcp_tools_used = True
+                    logger.info(f"Document processing using MCP tools: {[tool.name for tool in mcp_tools]}")
+                else:
+                    logger.warning("No MCP tools available for document processing, using standard agent")
+                    doc_agent = create_document_agent()
+                
+                # Create task and crew
+                doc_task = create_document_processing_task(doc_agent, temp_file_path, file.filename)
+                crew = Crew(
+                    agents=[doc_agent],
+                    tasks=[doc_task],
+                    process=Process.sequential,
+                    verbose=True
+                )
+                
+                # Execute within the MCP context
+                result = crew.kickoff()
+            
+            return {
+                "success": True,
+                "filename": file.filename,
+                "analysis": result.raw,  # Extract the human-readable output
+                "type": "crew_processing_advanced",
+                "mcp_tools_used": mcp_tools_used,
+                "tasks_output": [{"description": task.description, "raw": task.raw} for task in result.tasks_output] if result.tasks_output else [],
+                "token_usage": result.token_usage if hasattr(result, 'token_usage') else {}
+            }
+        finally:
+            # Clean up temporary file
+            if os.path.exists(temp_file_path):
+                os.unlink(temp_file_path)
     
     except Exception as e:
-        logger.error(f"Error in crew import: {e}")
+        logger.error(f"Error in advanced import: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # Embeddings endpoints (keeping existing functionality)
@@ -445,31 +488,29 @@ async def research_with_crew(request: QueryRequest):
         mcp_tools_used = False
         research_agent = None
         
-        try:
-            server_params = get_neo4j_mcp_server_params()
-            with MCPServerAdapter(server_params) as mcp_tools:
-                if mcp_tools:
-                    research_agent = create_research_agent(tools=mcp_tools)
-                    mcp_tools_used = True
-                    logger.info(f"Research using MCP tools: {[tool.name for tool in mcp_tools]}")
-                else:
-                    logger.warning("No MCP tools available for research, using basic agent")
-                    research_agent = create_research_agent()
-        except Exception as mcp_error:
-            logger.warning(f"MCP integration failed for research: {mcp_error}, falling back to basic agent")
-            research_agent = create_research_agent()
-        
-        # Create task and crew
-        research_task = create_research_task(request.query)
-        crew = Crew(
-            agents=[research_agent],
-            tasks=[research_task],
-            verbose=True
-        )
-        
-        # Execute the crew
-        result = crew.kickoff()
-        result_text = result.raw if hasattr(result, 'raw') else str(result)
+        # Use the global MCP context manager approach (same as search endpoints)
+        with MCPEnabledAgents() as mcp_context:
+            mcp_tools = get_mcp_tools()
+            
+            if mcp_tools:
+                research_agent = create_research_agent(tools=mcp_tools)
+                mcp_tools_used = True
+                logger.info(f"Research using MCP tools: {[tool.name for tool in mcp_tools]}")
+            else:
+                logger.warning("No MCP tools available for research, using basic agent")
+                research_agent = create_research_agent()
+            
+            # Create task and crew
+            research_task = create_research_task(request.query)
+            crew = Crew(
+                agents=[research_agent],
+                tasks=[research_task],
+                verbose=True
+            )
+            
+            # Execute the crew within the MCP context
+            result = crew.kickoff()
+            result_text = result.raw if hasattr(result, 'raw') else str(result)
         
         return CrewResponse(
             result=result_text,
@@ -597,8 +638,8 @@ async def health_check():
         mcp_status = "unavailable"
         mcp_tools_count = 0
         try:
-            server_params = get_neo4j_mcp_server_params()
-            with MCPServerAdapter(server_params) as mcp_tools:
+            with MCPEnabledAgents() as mcp_context:
+                mcp_tools = get_mcp_tools()
                 if mcp_tools:
                     mcp_status = "connected"
                     mcp_tools_count = len(mcp_tools)
@@ -677,34 +718,32 @@ async def process_document_with_crew(request: DocumentRequest):
         mcp_tools_used = False
         document_agent = None
         
-        try:
-            server_params = get_neo4j_mcp_server_params()
-            with MCPServerAdapter(server_params) as mcp_tools:
-                if mcp_tools:
-                    document_agent = create_document_agent(tools=mcp_tools)
-                    mcp_tools_used = True
-                    logger.info(f"Document processing using MCP tools: {[tool.name for tool in mcp_tools]}")
-                else:
-                    logger.warning("No MCP tools available for document processing, using basic agent")
-                    document_agent = create_document_agent()
-        except Exception as mcp_error:
-            logger.warning(f"MCP integration failed for document processing: {mcp_error}, falling back to basic agent")
-            document_agent = create_document_agent()
-        
-        # Create task and crew
-        document_task = create_document_processing_task(
-            request.content, 
-            request.document_type
-        )
-        crew = Crew(
-            agents=[document_agent],
-            tasks=[document_task],
-            verbose=True
-        )
-        
-        # Execute the crew
-        result = crew.kickoff()
-        result_text = result.raw if hasattr(result, 'raw') else str(result)
+        # Use the global MCP context manager approach (same as search endpoints)
+        with MCPEnabledAgents() as mcp_context:
+            mcp_tools = get_mcp_tools()
+            
+            if mcp_tools:
+                document_agent = create_document_agent(tools=mcp_tools)
+                mcp_tools_used = True
+                logger.info(f"Document processing using MCP tools: {[tool.name for tool in mcp_tools]}")
+            else:
+                logger.warning("No MCP tools available for document processing, using basic agent")
+                document_agent = create_document_agent()
+            
+            # Create task and crew
+            document_task = create_document_processing_task(
+                request.content, 
+                request.document_type
+            )
+            crew = Crew(
+                agents=[document_agent],
+                tasks=[document_task],
+                verbose=True
+            )
+            
+            # Execute the crew within the MCP context
+            result = crew.kickoff()
+            result_text = result.raw if hasattr(result, 'raw') else str(result)
         
         return CrewResponse(
             result=result_text,

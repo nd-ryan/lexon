@@ -40,24 +40,36 @@ def create_similarity_search_task(agent, query_text: str, limit: int = 5):
     )
 
 # Document Processing Tasks  
-def create_document_processing_task(agent, file_content: bytes, filename: str):
-    """Create a task for processing documents into knowledge graphs."""
+def create_document_processing_task(agent, file_path: str, filename: str):
+    """Create a task for AI-powered dynamic document processing."""
     return Task(
         description=f"""
-        Process document "{filename}" and extract knowledge graph data.
+        Process document "{filename}" using advanced AI-powered dynamic extraction that adapts to existing knowledge graph schema.
         
-        Steps to complete:
-        1. Parse the document content to extract legal entities (cases, parties, provisions, doctrines, etc.)
-        2. Identify and map relationships between extracted entities
-        3. Structure the extracted data into knowledge graph format
-        4. Validate data quality and completeness
-        5. Load the structured data into Neo4j
-        6. Generate summary statistics of extracted content
+        Your process_document_tool now uses an enhanced 8-step AI-powered pipeline:
+        1. **Schema Analysis**: Query Neo4j to understand existing node types, relationships, and properties
+        2. **Document Text Extraction**: Extract clean text from the uploaded document
+        3. **Node Identification**: Use AI to identify ALL possible entity types (nodes) in the document
+        4. **Relationship Identification**: Use AI to identify ALL possible relationships between entities
+        5. **Schema Alignment**: Compare document metadata with existing schema and align naming/structure
+        6. **Content Extraction**: Use AI to extract actual data based on the aligned metadata structure
+        7. **Cypher Generation**: Generate dynamic MERGE queries for seamless data integration
+        8. **Neo4j Import**: Execute queries to merge new data with existing knowledge graph
         
-        Document to process: {filename}
+        Use the process_document_tool with these parameters:
+        - file_path: "{file_path}"
+        - filename: "{filename}"
+        
+        This AI approach ensures:
+        - Consistency with existing schema where applicable
+        - Discovery and integration of new entity types from documents
+        - Flexible adaptation to different document formats
+        - Intelligent relationship mapping
+        
+        Provide a comprehensive analysis of the AI processing results.
         """,
-        expected_output="Processing report containing: entity extraction counts by type, relationship mappings created, data quality assessment, Neo4j loading status, and any processing issues or recommendations",
-        agent=agent,
+        expected_output="Comprehensive AI processing report containing: existing Neo4j schema analysis, complete inventory of identified document nodes/relationships, schema alignment results (what matched vs what's new), detailed extraction statistics by entity type, Cypher queries executed count, integration success status, and processing insights for optimization",
+        agent=agent
     )
 
 def create_embeddings_generation_task(agent, case_ids: List[str]):

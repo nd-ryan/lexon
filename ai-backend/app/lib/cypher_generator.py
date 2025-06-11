@@ -82,7 +82,7 @@ For example, if the user asks "show me all cases", you should return "MATCH (c:C
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4",
+            model="gpt-4o",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_query}

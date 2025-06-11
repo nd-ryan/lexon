@@ -11,6 +11,7 @@ export default function ImportPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [processingMode, setProcessingMode] = useState<'standard' | 'advanced'>('standard');
   const { data: session, status } = useSession();
   const router = useRouter();
 
@@ -54,7 +55,8 @@ export default function ImportPage() {
 
     try {
       const AI_BACKEND_URL = process.env.NEXT_PUBLIC_AI_BACKEND_URL || 'http://localhost:8000';
-      const res = await fetch(`${AI_BACKEND_URL}/api/ai/import-kg`, {
+      const endpoint = processingMode === 'advanced' ? '/api/ai/import-kg/advanced' : '/api/ai/import-kg';
+      const res = await fetch(`${AI_BACKEND_URL}${endpoint}`, {
         method: 'POST',
         body: formData,
       });
@@ -64,7 +66,18 @@ export default function ImportPage() {
       if (!res.ok) {
         setError(data.detail || 'An error occurred during upload.');
       } else {
-        setSuccess(`Successfully imported: ${data.counts.cases} cases, ${data.counts.parties} parties, ${data.counts.provisions} provisions.`);
+        // Handle the new CrewAI response format
+        if (data.type === 'crew_processing' || data.type === 'crew_processing_advanced') {
+          // Extract counts from the analysis if available, or show general success
+          const analysisText = data.analysis || '';
+          const mode = data.type === 'crew_processing_advanced' ? 'Advanced' : 'Standard';
+          const mcpInfo = data.mcp_tools_used ? ' (with MCP tools)' : '';
+          
+          setSuccess(`✅ ${mode} processing complete${mcpInfo}! File: "${data.filename}"\n\nAnalysis: ${analysisText.substring(0, 300)}${analysisText.length > 300 ? '...' : ''}`);
+        } else {
+          // Fallback for any legacy response format
+          setSuccess(`Successfully imported: ${data.counts?.cases || 0} cases, ${data.counts?.parties || 0} parties, ${data.counts?.provisions || 0} provisions.`);
+        }
         setFile(null);
       }
     } catch (err) {
@@ -93,7 +106,7 @@ export default function ImportPage() {
           )}
           {success && (
             <div className="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded">
-              {success}
+              <pre className="whitespace-pre-wrap text-sm">{success}</pre>
             </div>
           )}
           <div>
@@ -107,6 +120,38 @@ export default function ImportPage() {
               onChange={handleFileChange}
               accept=".docx"
             />
+          </div>
+
+          <div className="space-y-3">
+            <label className="text-sm font-medium text-gray-700">Processing Mode</label>
+            <div className="flex items-center space-x-6">
+              <label className="flex items-center space-x-2">
+                <input
+                  type="radio"
+                  value="standard"
+                  checked={processingMode === 'standard'}
+                  onChange={(e) => setProcessingMode(e.target.value as 'standard' | 'advanced')}
+                  className="text-blue-600"
+                />
+                <span className="text-sm text-gray-700">Standard</span>
+              </label>
+              <label className="flex items-center space-x-2">
+                <input
+                  type="radio"
+                  value="advanced"
+                  checked={processingMode === 'advanced'}
+                  onChange={(e) => setProcessingMode(e.target.value as 'standard' | 'advanced')}
+                  className="text-blue-600"
+                />
+                <span className="text-sm text-gray-700">Advanced (MCP)</span>
+              </label>
+            </div>
+            <p className="text-xs text-gray-500">
+              {processingMode === 'standard' 
+                ? 'AI agent processing with document analysis tools'
+                : 'Enhanced processing with direct Neo4j database tools'
+              }
+            </p>
           </div>
 
           <div>
