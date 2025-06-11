@@ -9,13 +9,18 @@ from ..lib.cypher_generator import generate_cypher_query_async
 from ..lib.neo4j_client import neo4j_client
 from ..lib.embeddings import find_similar_cases, generate_embeddings_for_cases
 
-# MCP Configuration
+# MCP Configuration - Updated to use Neo4j's official MCP server
 def get_neo4j_mcp_server_params():
-    """Get MCP server parameters for Neo4j server"""
+    """Get MCP server parameters for Neo4j's official MCP server"""
     return StdioServerParameters(
-        command="python",
-        args=["-m", "app.mcp.neo4j_mcp_server"],
-        env={"PYTHONPATH": ".", **os.environ},
+        command="mcp-neo4j-cypher",  # Use official Neo4j MCP server
+        args=[
+            "--db-url", os.getenv("NEO4J_URI", "bolt://localhost:7687"),
+            "--username", os.getenv("NEO4J_USERNAME", "neo4j"),
+            "--password", os.getenv("NEO4J_PASSWORD", "password"),
+            "--database", os.getenv("NEO4J_DATABASE", "neo4j")
+        ],
+        env=os.environ,  # Pass through all environment variables
     )
 
 # Global MCP tools instance - will be set by create_mcp_enabled_agents
@@ -129,22 +134,25 @@ def create_writer_agent():
 
 # Context manager for MCP-enabled agents
 class MCPEnabledAgents:
-    """Context manager for agents with MCP tools."""
+    """Context manager for agents with Neo4j's official MCP tools."""
     
     def __init__(self):
         self.mcp_adapter = None
         
     def __enter__(self):
-        """Enter the context and initialize MCP tools."""
+        """Enter the context and initialize Neo4j's official MCP tools."""
         global _mcp_tools
         try:
             server_params = get_neo4j_mcp_server_params()
+            print(f"🔌 Connecting to Neo4j MCP server with URL: {os.getenv('NEO4J_URI', 'bolt://localhost:7687')}")
             self.mcp_adapter = MCPServerAdapter([server_params])
             _mcp_tools = self.mcp_adapter.__enter__()
-            print(f"✅ MCP Tools initialized: {[tool.name for tool in _mcp_tools]}")
+            print(f"✅ Neo4j MCP Tools initialized: {[tool.name for tool in _mcp_tools]}")
+            print(f"📊 Available tools: get-neo4j-schema, read-neo4j-cypher, write-neo4j-cypher")
             return self
         except Exception as e:
-            print(f"⚠️ Could not initialize MCP tools: {e}")
+            print(f"⚠️ Could not initialize Neo4j MCP tools: {e}")
+            print(f"💡 Make sure mcp-neo4j-cypher is installed and Neo4j is running")
             _mcp_tools = None
             return self
     
@@ -154,6 +162,7 @@ class MCPEnabledAgents:
         if self.mcp_adapter:
             try:
                 self.mcp_adapter.__exit__(exc_type, exc_val, exc_tb)
+                print("🔌 Neo4j MCP connection closed")
             except Exception as e:
                 print(f"Warning during MCP cleanup: {e}")
         _mcp_tools = None

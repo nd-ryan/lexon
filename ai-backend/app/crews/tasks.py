@@ -12,11 +12,11 @@ def create_search_task(agent, query: str):
         1. Convert this natural language query into an appropriate Cypher query
         2. Execute the query against the Neo4j knowledge graph  
         3. Process and interpret the raw results
-        4. Identify the most relevant findings
+        4. Parse the results into a structured format
         
         Query to search: {query}
         """,
-        expected_output="A structured analysis containing: the generated Cypher query, key findings from the results, relevant entities and relationships discovered, and insights about the query results",
+        expected_output="The results of the search",
         agent=agent,
     )
 

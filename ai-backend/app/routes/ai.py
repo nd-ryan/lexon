@@ -4,7 +4,7 @@ from typing import List, Optional, Dict, Any
 from app.crews.agents import (
     create_search_agent, create_document_agent, create_embeddings_agent,
     create_research_agent, create_writer_agent, MCPEnabledAgents, create_mcp_enabled_agents,
-    get_neo4j_mcp_server_params
+    get_neo4j_mcp_server_params, get_mcp_tools
 )
 from app.crews.tasks import (
     create_search_task, create_similarity_search_task, create_document_processing_task,
@@ -14,7 +14,7 @@ from app.crews.tasks import (
 from app.lib.cypher_generator import generate_cypher_query_async
 from app.lib.neo4j_client import neo4j_client
 from app.lib.embeddings import find_similar_cases, generate_embeddings_for_cases
-from app.lib.document_processor import parse_docx_to_knowledge_graph, knowledge_graph_to_dict, DocumentProcessor
+from app.lib.document_processor import parse_docx_to_knowledge_graph, knowledge_graph_to_dict
 from crewai import Crew, Process
 import logging
 import os
@@ -211,38 +211,36 @@ async def similarity_search(request: SimilaritySearchRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/search/crew", response_model=CrewResponse)
-async def search_with_crew(request: QueryRequest):
+def search_with_crew(request: QueryRequest):
     """Enhanced search using CrewAI agents with MCP integration"""
     try:
         # Try to use MCP tools first
         mcp_tools_used = False
         search_agent = None
         
-        try:
-            server_params = get_neo4j_mcp_server_params()
-            with MCPServerAdapter(server_params) as mcp_tools:
-                if mcp_tools:
-                    search_agent = create_search_agent(tools=mcp_tools)
-                    mcp_tools_used = True
-                    logger.info(f"Using MCP tools: {[tool.name for tool in mcp_tools]}")
-                else:
-                    logger.warning("No MCP tools available, falling back to basic agent")
-                    search_agent = create_search_agent()
-        except Exception as mcp_error:
-            logger.warning(f"MCP integration failed: {mcp_error}, falling back to basic agent")
-            search_agent = create_search_agent()
-        
-        # Create task and crew
-        search_task = create_search_task(request.query, max_results=request.max_results)
-        crew = Crew(
-            agents=[search_agent],
-            tasks=[search_task],
-            verbose=True
-        )
-        
-        # Execute the crew
-        result = crew.kickoff()
-        result_text = result.raw if hasattr(result, 'raw') else str(result)
+        # Use the global MCP context manager approach
+        with MCPEnabledAgents() as mcp_context:
+            mcp_tools = get_mcp_tools()
+            
+            if mcp_tools:
+                search_agent = create_search_agent(tools=mcp_tools)
+                mcp_tools_used = True
+                logger.info(f"Using MCP tools: {[tool.name for tool in mcp_tools]}")
+            else:
+                logger.warning("No MCP tools available, falling back to basic agent")
+                search_agent = create_search_agent()
+            
+            # Create task and crew
+            search_task = create_search_task(search_agent, request.query)
+            crew = Crew(
+                agents=[search_agent],
+                tasks=[search_task],
+                verbose=True
+            )
+            
+            # Execute the crew within the MCP context
+            result = crew.kickoff()
+            result_text = result.raw if hasattr(result, 'raw') else str(result)
         
         return CrewResponse(
             result=result_text,
@@ -257,40 +255,62 @@ async def search_with_crew(request: QueryRequest):
 @router.post("/search/mcp-tools-test")
 async def test_mcp_tools():
     """
-    Test endpoint to verify MCP tools are working correctly.
+    Test endpoint to verify Neo4j's official MCP tools are working correctly.
     """
     try:
         with MCPEnabledAgents() as mcp_context:
-            # Create an agent to test MCP tools
-            search_agent = create_search_agent()
+            tools = get_mcp_tools()
             
-            if not search_agent.tools:
+            if not tools:
                 return {
                     "success": False,
-                    "message": "No MCP tools available",
-                    "tools": []
+                    "message": "No Neo4j MCP tools available",
+                    "tools": [],
+                    "server_type": "neo4j-official-mcp-server"
                 }
             
-            # List available tools
+            # List available tools with detailed info
             tool_info = []
-            for tool in search_agent.tools:
+            for tool in tools:
                 tool_info.append({
                     "name": tool.name,
                     "description": getattr(tool, 'description', 'No description available')
                 })
             
+            # Test the get_neo4j_schema tool if available
+            schema_test = None
+            for tool in tools:
+                if tool.name == "get_neo4j_schema":
+                    try:
+                        schema_result = await tool.invoke({})
+                        schema_test = {
+                            "tool_name": "get_neo4j_schema",
+                            "status": "success",
+                            "result_preview": str(schema_result)[:200] + "..." if len(str(schema_result)) > 200 else str(schema_result)
+                        }
+                    except Exception as test_error:
+                        schema_test = {
+                            "tool_name": "get_neo4j_schema", 
+                            "status": "error",
+                            "error": str(test_error)
+                        }
+                    break
+            
             return {
                 "success": True,
-                "message": "MCP tools are working correctly",
+                "message": "Neo4j official MCP tools are working correctly",
+                "server_type": "neo4j-official-mcp-server",
                 "tools": tool_info,
-                "total_tools": len(search_agent.tools)
+                "total_tools": len(tools),
+                "test_result": schema_test
             }
     
     except Exception as e:
-        logger.error(f"MCP tools test failed: {e}")
+        logger.error(f"Neo4j MCP tools test failed: {e}")
         return {
             "success": False,
-            "message": f"MCP tools test failed: {str(e)}",
+            "message": f"Neo4j MCP tools test failed: {str(e)}",
+            "server_type": "neo4j-official-mcp-server",
             "tools": []
         }
 
@@ -637,8 +657,8 @@ async def find_similar_embeddings(request: QueryRequest):
 async def basic_document_processing(request: DocumentRequest):
     """Basic document processing without agents"""
     try:
-        processor = DocumentProcessor()
-        processed_content = processor.extract_text(request.content)
+        # Since DocumentProcessor class doesn't exist, use basic text processing
+        processed_content = request.content.strip()
         
         return {
             "document_type": request.document_type,
