@@ -68,12 +68,13 @@ def create_search_agent(tools: Optional[List] = None) -> Agent:
     agent_tools = default_tools + (tools or [])
     
     return Agent(
-        role="Knowledge Graph Search Specialist",
-        goal="Execute precise searches against Neo4j knowledge graphs using available tools to find relevant information efficiently",
-        backstory="You are an expert at navigating and querying knowledge graphs. You have access to specialized tools for natural language search and similarity analysis.",
+        role="Search Agent",
+        goal="Search the knowledge graph using available tools",
+        backstory="You search knowledge graphs using the available search tools.",
         tools=agent_tools,
         verbose=True,
-        allow_delegation=False
+        allow_delegation=False,
+        max_iter=3
     )
 
 # Search and Query Tools
@@ -231,13 +232,14 @@ def create_document_agent(tools: Optional[List] = None) -> Agent:
     llm = LLM(model="o3-mini", temperature=0)
     
     return Agent(
-        role="AI-Powered Document Processing Specialist", 
-        goal="Use the process_document_tool to extract knowledge graph data from documents and integrate it with Neo4j",
-        backstory="""You are a document processing specialist. When given a document processing task, you MUST use the process_document_tool with the provided file_path and filename parameters. This tool will automatically handle AI-powered extraction, schema analysis, and Neo4j integration.""",
+        role="Document Processor", 
+        goal="Process documents using the process_document_tool",
+        backstory="You process documents by calling the process_document_tool with the file_path and filename. That's it.",
         tools=agent_tools,
         llm=llm,
         verbose=True,
-        allow_delegation=False
+        allow_delegation=False,
+        max_iter=3  # Limit iterations to prevent confusion
     )
 
 # Semantic Analysis Agent  
@@ -268,12 +270,13 @@ def create_research_agent(tools: Optional[List] = None) -> Agent:
     agent_tools = default_tools + (tools or [])
     
     return Agent(
-        role="Research Analyst",
-        goal="Conduct comprehensive research using available tools and synthesize findings into clear, actionable insights",
-        backstory="You are a skilled research analyst with access to powerful knowledge graph search, similarity analysis, and embedding generation tools. You excel at finding patterns, connections, and insights from complex legal information.",
+        role="Research Agent",
+        goal="Research using available tools",
+        backstory="You research information using the available tools.",
         tools=agent_tools,
         verbose=True,
-        allow_delegation=False
+        allow_delegation=False,
+        max_iter=5
     )
 
 # Writer Agent
