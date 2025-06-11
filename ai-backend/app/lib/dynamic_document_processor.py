@@ -140,6 +140,7 @@ INSTRUCTIONS:
 """
 
         try:
+            print("      🤖 Calling AI model for node identification...")
             logger.info("Calling LLM for node identification...")
             response = self.llm.call([{"role": "user", "content": prompt}])
             
@@ -203,6 +204,7 @@ INSTRUCTIONS:
 """
 
         try:
+            print("      🤖 Calling AI model for relationship identification...")
             logger.info("Calling LLM for relationship identification...")
             response = self.llm.call([{"role": "user", "content": prompt}])
             
@@ -284,6 +286,7 @@ ALIGNMENT RULES:
 """
 
         try:
+            print("      🤖 Calling AI model for schema alignment...")
             logger.info("Calling LLM for schema alignment...")
             response = self.llm.call([{"role": "user", "content": prompt}])
             
@@ -310,8 +313,37 @@ ALIGNMENT RULES:
             logger.warning("Returning original metadata due to alignment error")
             return (nodes, relationships)
     
-    def extract_document_content(self, document_text: str, aligned_nodes: Dict[str, List[str]], aligned_relationships: Dict[str, Dict[str, Any]]) -> ExtractedData:
-        """Step 5: Extract actual content based on the aligned metadata"""
+    def chunk_document(self, document_text: str, chunk_size: int = 12000, overlap: int = 1000) -> List[str]:
+        """Split document into overlapping chunks for processing"""
+        if len(document_text) <= chunk_size:
+            return [document_text]
+        
+        chunks = []
+        start = 0
+        
+        while start < len(document_text):
+            end = start + chunk_size
+            
+            # If this isn't the last chunk, try to break at a sentence or paragraph
+            if end < len(document_text):
+                # Look for a good break point (sentence ending)
+                for i in range(end, max(start + chunk_size - 500, start), -1):
+                    if document_text[i:i+2] in ['. ', '.\n', '!\n', '?\n']:
+                        end = i + 1
+                        break
+            
+            chunk = document_text[start:end]
+            chunks.append(chunk)
+            
+            # Move start forward, accounting for overlap
+            start = end - overlap
+            if start >= len(document_text):
+                break
+                
+        return chunks
+
+    def extract_document_content(self, document_text: str, aligned_nodes: Dict[str, List[str]], aligned_relationships: Dict[str, Dict[str, Any]], test_mode: bool = True) -> ExtractedData:
+        """Step 6: Extract actual content based on the aligned metadata using document batching"""
         
         metadata_context = f"""
 EXTRACTION SCHEMA:
@@ -319,13 +351,30 @@ Nodes to extract: {json.dumps(aligned_nodes, indent=2)}
 Relationships to extract: {json.dumps(aligned_relationships, indent=2)}
 """
         
-        prompt = f"""
+        # Split document into chunks
+        chunks = self.chunk_document(document_text)
+        
+        # Limit chunks for testing
+        if test_mode:
+            chunks = chunks[:1]  # Only process first chunk in test mode
+            print(f"      🧪 TEST MODE: Processing only the first chunk ({len(chunks[0])} chars)...")
+        else:
+            print(f"      📄 Processing document in {len(chunks)} chunks...")
+        
+        # Process each chunk
+        all_nodes = {}
+        all_relationships = []
+        
+        for i, chunk in enumerate(chunks):
+            print(f"      📝 Processing chunk {i+1}/{len(chunks)} ({len(chunk)} chars)...")
+            
+            prompt = f"""
 {metadata_context}
 
-DOCUMENT TO EXTRACT FROM:
-{document_text}
+DOCUMENT CHUNK TO EXTRACT FROM (Chunk {i+1}/{len(chunks)}):
+{chunk}
 
-TASK: Extract ALL instances of the specified entities and relationships from this document.
+TASK: Extract ALL instances of the specified entities and relationships from this document chunk.
 
 OUTPUT FORMAT (JSON only):
 {{
@@ -345,48 +394,85 @@ OUTPUT FORMAT (JSON only):
 }}
 
 EXTRACTION REQUIREMENTS:
-1. Extract EVERY instance of each node type from the document - don't miss any
-2. Generate meaningful, unique IDs for each node instance (e.g., "case_001", "party_plaintiff", "provision_14th_amendment")
-3. Fill in ALL available properties for each node based on document content
-4. Create ALL relationships between nodes as specified in the schema
-5. Be thorough - capture every entity and every connection mentioned in the document
-6. Use exact node type names and relationship types from the schema
-7. If a property value is not available, use null
-8. Ensure all relationships reference valid node IDs that exist in the nodes section
-9. Return ONLY the JSON, no other text
+1. Extract EVERY instance of each node type from this chunk - don't miss any
+2. Generate meaningful, unique IDs for each node instance (e.g., "case_{i+1:03d}_001", "party_{i+1:03d}_plaintiff")
+3. Include chunk number in IDs to ensure uniqueness across chunks (e.g., "case_{i+1:03d}_001" for chunk {i+1})
+4. Fill in ALL available properties for each node based on document content
+5. Create ALL relationships between nodes as specified in the schema
+6. Only create relationships between nodes that exist in THIS chunk
+7. Use exact node type names and relationship types from the schema
+8. If a property value is not available, use null
+9. Ensure all relationships reference valid node IDs that exist in the nodes section
+10. CRITICAL: Output ALL relationships completely - do not truncate or add comments
+11. Return ONLY complete, valid JSON with no comments or truncation
 """
 
-        try:
-            logger.info("Calling LLM for content extraction...")
-            response = self.llm.call([{"role": "user", "content": prompt}])
-            logger.info(f"LLM response received, length: {len(response) if response else 0}")
-            
-            if not response:
-                raise ValueError("Empty response from LLM")
-                
-            content_json = response.strip()
-            logger.debug(f"Content JSON preview: {content_json[:500]}...")
-            
-            # Parse the JSON response
             try:
-                content_dict = json.loads(content_json)
-            except json.JSONDecodeError as json_err:
-                logger.error(f"JSON parsing failed. Raw response: {content_json}")
-                raise ValueError(f"Invalid JSON response from LLM: {json_err}")
-            
-            logger.info(f"Successfully parsed extraction results: {len(content_dict.get('nodes', {}))} node types, {len(content_dict.get('relationships', []))} relationships")
-            
-            return ExtractedData(
-                nodes=content_dict.get("nodes", {}),
-                relationships=content_dict.get("relationships", [])
-            )
-            
-        except Exception as e:
-            logger.error(f"Error extracting document content: {e}")
-            logger.error(f"Error type: {type(e).__name__}")
-            # Return empty data instead of raising to allow process to continue
-            logger.warning("Returning empty extraction data due to error")
-            return ExtractedData(nodes={}, relationships=[])
+                print(f"         🤖 Calling AI model for chunk {i+1}...")
+                response = self.llm.call([{"role": "user", "content": prompt}])
+                
+                if not response:
+                    print(f"         ⚠️ Empty response for chunk {i+1}, skipping...")
+                    continue
+                    
+                content_json = response.strip()
+                
+                try:
+                    content_dict = json.loads(content_json)
+                except json.JSONDecodeError as json_err:
+                    print(f"         ❌ JSON parsing failed for chunk {i+1}, skipping...")
+                    logger.error(f"JSON parsing failed for chunk {i+1}. Raw response: {content_json}")
+                    continue
+                
+                # Merge nodes from this chunk
+                chunk_nodes = content_dict.get("nodes", {})
+                for node_type, nodes in chunk_nodes.items():
+                    if node_type not in all_nodes:
+                        all_nodes[node_type] = []
+                    all_nodes[node_type].extend(nodes)
+                
+                # Add relationships from this chunk
+                chunk_relationships = content_dict.get("relationships", [])
+                all_relationships.extend(chunk_relationships)
+                
+                print(f"         ✅ Chunk {i+1}: {sum(len(nodes) for nodes in chunk_nodes.values())} nodes, {len(chunk_relationships)} relationships")
+                
+            except Exception as e:
+                print(f"         ❌ Error processing chunk {i+1}: {e}")
+                logger.error(f"Error processing chunk {i+1}: {e}")
+                continue
+        
+        # Deduplicate nodes by ID
+        print(f"      🔄 Deduplicating nodes across chunks...")
+        deduplicated_nodes = {}
+        for node_type, nodes in all_nodes.items():
+            seen_ids = set()
+            unique_nodes = []
+            for node in nodes:
+                node_id = node.get("node_id") or node.get(f"{node_type.lower()}_id", "unknown")
+                if node_id not in seen_ids:
+                    seen_ids.add(node_id)
+                    unique_nodes.append(node)
+            deduplicated_nodes[node_type] = unique_nodes
+        
+        # Deduplicate relationships
+        print(f"      🔄 Deduplicating relationships across chunks...")
+        seen_relationships = set()
+        unique_relationships = []
+        for rel in all_relationships:
+            # Create a tuple for comparison
+            rel_key = (rel.get("type"), rel.get("from_id"), rel.get("to_id"))
+            if rel_key not in seen_relationships:
+                seen_relationships.add(rel_key)
+                unique_relationships.append(rel)
+        
+        total_nodes = sum(len(nodes) for nodes in deduplicated_nodes.values())
+        print(f"      ✅ Final results: {total_nodes} unique nodes, {len(unique_relationships)} unique relationships")
+        
+        return ExtractedData(
+            nodes=deduplicated_nodes,
+            relationships=unique_relationships
+        )
     
     def generate_cypher_queries(self, extracted_data: ExtractedData) -> List[str]:
         """Generate Cypher queries to import the extracted data"""
@@ -445,8 +531,35 @@ EXTRACTION REQUIREMENTS:
         
         return queries
     
+    def test_neo4j_connection(self) -> bool:
+        """Test Neo4j connectivity before executing queries"""
+        try:
+            print("      🔌 Testing Neo4j connection...")
+            with neo4j_client.driver.session() as session:
+                result = session.run("RETURN 1 as test")
+                test_value = result.single()["test"]
+                if test_value == 1:
+                    print("      ✅ Neo4j connection successful")
+                    return True
+            return False
+        except Exception as e:
+            print(f"      ❌ Neo4j connection failed: {e}")
+            logger.error(f"Neo4j connection test failed: {e}")
+            return False
+
     def execute_cypher_queries(self, queries: List[Tuple[str, Dict]]) -> bool:
-        """Execute the generated Cypher queries using MCP tools when available"""
+        """Execute the generated Cypher queries using MCP tools when available with retry logic"""
+        
+        # First test the connection
+        if not self.test_neo4j_connection():
+            print("      ❌ Cannot proceed with query execution - Neo4j connection failed")
+            return False
+            
+        print(f"      📝 Executing {len(queries)} Cypher queries...")
+        
+        successful_queries = 0
+        failed_queries = 0
+        
         try:
             # Try to use MCP write-neo4j-cypher tool first
             if self.mcp_tools:
@@ -457,72 +570,137 @@ EXTRACTION REQUIREMENTS:
                         break
                 
                 if write_tool:
+                    print("      🔧 Using Neo4j MCP write-neo4j-cypher tool")
                     logger.info("Using Neo4j MCP write-neo4j-cypher tool")
-                    for query, params in queries:
+                    
+                    for i, (query, params) in enumerate(queries):
                         try:
                             result = write_tool.run({
                                 "query": query,
                                 "parameters": params
                             })
+                            successful_queries += 1
+                            if (i + 1) % 10 == 0:  # Progress update every 10 queries
+                                print(f"         📊 Progress: {i + 1}/{len(queries)} queries executed")
                             logger.debug(f"MCP query result: {result}")
                         except Exception as e:
-                            logger.error(f"MCP query execution failed: {e}")
-                            # Fall back to direct execution for this query
-                            with neo4j_client.driver.session() as session:
-                                session.run(query, params)
+                            failed_queries += 1
+                            logger.error(f"MCP query {i+1} execution failed: {e}")
+                            print(f"         ⚠️ Query {i+1} failed via MCP, trying direct connection...")
+                            
+                            # Fall back to direct execution for this query with retry
+                            if self._execute_single_query_with_retry(query, params):
+                                successful_queries += 1
+                                failed_queries -= 1  # Correct the count since retry succeeded
                     
-                    logger.info(f"Successfully executed {len(queries)} Cypher queries via MCP")
-                    return True
+                    print(f"      ✅ MCP execution complete: {successful_queries} successful, {failed_queries} failed")
+                    return failed_queries == 0
             
             # Fallback to direct Neo4j execution
+            print("      🔧 Using direct Neo4j execution (MCP not available)")
             logger.info("Using direct Neo4j execution (MCP not available)")
-            with neo4j_client.driver.session() as session:
-                for query, params in queries:
-                    session.run(query, params)
+            
+            for i, (query, params) in enumerate(queries):
+                if self._execute_single_query_with_retry(query, params):
+                    successful_queries += 1
+                else:
+                    failed_queries += 1
                     
-            logger.info(f"Successfully executed {len(queries)} Cypher queries")
-            return True
+                if (i + 1) % 10 == 0:  # Progress update every 10 queries
+                    print(f"         📊 Progress: {i + 1}/{len(queries)} queries executed")
+                    
+            print(f"      ✅ Direct execution complete: {successful_queries} successful, {failed_queries} failed")
+            logger.info(f"Successfully executed {successful_queries}/{len(queries)} Cypher queries")
+            return failed_queries == 0
             
         except Exception as e:
-            logger.error(f"Error executing Cypher queries: {e}")
-            raise
+            print(f"      ❌ Critical error during query execution: {e}")
+            logger.error(f"Critical error executing Cypher queries: {e}")
+            return False
+
+    def _execute_single_query_with_retry(self, query: str, params: Dict, max_retries: int = 3) -> bool:
+        """Execute a single query with retry logic for connection issues"""
+        import time
+        
+        for attempt in range(max_retries):
+            try:
+                with neo4j_client.driver.session() as session:
+                    session.run(query, params)
+                return True
+                
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                    logger.warning(f"Query attempt {attempt + 1} failed, retrying in {wait_time}s: {e}")
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"Query failed after {max_retries} attempts: {e}")
+                    return False
+        
+        return False
     
     def process_document(self, file_content: bytes, filename: str) -> Dict[str, Any]:
         """Main processing pipeline with improved multi-step approach"""
         try:
+            print(f"\n🚀 Starting AI-powered document processing for: {filename}")
+            
             # Step 1: Get existing Neo4j schema
+            print("📊 Step 1/8: Analyzing existing Neo4j schema...")
             logger.info("Step 1: Getting Neo4j schema...")
             schema_info = self.get_neo4j_schema()
+            print(f"   Found {len(schema_info.node_labels)} node types, {len(schema_info.relationship_types)} relationship types")
             
             # Step 2: Extract document text
+            print("📄 Step 2/8: Extracting document text...")
             logger.info("Step 2: Extracting document text...")
             document_text = self.extract_document_text(file_content)
+            print(f"   Extracted {len(document_text)} characters from document")
             
             # Step 3: Identify ALL possible nodes in document
+            print("🔍 Step 3/8: Using AI to identify all possible nodes...")
             logger.info("Step 3: Identifying all possible nodes...")
             document_nodes = self.identify_document_nodes(document_text)
+            print(f"   AI identified {len(document_nodes)} different node types")
             
             # Step 4: Identify ALL possible relationships in document
+            print("🔗 Step 4/8: Using AI to identify all possible relationships...")
             logger.info("Step 4: Identifying all possible relationships...")
             document_relationships = self.identify_document_relationships(document_text, document_nodes)
+            print(f"   AI identified {len(document_relationships)} different relationship types")
             
             # Step 5: Align with existing schema
+            print("⚖️  Step 5/8: Aligning with existing Neo4j schema...")
             logger.info("Step 5: Aligning with existing Neo4j schema...")
             aligned_nodes, aligned_relationships = self.align_with_existing_schema(
                 document_nodes, document_relationships, schema_info
             )
+            print(f"   Schema alignment complete - {len(aligned_nodes)} node types, {len(aligned_relationships)} relationship types")
             
             # Step 6: Extract actual content using aligned metadata
+            print("📝 Step 6/8: Using AI to extract actual content from document...")
             logger.info("Step 6: Extracting document content...")
-            extracted_data = self.extract_document_content(document_text, aligned_nodes, aligned_relationships)
+            extracted_data = self.extract_document_content(document_text, aligned_nodes, aligned_relationships, test_mode=True)
+            total_nodes = sum(len(nodes) for nodes in extracted_data.nodes.values())
+            print(f"   Extracted {total_nodes} total nodes and {len(extracted_data.relationships)} relationships")
             
             # Step 7: Generate Cypher queries
+            print("🔧 Step 7/8: Generating Cypher queries for Neo4j...")
             logger.info("Step 7: Generating Cypher queries...")
             queries = self.generate_cypher_queries(extracted_data)
+            print(f"   Generated {len(queries)} Cypher queries")
             
             # Step 8: Execute queries
+            print("💾 Step 8/8: Executing queries to import into Neo4j...")
             logger.info("Step 8: Executing Cypher queries...")
             success = self.execute_cypher_queries(queries)
+            print(f"   {'✅ Successfully' if success else '❌ Failed to'} import data into Neo4j")
+            
+            print(f"\n🎉 Document processing complete for {filename}!")
+            print(f"📊 Final Summary:")
+            print(f"   • Total nodes extracted: {total_nodes}")
+            print(f"   • Total relationships extracted: {len(extracted_data.relationships)}")
+            print(f"   • Cypher queries executed: {len(queries)}")
+            print(f"   • Processing status: {'SUCCESS' if success else 'FAILED'}")
             
             # Return processing results
             return {

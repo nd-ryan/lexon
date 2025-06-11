@@ -56,9 +56,11 @@ def create_document_processing_task(agent, file_path: str, filename: str):
         7. **Cypher Generation**: Generate dynamic MERGE queries for seamless data integration
         8. **Neo4j Import**: Execute queries to merge new data with existing knowledge graph
         
-        Use the process_document_tool with these parameters:
-        - file_path: "{file_path}"
-        - filename: "{filename}"
+        YOU MUST use the process_document_tool to complete this task. Call it exactly like this:
+        
+        process_document_tool(file_path="{file_path}", filename="{filename}")
+        
+        This tool will handle all 8 steps of the AI processing pipeline automatically.
         
         This AI approach ensures:
         - Consistency with existing schema where applicable

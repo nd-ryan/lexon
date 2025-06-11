@@ -232,15 +232,8 @@ def create_document_agent(tools: Optional[List] = None) -> Agent:
     
     return Agent(
         role="AI-Powered Document Processing Specialist", 
-        goal="Intelligently process documents using AI to dynamically adapt extraction to existing knowledge graph schema while discovering new entity types and relationships",
-        backstory="""You are an advanced AI document processing specialist with the ability to:
-        1. Analyze existing Neo4j knowledge graph schema to understand current data structure
-        2. Intelligently analyze new documents to identify entities and relationships  
-        3. Adapt extraction to fit existing schema while also discovering new data types
-        4. Use AI-powered content extraction that goes beyond rigid templates
-        5. Generate appropriate Cypher queries for seamless data integration
-        
-        Your approach is dynamic and context-aware, ensuring both consistency with existing data and flexibility for new document types.""",
+        goal="Use the process_document_tool to extract knowledge graph data from documents and integrate it with Neo4j",
+        backstory="""You are a document processing specialist. When given a document processing task, you MUST use the process_document_tool with the provided file_path and filename parameters. This tool will automatically handle AI-powered extraction, schema analysis, and Neo4j integration.""",
         tools=agent_tools,
         llm=llm,
         verbose=True,
