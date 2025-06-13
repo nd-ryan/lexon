@@ -4,7 +4,7 @@ from typing import List, Optional, Dict, Any
 from app.crews.agents import (
     create_search_agent, create_document_agent, create_embeddings_agent,
     create_research_agent, create_writer_agent, MCPEnabledAgents, create_mcp_enabled_agents,
-    get_neo4j_mcp_server_params, get_mcp_tools
+    get_neo4j_mcp_server_params, get_mcp_tools, debug_mcp_tools_status
 )
 from app.crews.tasks import (
     create_search_task, create_similarity_search_task, create_document_processing_task,
@@ -15,10 +15,10 @@ from app.lib.cypher_generator import generate_cypher_query_async
 from app.lib.neo4j_client import neo4j_client
 from app.lib.embeddings import find_similar_cases, generate_embeddings_for_cases
 from app.lib.document_processor import parse_docx_to_knowledge_graph, knowledge_graph_to_dict
-from crewai import Crew, Process
+from crewai import Crew, Process, Agent, Task, LLM
+from crewai_tools import MCPServerAdapter
 import logging
 import os
-from crewai_tools import MCPServerAdapter
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -332,20 +332,30 @@ async def import_knowledge_graph(file: UploadFile = File(...)):
             temp_file_path = temp_file.name
         
         try:
-            # Create document processing agent and task
-            doc_agent = create_document_agent()
-            doc_task = create_document_processing_task(doc_agent, temp_file_path, file.filename)
-            
-            # Create crew
-            crew = Crew(
-                agents=[doc_agent],
-                tasks=[doc_task],
-                process=Process.sequential,
-                verbose=True
-            )
-            
-            # Execute
-            result = crew.kickoff()
+            # Use the global MCP context manager approach (same as search endpoints)
+            with MCPEnabledAgents() as mcp_context:
+                mcp_tools = get_mcp_tools()
+                
+                # Create document agent - it will internally check for MCP tools
+                doc_agent = create_document_agent()
+                
+                if mcp_tools:
+                    mcp_tools_used = True
+                    logger.info(f"Document processing using MCP tools: {[tool.name for tool in mcp_tools]}")
+                else:
+                    logger.warning("No MCP tools available for document processing, using standard agent")
+                
+                # Create task and crew
+                doc_task = create_document_processing_task(doc_agent, temp_file_path, file.filename)
+                crew = Crew(
+                    agents=[doc_agent],
+                    tasks=[doc_task],
+                    process=Process.sequential,
+                    verbose=True
+                )
+                
+                # Execute within the MCP context
+                result = crew.kickoff()
             
             return {
                 "success": True,
@@ -365,9 +375,10 @@ async def import_knowledge_graph(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/import-kg/advanced")
-async def import_with_mcp_tools(file: UploadFile = File(...)):
+async def import_with_direct_processing(file: UploadFile = File(...)):
     """
-    Import and process documents using CrewAI agents with MCP integration for enhanced capabilities.
+    Import and process documents using CrewAI agents with direct Neo4j integration.
+    Uses the proven direct Neo4j approach for reliable processing.
     """
     import tempfile
     import os
@@ -381,51 +392,53 @@ async def import_with_mcp_tools(file: UploadFile = File(...)):
             temp_file_path = temp_file.name
         
         try:
-            # Try to use MCP tools for enhanced processing
-            mcp_tools_used = False
-            doc_agent = None
+            # Use direct Neo4j approach (no MCP initialization)
+            print(f"📄 Processing document: {file.filename}")
+            logger.info(f"Document processing started for: {file.filename}")
             
-            # Use the global MCP context manager approach (same as search endpoints)
-            with MCPEnabledAgents() as mcp_context:
-                mcp_tools = get_mcp_tools()
-                
-                if mcp_tools:
-                    doc_agent = create_document_agent(tools=mcp_tools)
-                    mcp_tools_used = True
-                    logger.info(f"Document processing using MCP tools: {[tool.name for tool in mcp_tools]}")
-                else:
-                    logger.warning("No MCP tools available for document processing, using standard agent")
-                    doc_agent = create_document_agent()
-                
-                # Create task and crew
-                doc_task = create_document_processing_task(doc_agent, temp_file_path, file.filename)
-                crew = Crew(
-                    agents=[doc_agent],
-                    tasks=[doc_task],
-                    process=Process.sequential,
-                    verbose=True
-                )
-                
-                # Execute within the MCP context
-                result = crew.kickoff()
+            # Create document agent with direct Neo4j tools
+            from ..crews.agents import create_document_agent
+            doc_agent = create_document_agent()
+            
+            # Create task
+            from ..crews.tasks import create_document_processing_task
+            doc_task = create_document_processing_task(doc_agent, temp_file_path, file.filename)
+            
+            # Create and execute crew
+            crew = Crew(
+                agents=[doc_agent],
+                tasks=[doc_task],
+                process=Process.sequential,
+                verbose=True
+            )
+            
+            print("🚀 Starting document processing crew...")
+            result = crew.kickoff()
+            
+            # Extract result
+            result_text = result.raw if hasattr(result, 'raw') else str(result)
             
             return {
                 "success": True,
                 "filename": file.filename,
-                "analysis": result.raw,  # Extract the human-readable output
-                "type": "crew_processing_advanced",
-                "mcp_tools_used": mcp_tools_used,
-                "tasks_output": [{"description": task.description, "raw": task.raw} for task in result.tasks_output] if result.tasks_output else [],
-                "token_usage": result.token_usage if hasattr(result, 'token_usage') else {}
+                "result": result_text,
+                "processing_method": "direct_neo4j",
+                "message": "Document processed successfully using direct Neo4j integration"
             }
+            
         finally:
             # Clean up temporary file
             if os.path.exists(temp_file_path):
                 os.unlink(temp_file_path)
-    
+                
     except Exception as e:
-        logger.error(f"Error in advanced import: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Document processing failed: {e}")
+        return {
+            "success": False,
+            "filename": file.filename if file else "unknown",
+            "error": str(e),
+            "processing_method": "direct_neo4j"
+        }
 
 # Embeddings endpoints (keeping existing functionality)
 @router.post("/embeddings/generate")
@@ -629,38 +642,28 @@ async def analyze_patterns(request: PatternAnalysisRequest):
 # Health check
 @router.get("/health")
 async def health_check():
-    """Health check endpoint including MCP status"""
+    """Health check endpoint for Neo4j connectivity"""
     try:
         # Test Neo4j connection
-        neo4j_status = "connected" if neo4j_client.verify_connectivity() else "disconnected"
+        from ..lib.neo4j_client import neo4j_client
         
-        # Test MCP connection
-        mcp_status = "unavailable"
-        mcp_tools_count = 0
-        try:
-            with MCPEnabledAgents() as mcp_context:
-                mcp_tools = get_mcp_tools()
-                if mcp_tools:
-                    mcp_status = "connected"
-                    mcp_tools_count = len(mcp_tools)
-                else:
-                    mcp_status = "no_tools"
-        except Exception as e:
-            mcp_status = f"error: {str(e)}"
+        # Simple connectivity test
+        test_query = "RETURN 1 as test"
+        result = neo4j_client.execute_query(test_query)
+        neo4j_status = "connected" if result else "disconnected"
         
         return {
             "status": "healthy",
             "neo4j": neo4j_status,
-            "mcp": {
-                "status": mcp_status,
-                "tools_available": mcp_tools_count
-            }
+            "processing_method": "direct_neo4j",
+            "message": "Using direct Neo4j integration for reliable processing"
         }
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         return {
             "status": "unhealthy",
-            "error": str(e)
+            "error": str(e),
+            "neo4j": "error"
         }
 
 # Keep existing basic endpoints
@@ -754,3 +757,50 @@ async def process_document_with_crew(request: DocumentRequest):
     except Exception as e:
         logger.error(f"Document processing failed: {e}")
         raise HTTPException(status_code=500, detail=f"Document processing failed: {str(e)}")
+
+@router.get("/debug/mcp-status")
+async def debug_mcp_status():
+    """Debug endpoint to check MCP tools configuration (non-blocking)"""
+    try:
+        from ..crews.agents import get_neo4j_mcp_server_params
+        import os
+        
+        # Get MCP server configuration without initializing
+        server_params = get_neo4j_mcp_server_params()
+        
+        # Check environment variables
+        neo4j_config = {
+            "NEO4J_URI": os.getenv("NEO4J_URI", "Not set"),
+            "NEO4J_USER": os.getenv("NEO4J_USER", "Not set"), 
+            "NEO4J_PASSWORD": "***" if os.getenv("NEO4J_PASSWORD") else "Not set",
+            "NEO4J_DATABASE": os.getenv("NEO4J_DATABASE", "neo4j")
+        }
+        
+        # Check if mcp-neo4j-cypher command exists
+        import subprocess
+        try:
+            result = subprocess.run(["which", "mcp-neo4j-cypher"], 
+                                  capture_output=True, text=True, timeout=5)
+            mcp_command_available = result.returncode == 0
+            mcp_command_path = result.stdout.strip() if mcp_command_available else "Not found"
+        except Exception as e:
+            mcp_command_available = False
+            mcp_command_path = f"Error checking: {e}"
+        
+        return {
+            "mcp_server_config": {
+                "command": server_params.command,
+                "args": server_params.args
+            },
+            "neo4j_config": neo4j_config,
+            "mcp_command_available": mcp_command_available,
+            "mcp_command_path": mcp_command_path,
+            "test_successful": True,
+            "note": "This is configuration status only - actual MCP connection tested during document processing"
+        }
+        
+    except Exception as e:
+        return {
+            "error": str(e),
+            "test_successful": False
+        }

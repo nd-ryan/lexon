@@ -1,6 +1,7 @@
 import re
 import json
 import logging
+import time
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from io import BytesIO
@@ -17,6 +18,7 @@ class SchemaInfo:
     relationship_types: List[str]
     node_properties: Dict[str, List[str]]  # node_label -> [property_names]
     relationship_properties: Dict[str, List[str]]  # rel_type -> [property_names]
+    property_keys: List[str]
 
 @dataclass
 class DocumentMetadata:
@@ -34,73 +36,54 @@ class DynamicDocumentProcessor:
     """AI-powered dynamic document processor"""
     
     def __init__(self):
-        self.llm = LLM(model="o3-mini", temperature=0)
-        self.mcp_tools = None
-    
-    def set_mcp_tools(self, mcp_tools):
-        """Set MCP tools for enhanced Neo4j operations"""
-        self.mcp_tools = mcp_tools
+        """Initialize the dynamic document processor with direct Neo4j integration"""
+        self.llm = LLM(model="gpt-4o", temperature=0)
+        logger.info("Dynamic document processor initialized with direct Neo4j integration")
     
     def get_neo4j_schema(self) -> SchemaInfo:
-        """Query Neo4j to get existing schema information using MCP tools when available"""
+        """Query Neo4j to get existing schema information using direct Neo4j queries"""
+        logger.info("Retrieving Neo4j schema using direct queries")
+        
         try:
-            # Try to use MCP get-neo4j-schema tool first
-            if self.mcp_tools:
-                for tool in self.mcp_tools:
-                    if tool.name == "get-neo4j-schema":
-                        logger.info("Using Neo4j MCP get-neo4j-schema tool")
-                        schema_result = tool.run({})
-                        
-                        # Parse MCP schema result
-                        if isinstance(schema_result, dict):
-                            return SchemaInfo(
-                                node_labels=schema_result.get("node_labels", []),
-                                relationship_types=schema_result.get("relationship_types", []),
-                                node_properties=schema_result.get("node_properties", {}),
-                                relationship_properties=schema_result.get("relationship_properties", {})
-                            )
-                        else:
-                            logger.warning(f"Unexpected MCP schema result format: {type(schema_result)}")
+            # Use direct Neo4j queries for reliable schema retrieval
+            logger.info("Using direct Neo4j queries for schema retrieval")
             
-            # Fallback to direct Neo4j queries if MCP not available
-            logger.info("Using direct Neo4j queries for schema (MCP not available)")
-            with neo4j_client.driver.session() as session:
-                # Get node labels
-                result = session.run("CALL db.labels()")
-                node_labels = [record["label"] for record in result]
-                
-                # Get relationship types  
-                result = session.run("CALL db.relationshipTypes()")
-                relationship_types = [record["relationshipType"] for record in result]
-                
-                # Get node properties for each label
-                node_properties = {}
-                for label in node_labels:
-                    result = session.run(f"MATCH (n:{label}) RETURN keys(n) as props LIMIT 10")
-                    all_props = set()
-                    for record in result:
-                        all_props.update(record["props"])
-                    node_properties[label] = list(all_props)
-                
-                # Get relationship properties for each type
-                relationship_properties = {}
-                for rel_type in relationship_types:
-                    result = session.run(f"MATCH ()-[r:{rel_type}]-() RETURN keys(r) as props LIMIT 10")
-                    all_props = set()
-                    for record in result:
-                        all_props.update(record["props"])
-                    relationship_properties[rel_type] = list(all_props)
-                
-                return SchemaInfo(
-                    node_labels=node_labels,
-                    relationship_types=relationship_types, 
-                    node_properties=node_properties,
-                    relationship_properties=relationship_properties
-                )
-                
+            # Get node labels
+            node_labels_query = "CALL db.labels() YIELD label RETURN collect(label) as labels"
+            node_result = neo4j_client.execute_query(node_labels_query)
+            node_labels = node_result[0]['labels'] if node_result else []
+            
+            # Get relationship types  
+            rel_types_query = "CALL db.relationshipTypes() YIELD relationshipType RETURN collect(relationshipType) as types"
+            rel_result = neo4j_client.execute_query(rel_types_query)
+            relationship_types = rel_result[0]['types'] if rel_result else []
+            
+            # Get property keys
+            prop_keys_query = "CALL db.propertyKeys() YIELD propertyKey RETURN collect(propertyKey) as keys"
+            prop_result = neo4j_client.execute_query(prop_keys_query)
+            property_keys = prop_result[0]['keys'] if prop_result else []
+            
+            schema_info = SchemaInfo(
+                node_labels=node_labels,
+                relationship_types=relationship_types,
+                node_properties={},  # Empty for now - could be populated later if needed
+                relationship_properties={},  # Empty for now - could be populated later if needed
+                property_keys=property_keys
+            )
+            
+            logger.info(f"Schema retrieved: {len(node_labels)} node types, {len(relationship_types)} relationship types, {len(property_keys)} properties")
+            return schema_info
+            
         except Exception as e:
-            logger.warning(f"Could not get Neo4j schema: {e}")
-            return SchemaInfo([], [], {}, {})
+            logger.error(f"Error retrieving Neo4j schema: {e}")
+            # Return empty schema as fallback
+            return SchemaInfo(
+                node_labels=[], 
+                relationship_types=[], 
+                node_properties={}, 
+                relationship_properties={}, 
+                property_keys=[]
+            )
     
     def extract_document_text(self, file_content: bytes) -> str:
         """Extract text from DOCX file"""
@@ -147,7 +130,7 @@ INSTRUCTIONS:
             if not response:
                 raise ValueError("Empty response from LLM for node identification")
                 
-            nodes_json = response.strip()
+            nodes_json = self._strip_json_codeblock(response)
             logger.debug(f"Nodes JSON preview: {nodes_json[:300]}...")
             
             try:
@@ -211,7 +194,7 @@ INSTRUCTIONS:
             if not response:
                 raise ValueError("Empty response from LLM for relationship identification")
                 
-            relationships_json = response.strip()
+            relationships_json = self._strip_json_codeblock(response)
             logger.debug(f"Relationships JSON preview: {relationships_json[:300]}...")
             
             try:
@@ -293,7 +276,7 @@ ALIGNMENT RULES:
             if not response:
                 raise ValueError("Empty response from LLM for schema alignment")
                 
-            aligned_json = response.strip()
+            aligned_json = self._strip_json_codeblock(response)
             logger.debug(f"Alignment JSON preview: {aligned_json[:300]}...")
             
             try:
@@ -342,7 +325,7 @@ ALIGNMENT RULES:
                 
         return chunks
 
-    def extract_document_content(self, document_text: str, aligned_nodes: Dict[str, List[str]], aligned_relationships: Dict[str, Dict[str, Any]], test_mode: bool = True) -> ExtractedData:
+    def extract_document_content(self, document_text: str, aligned_nodes: Dict[str, List[str]], aligned_relationships: Dict[str, Dict[str, Any]], test_mode: bool = False) -> ExtractedData:
         """Step 6: Extract actual content based on the aligned metadata using document batching"""
         
         metadata_context = f"""
@@ -380,23 +363,23 @@ OUTPUT FORMAT (JSON only):
 {{
   "nodes": {{
     "NodeType1": [
-      {{"node_id": "unique_id1", "property1": "value1", "property2": "value2"}},
-      {{"node_id": "unique_id2", "property1": "value3", "property2": "value4"}}
+      {{"case_id": "C0001", "case_name": "Example Case", "case_citation": "123 U.S. 456"}},
+      {{"party_id": "P0001", "party_name": "Plaintiff Name", "role": "plaintiff"}}
     ],
     "NodeType2": [
-      {{"node_id": "unique_id3", "property1": "value5"}}
+      {{"forum_id": "F0001", "forum_name": "Supreme Court", "forum_type": "appellate"}}
     ]
   }},
   "relationships": [
-    {{"type": "RELATIONSHIP_TYPE1", "from_id": "unique_id1", "from_type": "NodeType1", "to_id": "unique_id3", "to_type": "NodeType2", "properties": {{"prop1": "value"}}}},
-    {{"type": "RELATIONSHIP_TYPE2", "from_id": "unique_id2", "from_type": "NodeType1", "to_id": "unique_id3", "to_type": "NodeType2", "properties": {{}}}}
+    {{"type": "HEARD_IN", "from_id": "C0001", "from_type": "Case", "to_id": "F0001", "to_type": "Forum", "properties": {{}}}},
+    {{"type": "INVOLVES", "from_id": "C0001", "from_type": "Case", "to_id": "P0001", "to_type": "Party", "properties": {{}}}}
   ]
 }}
 
 EXTRACTION REQUIREMENTS:
 1. Extract EVERY instance of each node type from this chunk - don't miss any
-2. Generate meaningful, unique IDs for each node instance (e.g., "case_{i+1:03d}_001", "party_{i+1:03d}_plaintiff")
-3. Include chunk number in IDs to ensure uniqueness across chunks (e.g., "case_{i+1:03d}_001" for chunk {i+1})
+2. CRITICAL: Use the EXACT IDs that appear in the document (e.g., C0001, F0001, P0001, etc.) - DO NOT generate new IDs
+3. If the document shows relationships like "C0001 → F0001", use "C0001" and "F0001" as the actual node IDs
 4. Fill in ALL available properties for each node based on document content
 5. Create ALL relationships between nodes as specified in the schema
 6. Only create relationships between nodes that exist in THIS chunk
@@ -415,7 +398,7 @@ EXTRACTION REQUIREMENTS:
                     print(f"         ⚠️ Empty response for chunk {i+1}, skipping...")
                     continue
                     
-                content_json = response.strip()
+                content_json = self._strip_json_codeblock(response)
                 
                 try:
                     content_dict = json.loads(content_json)
@@ -483,8 +466,8 @@ EXTRACTION REQUIREMENTS:
             if not nodes:
                 continue
                 
-            # Assume first property is the ID property
-            id_prop = list(nodes[0].keys())[0] if nodes[0] else "id"
+            # Determine the id property deterministically
+            id_prop = self._determine_id_prop(node_type, nodes[0]) if nodes[0] else "id"
             
             for node in nodes:
                 # Create MERGE query for each node
@@ -504,15 +487,9 @@ EXTRACTION REQUIREMENTS:
             to_id = rel["to_id"]
             rel_props = rel.get("properties", {})
             
-            # Find ID property names (assume first property is ID)
-            from_id_prop = "id"  # Default
-            to_id_prop = "id"    # Default
-            
             # Try to find actual ID property names from the nodes
-            if from_type in extracted_data.nodes and extracted_data.nodes[from_type]:
-                from_id_prop = list(extracted_data.nodes[from_type][0].keys())[0]
-            if to_type in extracted_data.nodes and extracted_data.nodes[to_type]:
-                to_id_prop = list(extracted_data.nodes[to_type][0].keys())[0]
+            from_id_prop = self._label_id_prop(from_type, extracted_data.nodes)
+            to_id_prop = self._label_id_prop(to_type, extracted_data.nodes)
             
             query = f"""
             MATCH (a:{from_type} {{{from_id_prop}: $from_id}})
@@ -547,98 +524,199 @@ EXTRACTION REQUIREMENTS:
             logger.error(f"Neo4j connection test failed: {e}")
             return False
 
-    def execute_cypher_queries(self, queries: List[Tuple[str, Dict]]) -> bool:
-        """Execute the generated Cypher queries using MCP tools when available with retry logic"""
-        
-        # First test the connection
+    def execute_individual_queries(self, queries: List[Tuple[str, Dict]]) -> bool:
+        """Legacy execution: run one query per Cypher statement (kept for fallback)."""
+
+        logger.info("Executing Cypher queries using individual execution (legacy)")
+
+        # Connection test
         if not self.test_neo4j_connection():
-            print("      ❌ Cannot proceed with query execution - Neo4j connection failed")
-            return False
-            
-        print(f"      📝 Executing {len(queries)} Cypher queries...")
-        
-        successful_queries = 0
-        failed_queries = 0
-        
-        try:
-            # Try to use MCP write-neo4j-cypher tool first
-            if self.mcp_tools:
-                write_tool = None
-                for tool in self.mcp_tools:
-                    if tool.name == "write-neo4j-cypher":
-                        write_tool = tool
-                        break
-                
-                if write_tool:
-                    print("      🔧 Using Neo4j MCP write-neo4j-cypher tool")
-                    logger.info("Using Neo4j MCP write-neo4j-cypher tool")
-                    
-                    for i, (query, params) in enumerate(queries):
-                        try:
-                            result = write_tool.run({
-                                "query": query,
-                                "parameters": params
-                            })
-                            successful_queries += 1
-                            if (i + 1) % 10 == 0:  # Progress update every 10 queries
-                                print(f"         📊 Progress: {i + 1}/{len(queries)} queries executed")
-                            logger.debug(f"MCP query result: {result}")
-                        except Exception as e:
-                            failed_queries += 1
-                            logger.error(f"MCP query {i+1} execution failed: {e}")
-                            print(f"         ⚠️ Query {i+1} failed via MCP, trying direct connection...")
-                            
-                            # Fall back to direct execution for this query with retry
-                            if self._execute_single_query_with_retry(query, params):
-                                successful_queries += 1
-                                failed_queries -= 1  # Correct the count since retry succeeded
-                    
-                    print(f"      ✅ MCP execution complete: {successful_queries} successful, {failed_queries} failed")
-                    return failed_queries == 0
-            
-            # Fallback to direct Neo4j execution
-            print("      🔧 Using direct Neo4j execution (MCP not available)")
-            logger.info("Using direct Neo4j execution (MCP not available)")
-            
-            for i, (query, params) in enumerate(queries):
-                if self._execute_single_query_with_retry(query, params):
-                    successful_queries += 1
-                else:
-                    failed_queries += 1
-                    
-                if (i + 1) % 10 == 0:  # Progress update every 10 queries
-                    print(f"         📊 Progress: {i + 1}/{len(queries)} queries executed")
-                    
-            print(f"      ✅ Direct execution complete: {successful_queries} successful, {failed_queries} failed")
-            logger.info(f"Successfully executed {successful_queries}/{len(queries)} Cypher queries")
-            return failed_queries == 0
-            
-        except Exception as e:
-            print(f"      ❌ Critical error during query execution: {e}")
-            logger.error(f"Critical error executing Cypher queries: {e}")
             return False
 
-    def _execute_single_query_with_retry(self, query: str, params: Dict, max_retries: int = 3) -> bool:
-        """Execute a single query with retry logic for connection issues"""
-        import time
-        
-        for attempt in range(max_retries):
-            try:
-                with neo4j_client.driver.session() as session:
-                    session.run(query, params)
-                return True
+        successful_queries = 0
+        failed_queries = 0
+        total = len(queries)
+
+        print(f"      📝 Executing {total} Cypher queries (individual mode)...")
+
+        for i, (query, params) in enumerate(queries):
+            max_retries = 3
+            retry_delay = 1
+            for attempt in range(max_retries):
+                try:
+                    neo4j_client.execute_query(query, params)
+                    successful_queries += 1
+                    break
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        logger.warning(f"Query {i+1} failed (attempt {attempt+1}), retrying in {retry_delay}s: {e}")
+                        time.sleep(retry_delay)
+                        retry_delay *= 2
+                    else:
+                        logger.error(f"Query {i+1} failed after {max_retries} attempts: {e}")
+                        failed_queries += 1
+
+            if (i + 1) % 10 == 0:
+                print(f"         📊 Progress: {i+1}/{total} queries executed")
+
+        print(f"      ✅ Individual execution complete: {successful_queries} successful, {failed_queries} failed")
+        logger.info(f"Individual execution completed: {successful_queries} successful, {failed_queries} failed")
+
+        return failed_queries == 0
+
+    # Maintain backwards-compatibility for existing callers
+    execute_cypher_queries = execute_individual_queries  # type: ignore
+
+    def execute_batched_queries(self, extracted_data: "ExtractedData") -> bool:
+        """Execute Cypher write operations in efficient batches.
+
+        Nodes are merged per label via UNWIND so that a single query can create/update
+        hundreds of nodes at once.  Relationships are merged in groups keyed by
+        (rel_type, from_type, to_type) to avoid large query strings while still
+        leveraging batching.  Each MERGE/SET uses the `+=` operator so that only
+        the supplied properties are updated – existing properties that are *not*
+        in the incoming map remain untouched, satisfying the partial-update
+        requirement.
+        """
+        # Ensure Neo4j is reachable first.
+        if not self.test_neo4j_connection():
+            return False
+
+        try:
+            # ------------------------
+            # 1) Batch all node merges
+            # ------------------------
+            for node_type, nodes in extracted_data.nodes.items():
+                if not nodes:
+                    continue
+
+                # Determine the id property deterministically
+                id_prop = self._determine_id_prop(node_type, nodes[0]) if nodes[0] else "id"
+
+                # Filter out any malformed rows missing the id property to prevent
+                # ParameterMissing errors that previously occurred.
+                valid_rows = [n for n in nodes if n.get(id_prop) is not None]
+                if not valid_rows:
+                    continue  # nothing to insert for this label
+
+                print(f"      📝 Batching {len(valid_rows)} {node_type} nodes using {id_prop} property")
+                batch_query = f"""
+                UNWIND $rows AS row
+                MERGE (n:{node_type} {{{id_prop}: row.{id_prop}}})
+                SET   n += row
+                RETURN count(n) as nodes_created
+                """
+
+                # Debug: Show sample data being inserted
+                if valid_rows:
+                    sample = valid_rows[0]
+                    print(f"      🔍 Sample {node_type} data: {id_prop}={sample.get(id_prop, 'MISSING')}, keys={list(sample.keys())}")
                 
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
-                    logger.warning(f"Query attempt {attempt + 1} failed, retrying in {wait_time}s: {e}")
-                    time.sleep(wait_time)
-                else:
-                    logger.error(f"Query failed after {max_retries} attempts: {e}")
-                    return False
-        
-        return False
-    
+                try:
+                    result = neo4j_client.execute_query(batch_query, {"rows": valid_rows})
+                    actual_count = result[0]["nodes_created"] if result else 0
+                    print(f"      ✅ Actually created {actual_count} {node_type} nodes (attempted {len(valid_rows)})")
+                    
+                    # Verify a sample node exists
+                    if valid_rows and actual_count > 0:
+                        sample = valid_rows[0]
+                        check_query = f"MATCH (n:{node_type} {{{id_prop}: $id_val}}) RETURN count(n) as count"
+                        check_result = neo4j_client.execute_query(check_query, {"id_val": sample[id_prop]})
+                        exists_count = check_result[0]["count"] if check_result else 0
+                        print(f"      🔍 Verification: {node_type}({id_prop}={sample[id_prop]}) exists: {exists_count > 0}")
+                except Exception as e:
+                    print(f"      ❌ Failed to create {node_type} nodes: {e}")
+                    logger.error(f"Node batch failed: {e}")
+                    logger.error(f"Query: {batch_query}")
+                    logger.error(f"Sample row: {valid_rows[0] if valid_rows else 'No rows'}")
+                    raise
+
+            # ---------------------------------
+            # 2) Batch all relationship merges
+            # ---------------------------------
+            # Group relationships to keep each individual query manageable and to
+            # guarantee that parameter names are consistent within a batch.
+            print(f"\\n      📋 DEBUG: Actual node IDs created:")
+            for node_type, nodes in extracted_data.nodes.items():
+                if nodes:
+                    id_prop = self._determine_id_prop(node_type, nodes[0])
+                    sample_ids = [node.get(id_prop, 'MISSING') for node in nodes[:3]]  # First 3 IDs
+                    print(f"      • {node_type}({id_prop}): {sample_ids}{'...' if len(nodes) > 3 else ''}")
+            
+            print(f"\\n      🔗 DEBUG: Relationship IDs being searched for:")
+            rel_batches = {}
+            for rel in extracted_data.relationships:
+                if not rel.get("from_id") or not rel.get("to_id"):
+                    print(f"      ⚠️ Skipping relationship with missing IDs: {rel}")
+                    continue
+                    
+                # Debug: Show what relationship IDs we're trying to connect
+                print(f"      🔗 Processing rel: {rel['type']} from_id={rel['from_id']} to_id={rel['to_id']}")
+                    
+                rel_type = rel["type"]
+                from_type = rel["from_type"]
+                to_type = rel["to_type"]
+
+                # Resolve id properties for from/to nodes.
+                from_id_prop = self._label_id_prop(from_type, extracted_data.nodes)
+                to_id_prop = self._label_id_prop(to_type, extracted_data.nodes)
+
+                key = (rel_type, from_type, to_type, from_id_prop, to_id_prop)
+                if key not in rel_batches:
+                    rel_batches[key] = []
+
+                rel_batches[key].append({
+                    "from_id":     rel["from_id"],
+                    "to_id":       rel["to_id"],
+                    "properties":  rel.get("properties", {})
+                })
+
+            for (rel_type, from_type, to_type, from_id_prop, to_id_prop), rows in rel_batches.items():
+                if not rows:
+                    continue
+
+                print(f"      🔗 Batching {len(rows)} {rel_type} relationships ({from_type}.{from_id_prop} -> {to_type}.{to_id_prop})")
+                logger.info(f"Relationship batch: {rel_type}, from_prop={from_id_prop}, to_prop={to_id_prop}, count={len(rows)}")
+
+                # First, let's verify the nodes exist that we're trying to connect
+                sample_row = rows[0]
+                check_from_query = f"MATCH (a:{from_type} {{{from_id_prop}: $from_id}}) RETURN count(a) as count"
+                check_to_query = f"MATCH (b:{to_type} {{{to_id_prop}: $to_id}}) RETURN count(b) as count"
+                
+                from_exists = neo4j_client.execute_query(check_from_query, {"from_id": sample_row["from_id"]})
+                to_exists = neo4j_client.execute_query(check_to_query, {"to_id": sample_row["to_id"]})
+                
+                from_count = from_exists[0]["count"] if from_exists else 0
+                to_count = to_exists[0]["count"] if to_exists else 0
+                
+                print(f"      🔍 Node check: {from_type}({from_id_prop}={sample_row['from_id']}) exists: {from_count > 0}")
+                print(f"      🔍 Node check: {to_type}({to_id_prop}={sample_row['to_id']}) exists: {to_count > 0}")
+                
+                if from_count == 0 or to_count == 0:
+                    print(f"      ❌ Cannot create {rel_type} relationships - missing nodes!")
+                    continue
+                
+                # Execute the relationship creation with result counting
+                enhanced_query = f"""
+                UNWIND $rows AS row
+                MATCH (a:{from_type} {{{from_id_prop}: row.from_id}})
+                MATCH (b:{to_type}   {{{to_id_prop}:   row.to_id}})
+                MERGE (a)-[r:{rel_type}]->(b)
+                WITH r, row
+                FOREACH (k IN keys(row.properties) | SET r[k] = row.properties[k])
+                RETURN count(r) as relationships_created
+                """
+                
+                result = neo4j_client.execute_query(enhanced_query, {"rows": rows})
+                actual_count = result[0]["relationships_created"] if result else 0
+                print(f"      ✅ Actually created {actual_count} {rel_type} relationships (attempted {len(rows)})")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Batched query execution failed: {e}")
+            return False
+
     def process_document(self, file_content: bytes, filename: str) -> Dict[str, Any]:
         """Main processing pipeline with improved multi-step approach"""
         try:
@@ -655,6 +733,28 @@ EXTRACTION REQUIREMENTS:
             logger.info("Step 2: Extracting document text...")
             document_text = self.extract_document_text(file_content)
             print(f"   Extracted {len(document_text)} characters from document")
+            
+            # Detect case-structured document
+            cases = self._split_into_cases(document_text)
+            if cases:
+                print(f"🏛️  Detected {len(cases)} cases in document, processing one at a time...")
+                total_nodes = total_rels = 0
+                for case_name, case_body in cases:
+                    # Refresh schema before each case to ensure alignment is always current
+                    print(f"\n🔄 Refreshing Neo4j schema before processing '{case_name}'...")
+                    current_schema_info = self.get_neo4j_schema()
+                    case_result = self._process_single_case(case_body, case_name, current_schema_info)
+                    total_nodes += case_result["nodes_added"]
+                    total_rels += case_result["relationships_added"]
+
+                return {
+                    "success": True,
+                    "filename": filename,
+                    "cases_processed": len(cases),
+                    "total_nodes_added": total_nodes,
+                    "total_relationships_added": total_rels,
+                    "message": f"Processed {len(cases)} cases successfully"
+                }
             
             # Step 3: Identify ALL possible nodes in document
             print("🔍 Step 3/8: Using AI to identify all possible nodes...")
@@ -679,7 +779,7 @@ EXTRACTION REQUIREMENTS:
             # Step 6: Extract actual content using aligned metadata
             print("📝 Step 6/8: Using AI to extract actual content from document...")
             logger.info("Step 6: Extracting document content...")
-            extracted_data = self.extract_document_content(document_text, aligned_nodes, aligned_relationships, test_mode=True)
+            extracted_data = self.extract_document_content(document_text, aligned_nodes, aligned_relationships, test_mode=False)
             total_nodes = sum(len(nodes) for nodes in extracted_data.nodes.values())
             print(f"   Extracted {total_nodes} total nodes and {len(extracted_data.relationships)} relationships")
             
@@ -691,8 +791,16 @@ EXTRACTION REQUIREMENTS:
             
             # Step 8: Execute queries
             print("💾 Step 8/8: Executing queries to import into Neo4j...")
-            logger.info("Step 8: Executing Cypher queries...")
-            success = self.execute_cypher_queries(queries)
+            logger.info("Step 8: Executing Cypher queries using batched approach...")
+
+            # Prefer the new batched execution path for performance & reliability
+            success = self.execute_batched_queries(extracted_data)
+
+            # Fallback to legacy per-query execution if batching fails for any reason
+            if not success:
+                logger.warning("Batched execution failed – falling back to individual queries")
+                success = self.execute_individual_queries(queries)
+            
             print(f"   {'✅ Successfully' if success else '❌ Failed to'} import data into Neo4j")
             
             print(f"\n🎉 Document processing complete for {filename}!")
@@ -730,6 +838,93 @@ EXTRACTION REQUIREMENTS:
                 "filename": filename,
                 "error": str(e)
             }
+
+    def _strip_json_codeblock(self, text: str) -> str:
+        """Remove markdown ```json ... ``` and ``` ... ``` wrappers if present."""
+        cleaned = text.strip()
+        if cleaned.startswith("```"):
+            # Remove first line (``` or ```json)
+            lines = cleaned.split('\n')
+            # Drop the opening delimiter
+            if lines[0].strip().startswith("```"):
+                lines = lines[1:]
+            # Drop trailing delimiter if exists on last line
+            if lines and lines[-1].strip().startswith("```"):
+                lines = lines[:-1]
+            cleaned = "\n".join(lines).strip()
+        return cleaned
+
+    def _split_into_cases(self, document_text: str) -> List[Tuple[str, str]]:
+        """Return list of (case_name, case_text).
+
+        The function looks for headings that start with "Case:" or "CASE:" on
+        their own line.  Everything until the next heading (or EOF) is treated
+        as that case's section.  If no headings are found, returns an empty
+        list so the caller can fall back to whole-document processing.
+        """
+        pattern = re.compile(r"^\s*(?:Case|CASE)\s*[:\-]\s*(.+)$", re.MULTILINE)
+        matches = list(pattern.finditer(document_text))
+        if not matches:
+            return []
+
+        cases: List[Tuple[str, str]] = []
+        for i, m in enumerate(matches):
+            start = m.end()
+            end = matches[i + 1].start() if i + 1 < len(matches) else len(document_text)
+            case_name = m.group(1).strip()
+            case_body = document_text[start:end].strip()
+            cases.append((case_name, case_body))
+        return cases
+
+    def _process_single_case(self, case_body: str, case_name: str, schema_info: "SchemaInfo") -> Dict[str, Any]:
+        """Run the full 8-step pipeline on a single case body."""
+        print(f"\n📂 Processing case: {case_name}")
+        # Steps 3-6 are redone per case using the existing helpers.
+        # Identify nodes & relationships in this case only.
+        document_nodes = self.identify_document_nodes(case_body)
+        document_relationships = self.identify_document_relationships(case_body, document_nodes)
+
+        aligned_nodes, aligned_relationships = self.align_with_existing_schema(
+            document_nodes, document_relationships, schema_info
+        )
+
+        extracted_data = self.extract_document_content(case_body, aligned_nodes, aligned_relationships, test_mode=False)
+        node_count = sum(len(v) for v in extracted_data.nodes.values())
+        rel_count = len(extracted_data.relationships)
+        print(f"      • Case extraction: {node_count} nodes, {rel_count} relationships")
+
+        # Generate and write queries (batched → fallback).
+        success = self.execute_batched_queries(extracted_data)
+        if not success:
+            queries = self.generate_cypher_queries(extracted_data)
+            success = self.execute_individual_queries(queries)
+
+        status = "✅" if success else "❌"
+        print(f"{status} {case_name} case processed and added to Neo4j successfully!  (nodes={node_count}, rels={rel_count})")
+        return {"success": success, "nodes_added": node_count, "relationships_added": rel_count}
+
+    def _determine_id_prop(self, label: str, sample_row: Dict[str, Any]) -> str:
+        """Return the property key that uniquely identifies a node.
+
+        Preference order:
+        1. <label_lower>_id  (e.g. doctrine_id)
+        2. First key ending with '_id'
+        3. First key in the dict (fallback – maintains previous behaviour)
+        """
+        preferred = f"{label.lower()}_id"
+        if preferred in sample_row:
+            return preferred
+        for k in sample_row.keys():
+            if k.endswith("_id"):
+                return k
+        return next(iter(sample_row))
+
+    def _label_id_prop(self, label: str, data_nodes: Dict[str, List[Dict[str, Any]]]) -> str:
+        """Return the identifier property for a label using available data or convention."""
+        if label in data_nodes and data_nodes[label]:
+            return self._determine_id_prop(label, data_nodes[label][0])
+        default_prop = f"{label.lower()}_id"
+        return default_prop
 
 # Global instance
 dynamic_processor = DynamicDocumentProcessor() 

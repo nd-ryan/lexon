@@ -20,7 +20,7 @@ def get_neo4j_mcp_server_params():
         command="mcp-neo4j-cypher",  # Use official Neo4j MCP server
         args=[
             "--db-url", os.getenv("NEO4J_URI", "bolt://localhost:7687"),
-            "--username", os.getenv("NEO4J_USERNAME", "neo4j"),
+            "--username", os.getenv("NEO4J_USER", "neo4j"),
             "--password", os.getenv("NEO4J_PASSWORD", "password"),
             "--database", os.getenv("NEO4J_DATABASE", "neo4j")
         ],
@@ -45,7 +45,23 @@ def initialize_mcp_tools():
 
 def get_mcp_tools():
     """Get the global MCP tools instance."""
+    global _mcp_tools
+    if _mcp_tools:
+        logger.debug(f"get_mcp_tools() returning {len(_mcp_tools)} tools: {[tool.name for tool in _mcp_tools]}")
+    else:
+        logger.debug("get_mcp_tools() returning None - no MCP tools available")
     return _mcp_tools
+
+def debug_mcp_tools_status():
+    """Debug function to check current MCP tools status"""
+    global _mcp_tools
+    status = {
+        "mcp_tools_available": _mcp_tools is not None,
+        "tool_count": len(_mcp_tools) if _mcp_tools else 0,
+        "tool_names": [tool.name for tool in _mcp_tools] if _mcp_tools else []
+    }
+    logger.info(f"MCP Tools Status: {status}")
+    return status
 
 # Step callback function to capture agent thinking
 def agent_step_callback(step):
@@ -148,7 +164,7 @@ def find_similar_cases_tool(case_id: str, limit: int = 5) -> Dict[str, Any]:
 @tool
 def process_document_tool(file_path: str, filename: str) -> Dict[str, Any]:
     """
-    Process a document using AI-powered dynamic extraction that adapts to existing Neo4j schema.
+    Process a document using AI-powered dynamic extraction with direct Neo4j integration.
     
     Args:
         file_path: Path to the document file
@@ -160,28 +176,70 @@ def process_document_tool(file_path: str, filename: str) -> Dict[str, Any]:
     try:
         from ..lib.dynamic_document_processor import dynamic_processor
         
-        # Set MCP tools if available
-        mcp_tools = get_mcp_tools()
-        if mcp_tools:
-            dynamic_processor.set_mcp_tools(mcp_tools)
-            logger.info("Dynamic processor configured with MCP tools")
+        logger.info(f"Processing document with direct Neo4j integration: {filename}")
         
         # Read the file content
         with open(file_path, 'rb') as f:
             file_content = f.read()
         
-        # Process document using dynamic AI-powered approach
+        # Process document using dynamic AI-powered approach with direct Neo4j
         result = dynamic_processor.process_document(file_content, filename)
         
         return result
             
     except Exception as e:
+        logger.error(f"Document processing failed for {filename}: {e}")
         return {
             "success": False,
             "filename": filename,
             "error": str(e),
             "extracted_counts": {}
         }
+
+def create_mcp_aware_process_document_tool(mcp_tools=None):
+    """Factory function to create a process_document_tool with MCP tools baked in"""
+    
+    @tool
+    def process_document_tool_with_mcp(file_path: str, filename: str) -> Dict[str, Any]:
+        """
+        Process a document using AI-powered dynamic extraction that adapts to existing Neo4j schema.
+        This version has MCP tools pre-configured.
+        
+        Args:
+            file_path: Path to the document file
+            filename: Name of the file being processed
+            
+        Returns:
+            Dictionary with processing results and statistics
+        """
+        try:
+            from ..lib.dynamic_document_processor import dynamic_processor
+            
+            # Set MCP tools if provided
+            if mcp_tools:
+                dynamic_processor.set_mcp_tools(mcp_tools)
+                logger.info(f"Dynamic processor configured with MCP tools: {[tool.name for tool in mcp_tools]}")
+            else:
+                logger.warning("No MCP tools provided to process_document_tool_with_mcp")
+            
+            # Read the file content
+            with open(file_path, 'rb') as f:
+                file_content = f.read()
+            
+            # Process document using dynamic AI-powered approach
+            result = dynamic_processor.process_document(file_content, filename)
+            
+            return result
+                
+        except Exception as e:
+            return {
+                "success": False,
+                "filename": filename,
+                "error": str(e),
+                "extracted_counts": {}
+            }
+    
+    return process_document_tool_with_mcp
 
 @tool
 def generate_embeddings_tool(case_ids: List[str]) -> Dict[str, Any]:
@@ -222,19 +280,20 @@ def generate_embeddings_tool(case_ids: List[str]) -> Dict[str, Any]:
 
 # Document Processing Agent
 def create_document_agent(tools: Optional[List] = None) -> Agent:
-    """Create a document processing agent with AI-powered dynamic extraction"""
+    """Create a document processing agent with direct Neo4j integration"""
+    
     # Default tools that every document agent should have
     default_tools = [process_document_tool, generate_embeddings_tool]
     
-    # Add any additional tools passed in (like MCP tools)
+    # Add any additional tools passed in
     agent_tools = default_tools + (tools or [])
     
-    llm = LLM(model="o3-mini", temperature=0)
+    llm = LLM(model="gpt-4o", temperature=0)
     
     return Agent(
         role="Document Processor", 
-        goal="Process documents using the process_document_tool",
-        backstory="You process documents by calling the process_document_tool with the file_path and filename. That's it.",
+        goal="Process documents using the process_document_tool with direct Neo4j integration",
+        backstory="You process documents by calling the process_document_tool with the file_path and filename. You use direct Neo4j queries for reliable and efficient processing.",
         tools=agent_tools,
         llm=llm,
         verbose=True,
@@ -310,14 +369,25 @@ class MCPEnabledAgents:
         try:
             server_params = get_neo4j_mcp_server_params()
             print(f"🔌 Connecting to Neo4j MCP server with URL: {os.getenv('NEO4J_URI', 'bolt://localhost:7687')}")
+            logger.info(f"Initializing MCP server with params: {server_params}")
+            
             self.mcp_adapter = MCPServerAdapter([server_params])
             _mcp_tools = self.mcp_adapter.__enter__()
-            print(f"✅ Neo4j MCP Tools initialized: {[tool.name for tool in _mcp_tools]}")
-            print(f"📊 Available tools: get-neo4j-schema, read-neo4j-cypher, write-neo4j-cypher")
+            
+            if _mcp_tools:
+                tool_names = [tool.name for tool in _mcp_tools]
+                print(f"✅ Neo4j MCP Tools initialized: {tool_names}")
+                print(f"📊 Available tools: get-neo4j-schema, read-neo4j-cypher, write-neo4j-cypher")
+                logger.info(f"MCP tools successfully initialized: {tool_names}")
+            else:
+                print("⚠️ MCP adapter returned None tools")
+                logger.warning("MCP adapter returned None tools")
+                
             return self
         except Exception as e:
             print(f"⚠️ Could not initialize Neo4j MCP tools: {e}")
             print(f"💡 Make sure mcp-neo4j-cypher is installed and Neo4j is running")
+            logger.error(f"MCP initialization failed: {e}")
             _mcp_tools = None
             return self
     
@@ -328,9 +398,14 @@ class MCPEnabledAgents:
             try:
                 self.mcp_adapter.__exit__(exc_type, exc_val, exc_tb)
                 print("🔌 Neo4j MCP connection closed")
+                logger.info("MCP connection closed successfully")
             except Exception as e:
                 print(f"Warning during MCP cleanup: {e}")
+                logger.warning(f"MCP cleanup warning: {e}")
+        else:
+            logger.info("No MCP adapter to cleanup")
         _mcp_tools = None
+        logger.info("Global MCP tools reset to None")
 
 # Convenience function to create all agents with MCP support
 def create_mcp_enabled_agents():
@@ -342,6 +417,48 @@ def create_mcp_enabled_agents():
         "research_agent": create_research_agent(),
         "writer_agent": create_writer_agent()
     }
+
+@tool
+def mcp_process_document_tool(file_path: str, filename: str) -> Dict[str, Any]:
+    """
+    MCP-compatible document processing tool that uses the dynamic document processor.
+    This tool is designed to work alongside MCP tools for Neo4j integration.
+    
+    Args:
+        file_path: Path to the document file
+        filename: Name of the file being processed
+        
+    Returns:
+        Dictionary with processing results and statistics
+    """
+    try:
+        from ..lib.dynamic_document_processor import dynamic_processor
+        
+        print(f"🔧 Processing document: {filename}")
+        logger.info(f"MCP document processing started for: {filename}")
+        
+        # Note: MCP tools will be available to the agent, so the dynamic processor
+        # should use direct Neo4j queries while the agent uses MCP tools for schema/queries
+        
+        # Read the file content
+        with open(file_path, 'rb') as f:
+            file_content = f.read()
+        
+        # Process document using dynamic AI-powered approach
+        # The agent will handle MCP tool usage for Neo4j operations
+        result = dynamic_processor.process_document(file_content, filename)
+        
+        logger.info(f"MCP document processing completed for: {filename}")
+        return result
+            
+    except Exception as e:
+        logger.error(f"MCP document processing failed for {filename}: {e}")
+        return {
+            "success": False,
+            "filename": filename,
+            "error": str(e),
+            "extracted_counts": {}
+        }
 
 # All tools are now properly decorated with @tool above
 # No need for fallback functions

@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 class Neo4jClient:
     def __init__(self):
         self.uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-        self.username = os.getenv("NEO4J_USERNAME", "neo4j")
+        self.username = os.getenv("NEO4J_USER", "neo4j")
         self.password = os.getenv("NEO4J_PASSWORD", "password")
         self.driver = GraphDatabase.driver(self.uri, auth=(self.username, self.password))
     
