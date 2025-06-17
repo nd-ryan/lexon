@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from app.crews.agents import (
     create_search_agent, create_document_agent, create_embeddings_agent,
@@ -22,6 +22,45 @@ import os
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Structured Output Models for Search Results
+class SearchResult(BaseModel):
+    """Individual search result from Neo4j query"""
+    entity_type: str = Field(..., description="Type of entity (Case, Party, Provision, etc.)")
+    entity_id: Optional[str] = Field(None, description="Unique identifier for the entity")
+    name: Optional[str] = Field(None, description="Name or title of the entity")
+    description: Optional[str] = Field(None, description="Brief description of the entity")
+    properties: Dict[str, Any] = Field(default_factory=dict, description="All properties from Neo4j node")
+    relationships: List[Dict[str, Any]] = Field(default_factory=list, description="Related entities and relationships")
+    relevance_score: Optional[float] = Field(None, description="Relevance score for the search query")
+
+class SearchAnalysis(BaseModel):
+    """Analysis and insights from the search"""
+    query_interpretation: str = Field(..., description="How the AI interpreted the user's query")
+    methodology: List[str] = Field(..., description="Steps taken to complete the search")
+    key_insights: List[str] = Field(..., description="Key insights derived from the results")
+    patterns_identified: List[str] = Field(default_factory=list, description="Patterns found in the data")
+    limitations: List[str] = Field(default_factory=list, description="Any limitations in the search results")
+    formatted_results: List[str] = Field(..., description="User-friendly formatted results (e.g., bullet points of cases)")
+    raw_query_results: List[Dict[str, Any]] = Field(..., description="Raw JSON results from Neo4j queries")
+
+class StructuredSearchResponse(BaseModel):
+    """Structured response for AI Agent search with comprehensive data"""
+    success: bool = Field(..., description="Whether the search was successful")
+    query: str = Field(..., description="Original user query")
+    total_results: int = Field(..., description="Total number of results found")
+    
+    # Core search data
+    results: List[SearchResult] = Field(..., description="List of search results")
+    cypher_queries: List[str] = Field(..., description="Cypher queries executed")
+    
+    # AI Analysis
+    analysis: SearchAnalysis = Field(..., description="AI analysis of the search results")
+    
+    # Technical metadata
+    execution_time: Optional[float] = Field(None, description="Time taken to execute the search")
+    mcp_tools_used: bool = Field(True, description="Whether MCP tools were used")
+    agent_reasoning: List[Dict[str, Any]] = Field(default_factory=list, description="Step-by-step agent reasoning")
 
 # Request/Response Models
 class SearchRequest(BaseModel):
@@ -210,28 +249,41 @@ async def similarity_search(request: SimilaritySearchRequest):
         logger.error(f"Error in similarity search: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/search/crew", response_model=CrewResponse)
+@router.post("/search/crew", response_model=StructuredSearchResponse)
 def search_with_crew(request: QueryRequest):
-    """Enhanced search using CrewAI agents with MCP integration"""
+    """Enhanced search using CrewAI agents with structured output and MCP integration"""
+    import time
+    start_time = time.time()
+    
     try:
-        # Try to use MCP tools first
-        mcp_tools_used = False
-        search_agent = None
-        
         # Use the global MCP context manager approach
         with MCPEnabledAgents() as mcp_context:
             mcp_tools = get_mcp_tools()
             
-            if mcp_tools:
-                search_agent = create_search_agent(tools=mcp_tools)
-                mcp_tools_used = True
-                logger.info(f"Using MCP tools: {[tool.name for tool in mcp_tools]}")
-            else:
-                logger.warning("No MCP tools available, falling back to basic agent")
-                search_agent = create_search_agent()
+            if not mcp_tools:
+                raise HTTPException(
+                    status_code=503, 
+                    detail="Neo4j MCP tools are not available. Please ensure mcp-neo4j-cypher is installed and Neo4j is running."
+                )
             
-            # Create task and crew
-            search_task = create_search_task(search_agent, request.query)
+            # Verify we have the expected MCP tools
+            tool_names = [tool.name for tool in mcp_tools]
+            logger.info(f"Available MCP tools: {tool_names}")
+            
+            expected_tools = ["read-neo4j-cypher", "get-neo4j-schema"]
+            missing_tools = [tool for tool in expected_tools if tool not in tool_names]
+            
+            if missing_tools:
+                logger.warning(f"Missing expected MCP tools: {missing_tools}")
+                logger.info(f"Available tools: {tool_names}")
+            
+            # Create search agent with MCP tools only
+            search_agent = create_search_agent(tools=mcp_tools)
+            
+            # Create search task with Pydantic structured output
+            search_task = create_search_task(search_agent, request.query, structured_output=True)
+            search_task.output_pydantic = SearchAnalysis  # Use Pydantic structured output
+            
             crew = Crew(
                 agents=[search_agent],
                 tasks=[search_task],
@@ -240,17 +292,93 @@ def search_with_crew(request: QueryRequest):
             
             # Execute the crew within the MCP context
             result = crew.kickoff()
-            result_text = result.raw if hasattr(result, 'raw') else str(result)
+            execution_time = time.time() - start_time
+            
+            # Extract structured data from result
+            if hasattr(result, 'pydantic') and result.pydantic:
+                analysis = result.pydantic
+            else:
+                # Fallback: parse raw result into structured format
+                raw_result = result.raw if hasattr(result, 'raw') else str(result)
+                
+                # Try to extract formatted results from the raw text
+                formatted_results = []
+                raw_query_results = []
+                
+                # Look for bullet points or numbered lists in the result
+                lines = raw_result.split('\n')
+                for line in lines:
+                    line = line.strip()
+                    if line.startswith(('•', '-', '*', '1.', '2.', '3.', '4.', '5.')):
+                        formatted_results.append(line)
+                
+                # If no formatted results found, create a basic one
+                if not formatted_results:
+                    formatted_results = [f"Analysis result: {raw_result[:300] + '...' if len(raw_result) > 300 else raw_result}"]
+                
+                analysis = SearchAnalysis(
+                    query_interpretation=f"Interpreted query: '{request.query}'",
+                    methodology=["Used Neo4j MCP tools", "Executed Cypher queries", "Analyzed results"],
+                    key_insights=[raw_result[:200] + "..." if len(raw_result) > 200 else raw_result],
+                    patterns_identified=[],
+                    limitations=["Result parsing may be incomplete - structured output not available"],
+                    formatted_results=formatted_results,
+                    raw_query_results=raw_query_results
+                )
+            
+            # Mock results for now - in a real implementation, these would be extracted from the MCP tool responses
+            # We'll need to enhance the agent to capture actual Neo4j query results
+            mock_results = [
+                SearchResult(
+                    entity_type="Analysis",
+                    entity_id="analysis_1",
+                    name="Search Analysis Result",
+                    description="AI-generated analysis of the search query",
+                    properties={"analysis": str(result)},
+                    relationships=[],
+                    relevance_score=1.0
+                )
+            ]
+            
+            # Format structured response
+            return StructuredSearchResponse(
+                success=True,
+                query=request.query,
+                total_results=len(mock_results),
+                results=mock_results,
+                cypher_queries=["Cypher queries executed via MCP tools"],
+                analysis=analysis,
+                execution_time=execution_time,
+                mcp_tools_used=True,
+                agent_reasoning=[]
+            )
         
-        return CrewResponse(
-            result=result_text,
-            success=True,
-            mcp_tools_used=mcp_tools_used
-        )
-        
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
     except Exception as e:
         logger.error(f"Crew search failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+        execution_time = time.time() - start_time
+        
+        return StructuredSearchResponse(
+            success=False,
+            query=request.query,
+            total_results=0,
+            results=[],
+            cypher_queries=[],
+            analysis=SearchAnalysis(
+                query_interpretation=f"Failed to process query: '{request.query}'",
+                methodology=["Attempted to use Neo4j MCP tools"],
+                key_insights=[f"Search failed: {str(e)}"],
+                patterns_identified=[],
+                limitations=["Search execution failed"],
+                formatted_results=[f"Error: {str(e)}"],
+                raw_query_results=[]
+            ),
+            execution_time=execution_time,
+            mcp_tools_used=False,
+            agent_reasoning=[]
+        )
 
 @router.post("/search/mcp-tools-test")
 async def test_mcp_tools():
@@ -666,52 +794,7 @@ async def health_check():
             "neo4j": "error"
         }
 
-# Keep existing basic endpoints
-@router.post("/search/basic")
-async def basic_search(request: QueryRequest):
-    """Basic search without agents"""
-    try:
-        cypher_query = await generate_cypher_query_async(request.query)
-        results = neo4j_client.run_query(cypher_query)
-        
-        return {
-            "query": request.query,
-            "cypher_query": cypher_query,
-            "results": results[:request.max_results] if request.max_results else results,
-            "total_results": len(results)
-        }
-    except Exception as e:
-        logger.error(f"Basic search failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
-
-@router.post("/embeddings/similar")
-async def find_similar_embeddings(request: QueryRequest):
-    """Find similar cases using embeddings"""
-    try:
-        similar_cases = await find_similar_cases(request.query, limit=request.max_results or 5)
-        return {
-            "query": request.query,
-            "similar_cases": similar_cases
-        }
-    except Exception as e:
-        logger.error(f"Embedding search failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Embedding search failed: {str(e)}")
-
-@router.post("/documents/basic-process")
-async def basic_document_processing(request: DocumentRequest):
-    """Basic document processing without agents"""
-    try:
-        # Since DocumentProcessor class doesn't exist, use basic text processing
-        processed_content = request.content.strip()
-        
-        return {
-            "document_type": request.document_type,
-            "processed_content": processed_content,
-            "success": True
-        }
-    except Exception as e:
-        logger.error(f"Document processing failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Document processing failed: {str(e)}")
+# Basic endpoints removed - using AI Agent search only
 
 @router.post("/documents/process", response_model=CrewResponse)
 async def process_document_with_crew(request: DocumentRequest):
@@ -803,4 +886,62 @@ async def debug_mcp_status():
         return {
             "error": str(e),
             "test_successful": False
+        }
+
+@router.get("/debug/mcp-tools-verify")
+async def verify_mcp_tools():
+    """Verify that the expected Neo4j MCP tools are available and working"""
+    try:
+        with MCPEnabledAgents() as mcp_context:
+            mcp_tools = get_mcp_tools()
+            
+            if not mcp_tools:
+                return {
+                    "success": False,
+                    "message": "No MCP tools available",
+                    "expected_tools": ["read-neo4j-cypher", "get-neo4j-schema"],
+                    "available_tools": []
+                }
+            
+            tool_names = [tool.name for tool in mcp_tools]
+            expected_tools = ["read-neo4j-cypher", "get-neo4j-schema"]
+            
+            # Check if we have the expected tools
+            missing_tools = [tool for tool in expected_tools if tool not in tool_names]
+            unexpected_tools = [tool for tool in tool_names if tool not in expected_tools and not tool.startswith("write-")]
+            
+            # Test the get-neo4j-schema tool
+            schema_test = None
+            schema_tool = next((tool for tool in mcp_tools if tool.name == "get-neo4j-schema"), None)
+            if schema_tool:
+                try:
+                    schema_result = await schema_tool.invoke({})
+                    schema_test = {
+                        "status": "success",
+                        "has_result": bool(schema_result),
+                        "result_type": type(schema_result).__name__
+                    }
+                except Exception as e:
+                    schema_test = {
+                        "status": "error",
+                        "error": str(e)
+                    }
+            
+            return {
+                "success": len(missing_tools) == 0,
+                "message": "MCP tools verification complete",
+                "expected_tools": expected_tools,
+                "available_tools": tool_names,
+                "missing_tools": missing_tools,
+                "unexpected_tools": unexpected_tools,
+                "schema_tool_test": schema_test,
+                "ready_for_search": len(missing_tools) == 0 and schema_test and schema_test["status"] == "success"
+            }
+            
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"MCP tools verification failed: {str(e)}",
+            "expected_tools": ["read-neo4j-cypher", "get-neo4j-schema"],
+            "available_tools": []
         }

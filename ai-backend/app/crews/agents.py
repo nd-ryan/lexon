@@ -7,8 +7,6 @@ import sys
 import logging
 from pathlib import Path
 from typing import Dict, Any, List, Optional
-from ..lib.cypher_generator import generate_cypher_query_async
-from ..lib.neo4j_client import neo4j_client
 from ..lib.embeddings import find_similar_cases, generate_embeddings_for_cases
 
 logger = logging.getLogger(__name__)
@@ -76,89 +74,25 @@ def agent_step_callback(step):
 
 # Search and Query Agent (MCP-enabled)
 def create_search_agent(tools: Optional[List] = None) -> Agent:
-    """Create a search agent with proper search tools"""
-    # Default tools that every search agent should have
-    default_tools = [search_knowledge_graph_tool, find_similar_cases_tool]
-    
-    # Add any additional tools passed in (like MCP tools)
-    agent_tools = default_tools + (tools or [])
+    """Create a search agent with Neo4j MCP tools only"""
+    if not tools:
+        raise ValueError("Search agent requires MCP tools. No fallback to basic tools allowed.")
     
     return Agent(
         role="Search Agent",
-        goal="Search the knowledge graph using available tools",
-        backstory="You search knowledge graphs using the available search tools.",
-        tools=agent_tools,
+        goal="Search the knowledge graph using Neo4j MCP tools (read-neo4j-cypher and get-neo4j-schema)",
+        backstory="You search knowledge graphs exclusively using Neo4j MCP tools: get-neo4j-schema to understand the database structure and read-neo4j-cypher to execute queries.",
+        tools=tools,
         verbose=True,
         allow_delegation=False,
-        max_iter=3
+        max_iter=5
     )
 
-# Search and Query Tools
-@tool
-def search_knowledge_graph_tool(query: str) -> Dict[str, Any]:
-    """
-    Search the knowledge graph using natural language queries.
-    
-    Args:
-        query: Natural language question about the knowledge graph
-        
-    Returns:
-        Dictionary containing the generated Cypher query and results
-    """
-    try:
-        # Generate Cypher query from natural language
-        cypher_query = generate_cypher_query_async.__wrapped__(query)
-        
-        # Execute the query
-        results = neo4j_client.execute_query(cypher_query)
-        
-        return {
-            "cypher_query": cypher_query,
-            "results": results,
-            "count": len(results)
-        }
-    except Exception as e:
-        return {
-            "error": str(e),
-            "cypher_query": None,
-            "results": [],
-            "count": 0
-        }
-
-@tool 
-def find_similar_cases_tool(case_id: str, limit: int = 5) -> Dict[str, Any]:
-    """
-    Find cases similar to the given case using vector similarity.
-    
-    Args:
-        case_id: ID of the case to find similarities for
-        limit: Maximum number of similar cases to return
-        
-    Returns:
-        Dictionary containing similar cases with similarity scores
-    """
-    try:
-        import asyncio
-        
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            similar_cases = loop.run_until_complete(find_similar_cases(case_id, limit))
-            return {
-                "case_id": case_id,
-                "similar_cases": similar_cases,
-                "count": len(similar_cases)
-            }
-        finally:
-            loop.close()
-            
-    except Exception as e:
-        return {
-            "error": str(e),
-            "case_id": case_id,
-            "similar_cases": [],
-            "count": 0
-        }
+# Note: Basic search tools removed - now using Neo4j MCP tools exclusively
+# The MCP tools provide:
+# - get-neo4j-schema: Get database schema information  
+# - read-neo4j-cypher: Execute read-only Cypher queries
+# - write-neo4j-cypher: Execute write Cypher queries (if needed)
 
 # Document Processing Tool - Convert to CrewAI tool
 @tool
@@ -321,17 +255,22 @@ def create_embeddings_agent():
 
 # Research Agent  
 def create_research_agent(tools: Optional[List] = None) -> Agent:
-    """Create a research agent with comprehensive research tools"""
-    # Default tools that every research agent should have
-    default_tools = [search_knowledge_graph_tool, find_similar_cases_tool, generate_embeddings_tool]
-    
-    # Add any additional tools passed in (like MCP tools)
-    agent_tools = default_tools + (tools or [])
+    """Create a research agent with MCP tools or basic research capabilities"""
+    if tools:
+        # Use provided tools (likely MCP tools)
+        agent_tools = tools + [generate_embeddings_tool]  # Add embeddings tool
+        goal = "Research using Neo4j MCP tools and embeddings"
+        backstory = "You research information using Neo4j MCP tools and generate embeddings for analysis."
+    else:
+        # Fallback to just embeddings tool
+        agent_tools = [generate_embeddings_tool]
+        goal = "Research using embeddings analysis"
+        backstory = "You research information using embeddings and similarity analysis."
     
     return Agent(
         role="Research Agent",
-        goal="Research using available tools",
-        backstory="You research information using the available tools.",
+        goal=goal,
+        backstory=backstory,
         tools=agent_tools,
         verbose=True,
         allow_delegation=False,

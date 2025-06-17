@@ -2,23 +2,45 @@ from crewai import Task
 from typing import List
 
 # Search and Query Tasks
-def create_search_task(agent, query: str):
-    """Create a task for natural language knowledge graph search."""
-    return Task(
+def create_search_task(agent, query: str, structured_output=False):
+    """Create a task for natural language knowledge graph search using Neo4j MCP tools."""
+    task = Task(
         description=f"""
         Execute a knowledge graph search for: "{query}"
         
-        Steps to complete:
-        1. Convert this natural language query into an appropriate Cypher query
-        2. Execute the query against the Neo4j knowledge graph  
-        3. Process and interpret the raw results
-        4. Parse the results into a structured format
+        You MUST use the Neo4j MCP tools to complete this task:
+        
+        1. **First, call get-neo4j-schema** to understand the current Neo4j database schema:
+           - Get all node types and their properties
+           - Understand the relationships between node types
+           - Use this schema information to inform your query construction
+        
+        2. **Then, construct an appropriate Cypher query** based on:
+           - The user's natural language query: "{query}"
+           - The schema information you obtained
+           - Best practices for Cypher queries (use MATCH, WHERE, RETURN appropriately)
+        
+        3. **Execute the Cypher query using read-neo4j-cypher** with your constructed query
+        
+        4. **Process and interpret the results**:
+           - CAPTURE the raw JSON results from your Neo4j queries
+           - FORMAT **ALL** results into user-friendly bullet points or lists (do not truncate or summarize - include every single result found, even if some fields are null/empty)
+           - For each result, provide key details like names, IDs, descriptions, and other relevant properties (show "N/A" or "Not available" for null fields)
+           - Include incomplete records - do not filter out results with missing data
+           - Provide insights and analysis of the findings
+           - Explain what the results mean in the context of the original query
+           - Identify any patterns or relationships in the data
+           - Note any limitations or considerations
         
         Query to search: {query}
+        
+        IMPORTANT: Always start by calling get-neo4j-schema to understand the database structure before constructing any queries.
         """,
-        expected_output="The results of the search",
+        expected_output="A comprehensive analysis including: how you interpreted the query, the methodology used (step-by-step process), formatted results as bullet points or lists (MUST include ALL results found - do not truncate, summarize, or filter out incomplete records), key insights from the search results, patterns identified in the data, any limitations or considerations, and the complete raw JSON results from your Neo4j queries.",
         agent=agent,
     )
+    
+    return task
 
 def create_similarity_search_task(agent, query_text: str, limit: int = 5):
     """Create a task for semantic similarity search."""
@@ -171,3 +193,4 @@ def create_pattern_analysis_task(agent, entity_type: str):
         expected_output=f"Pattern analysis report for {entity_type} containing: statistical summary and distributions, common relationship patterns identified, notable anomalies or outliers, trend analysis over time (if applicable), and strategic recommendations based on patterns discovered",
         agent=agent,
     )
+
