@@ -54,9 +54,7 @@ export default function ImportPage() {
     formData.append('file', file);
 
     try {
-      const AI_BACKEND_URL = process.env.NEXT_PUBLIC_AI_BACKEND_URL || 'http://localhost:8000';
-      const endpoint = processingMode === 'advanced' ? '/api/ai/import-kg/advanced' : '/api/ai/import-kg';
-      const res = await fetch(`${AI_BACKEND_URL}${endpoint}`, {
+      const res = await fetch(`/api/import-kg?mode=${processingMode}`, {
         method: 'POST',
         body: formData,
       });

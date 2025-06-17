@@ -8,30 +8,22 @@ export async function POST(req: NextRequest) {
     console.error('FASTAPI_API_KEY is not set in the environment.');
     return NextResponse.json({ detail: 'Internal server configuration error.' }, { status: 500 });
   }
-  
-  // The 'mode' query parameter will distinguish between 'standard' and 'advanced'
-  const mode = req.nextUrl.searchParams.get('mode') || 'standard';
-  const endpoint = mode === 'advanced' ? '/api/ai/import-kg/advanced' : '/api/ai/import-kg';
 
   try {
-    const formData = await req.formData();
-    const file = formData.get('file') as File;
+    const body = await req.json();
+    const query = body.query;
 
-    if (!file) {
-      return NextResponse.json({ detail: 'File is required.' }, { status: 400 });
+    if (!query) {
+      return NextResponse.json({ detail: 'Query parameter is required.' }, { status: 400 });
     }
-    
-    // We need to reconstruct the FormData to forward it
-    const backendFormData = new FormData();
-    backendFormData.append('file', file);
 
-    const response = await fetch(`${AI_BACKEND_URL}${endpoint}`, {
+    const response = await fetch(`${AI_BACKEND_URL}/api/ai/search/crew`, {
       method: 'POST',
       headers: {
+        'Content-Type': 'application/json',
         'X-API-Key': API_KEY,
-        // 'Content-Type' is set automatically by fetch for FormData
       },
-      body: backendFormData,
+      body: JSON.stringify({ query }),
     });
 
     const data = await response.json();
@@ -42,7 +34,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json(data);
   } catch (error) {
-    console.error('Error proxying file upload to AI backend:', error);
+    console.error('Error proxying to AI backend:', error);
     return NextResponse.json({ detail: 'An error occurred while proxying the request.' }, { status: 500 });
   }
 } 

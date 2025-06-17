@@ -50,6 +50,7 @@ model User {
   password      String?
   accounts      Account[]
   sessions      Session[]
+  searchHistory SearchHistory[]
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 }
@@ -60,4 +61,22 @@ model VerificationToken {
   expires    DateTime
 
   @@unique([identifier, token])
+}
+
+model SearchHistory {
+  id            String   @id @default(cuid())
+  userId        String
+  query         String
+  queryType     String   @default("ai_agent") // "ai_agent", "basic", etc.
+  success       Boolean
+  executionTime Float?
+  
+  // Complete search result as JSON blob - flexible and future-proof
+  searchResult  Json     // Full StructuredSearchResponse or BasicSearchResponse
+  
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  @@index([userId, createdAt])
 }

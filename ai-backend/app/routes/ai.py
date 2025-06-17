@@ -15,13 +15,14 @@ from app.lib.cypher_generator import generate_cypher_query_async
 from app.lib.neo4j_client import neo4j_client
 from app.lib.embeddings import find_similar_cases, generate_embeddings_for_cases
 from app.lib.document_processor import parse_docx_to_knowledge_graph, knowledge_graph_to_dict
+from app.lib.security import get_api_key
 from crewai import Crew, Process, Agent, Task, LLM
 from crewai_tools import MCPServerAdapter
 import logging
 import os
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_api_key)])
 
 # Structured Output Models for Search Results
 class SearchResult(BaseModel):

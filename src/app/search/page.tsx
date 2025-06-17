@@ -1,13 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
-
-const AI_BACKEND_URL = process.env.NEXT_PUBLIC_AI_BACKEND_URL || 'http://localhost:8000';
 
 // Types for structured search response
 interface SearchResult {
@@ -49,228 +47,280 @@ interface BasicSearchResponse {
   count: number;
 }
 
-// Helper function to format structured search results
-const formatStructuredResults = (data: StructuredSearchResponse) => {
-  return (
-    <div className="space-y-6">
-      {/* Query Interpretation */}
-      <Card className="border-blue-200">
-        <CardHeader className="bg-blue-50">
-          <CardTitle className="text-blue-900 flex items-center">
-            <span className="mr-2">🧠</span>
-            Query Interpretation
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="pt-4">
-          <p className="text-gray-700">{data.analysis.query_interpretation}</p>
-        </CardContent>
-      </Card>
+// Search history types
+interface SearchHistoryItem {
+  id: string;
+  query: string;
+  queryType: string;
+  success: boolean;
+  executionTime?: number;
+  searchResult: StructuredSearchResponse | BasicSearchResponse; // Complete search result as JSON
+  createdAt: string;
+  updatedAt: string;
+}
 
-      {/* Methodology */}
-      <Card className="border-green-200">
-        <CardHeader className="bg-green-50">
-          <CardTitle className="text-green-900 flex items-center">
-            <span className="mr-2">⚡</span>
-            Methodology ({data.analysis.methodology.length} steps)
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="pt-4">
-          <ol className="list-decimal list-inside space-y-2">
-            {data.analysis.methodology.map((step, index) => (
-              <li key={index} className="text-gray-700">{step}</li>
-            ))}
-          </ol>
-        </CardContent>
-      </Card>
+// Helper functions for dynamic result formatting
+const getCardStyle = (key: string, index: number) => {
+  const colors = [
+    { border: 'border-blue-200', header: 'bg-blue-50', text: 'text-blue-900', icon: '🧠' },
+    { border: 'border-green-200', header: 'bg-green-50', text: 'text-green-900', icon: '⚡' },
+    { border: 'border-yellow-200', header: 'bg-yellow-50', text: 'text-yellow-900', icon: '💡' },
+    { border: 'border-emerald-200', header: 'bg-emerald-50', text: 'text-emerald-900', icon: '📋' },
+    { border: 'border-purple-200', header: 'bg-purple-50', text: 'text-purple-900', icon: '📊' },
+    { border: 'border-indigo-200', header: 'bg-indigo-50', text: 'text-indigo-900', icon: '🔍' },
+    { border: 'border-pink-200', header: 'bg-pink-50', text: 'text-pink-900', icon: '🎯' },
+    { border: 'border-cyan-200', header: 'bg-cyan-50', text: 'text-cyan-900', icon: '🔧' },
+    { border: 'border-orange-200', header: 'bg-orange-50', text: 'text-orange-900', icon: '📈' },
+    { border: 'border-teal-200', header: 'bg-teal-50', text: 'text-teal-900', icon: '🎨' }
+  ];
+  
+  // Use specific icons for known keys
+  const keyIcons: Record<string, string> = {
+    query_interpretation: '🧠',
+    methodology: '⚡',
+    key_insights: '💡',
+    formatted_results: '📋',
+    results: '📊',
+    patterns_identified: '🔍',
+    limitations: '⚠️',
+    cypher_queries: '🔧',
+    raw_query_results: '📄',
+    execution_time: '⏱️',
+    total_results: '📈',
+    success: '✅',
+    agent_reasoning: '🤖'
+  };
+  
+  const color = colors[index % colors.length];
+  const icon = keyIcons[key] || color.icon;
+  
+  return { ...color, icon };
+};
 
-      {/* Key Insights */}
-      <Card className="border-yellow-200">
-        <CardHeader className="bg-yellow-50">
-          <CardTitle className="text-yellow-900 flex items-center">
-            <span className="mr-2">💡</span>
-            Key Insights ({data.analysis.key_insights.length})
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="pt-4">
-          <ul className="space-y-3">
-            {data.analysis.key_insights.map((insight, index) => (
-              <li key={index} className="flex items-start">
-                <span className="text-yellow-600 mr-2 mt-1">•</span>
-                <span className="text-gray-700">{insight}</span>
-              </li>
-            ))}
-          </ul>
-        </CardContent>
-      </Card>
+const formatTitle = (key: string) => {
+  return key
+    .split('_')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+};
 
-      {/* Formatted Results */}
-      <Card className="border-emerald-200">
-        <CardHeader className="bg-emerald-50">
-          <CardTitle className="text-emerald-900 flex items-center">
-            <span className="mr-2">📋</span>
-            Results ({data.analysis.formatted_results.length})
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="pt-4">
-          {data.analysis.formatted_results.length > 0 ? (
-            <div className="space-y-2">
-              {data.analysis.formatted_results.map((result, index) => (
-                <div key={index} className="flex items-start">
-                  <span className="text-emerald-600 mr-2 mt-1">•</span>
-                  <span className="text-gray-700">{result}</span>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-gray-500 text-center py-4">No formatted results available.</p>
-          )}
-        </CardContent>
-      </Card>
+const renderValue = (value: any, key: string): React.ReactNode => {
+  if (value === null || value === undefined) {
+    return (
+      <div className="flex items-center justify-center py-4 text-muted-foreground">
+        <span className="text-sm italic">No data available</span>
+      </div>
+    );
+  }
 
-      {/* Search Results */}
-      <Card className="border-purple-200">
-        <CardHeader className="bg-purple-50">
-          <CardTitle className="text-purple-900 flex items-center">
-            <span className="mr-2">📊</span>
-            Search Results ({data.total_results})
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="pt-4">
-          {data.results.length > 0 ? (
-            <div className="space-y-4">
-              {data.results.map((result, index) => (
-                <div key={index} className="border rounded-lg p-4 bg-white hover:bg-gray-50">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="inline-block px-2 py-1 text-xs font-medium bg-purple-100 text-purple-800 rounded">
-                      {result.entity_type}
-                    </span>
-                    {result.relevance_score && (
-                      <span className="text-sm text-gray-500">
-                        Relevance: {(result.relevance_score * 100).toFixed(0)}%
-                      </span>
-                    )}
-                  </div>
-                  
-                  {result.name && (
-                    <h4 className="font-semibold text-gray-900 mb-1">{result.name}</h4>
-                  )}
-                  
-                  {result.description && (
-                    <p className="text-gray-600 mb-2">{result.description}</p>
-                  )}
-                  
-                  {Object.keys(result.properties).length > 0 && (
-                    <div className="mt-3">
-                      <h5 className="text-sm font-medium text-gray-700 mb-2">Properties:</h5>
-                      <div className="bg-gray-50 rounded p-2">
-                        <pre className="text-xs text-gray-600 whitespace-pre-wrap">
-                          {JSON.stringify(result.properties, null, 2)}
-                        </pre>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-gray-500 text-center py-8">No results found.</p>
-          )}
-        </CardContent>
-      </Card>
+  if (typeof value === 'boolean') {
+    return (
+      <div className="flex justify-start">
+        <span className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+          value 
+            ? 'bg-green-50 text-green-700 border border-green-200' 
+            : 'bg-red-50 text-red-700 border border-red-200'
+        }`}>
+          <span className="text-xs">{value ? '✅' : '❌'}</span>
+          {value ? 'True' : 'False'}
+        </span>
+      </div>
+    );
+  }
 
-      {/* Patterns Identified */}
-      {data.analysis.patterns_identified.length > 0 && (
-        <Card className="border-indigo-200">
-          <CardHeader className="bg-indigo-50">
-            <CardTitle className="text-indigo-900 flex items-center">
-              <span className="mr-2">🔍</span>
-              Patterns Identified ({data.analysis.patterns_identified.length})
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="pt-4">
-            <ul className="space-y-2">
-              {data.analysis.patterns_identified.map((pattern, index) => (
-                <li key={index} className="flex items-start">
-                  <span className="text-indigo-600 mr-2 mt-1">•</span>
-                  <span className="text-gray-700">{pattern}</span>
-                </li>
-              ))}
-            </ul>
-          </CardContent>
-        </Card>
-      )}
+  if (typeof value === 'number') {
+    const displayValue = key.includes('time') ? `${value.toFixed(2)}s` : value.toString();
+    return (
+      <div className="flex justify-start">
+        <span className="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-full text-sm font-mono">
+          {key.includes('time') && <span className="text-xs">⏱️</span>}
+          {displayValue}
+        </span>
+      </div>
+    );
+  }
 
-      {/* Technical Details */}
-      <Card className="border-gray-200">
-        <CardHeader className="bg-gray-50">
-          <CardTitle className="text-gray-900 flex items-center">
-            <span className="mr-2">⚙️</span>
-            Technical Details
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="pt-4">
-          <div className="grid grid-cols-2 gap-4 text-sm">
-            <div>
-              <span className="font-medium text-gray-700">Execution Time:</span>
-              <span className="ml-2 text-gray-600">
-                {data.execution_time ? `${data.execution_time.toFixed(2)}s` : 'N/A'}
-              </span>
-            </div>
-            <div>
-              <span className="font-medium text-gray-700">MCP Tools Used:</span>
-              <span className="ml-2 text-gray-600">
-                {data.mcp_tools_used ? '✅ Yes' : '❌ No'}
-              </span>
-            </div>
+  if (typeof value === 'string') {
+    if (value.length > 500) {
+      return (
+        <div className="relative">
+          <div className="bg-muted/50 rounded-lg border p-4 max-h-64 overflow-y-auto scrollbar-thin scrollbar-track-gray-100 scrollbar-thumb-gray-300">
+            <pre className="text-sm text-foreground whitespace-pre-wrap leading-relaxed font-mono">
+              {value}
+            </pre>
           </div>
-          
-          {data.cypher_queries.length > 0 && (
-            <div className="mt-4">
-              <h5 className="text-sm font-medium text-gray-700 mb-2">Cypher Queries:</h5>
-              <div className="bg-gray-100 rounded p-3">
-                {data.cypher_queries.map((query, index) => (
-                  <pre key={index} className="text-xs text-gray-600 whitespace-pre-wrap">
-                    {query}
-                  </pre>
+          <div className="absolute top-2 right-2 bg-background/80 backdrop-blur-sm px-2 py-1 rounded text-xs text-muted-foreground">
+            {value.length} chars
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div className="prose prose-sm max-w-none">
+        <p className="text-foreground leading-relaxed m-0">{value}</p>
+      </div>
+    );
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return (
+        <div className="flex items-center justify-center py-6 text-muted-foreground border-2 border-dashed rounded-lg">
+          <span className="text-sm italic">Empty list</span>
+        </div>
+      );
+    }
+
+    // Handle array of strings/simple values
+    if (value.every(item => typeof item === 'string' || typeof item === 'number')) {
+      return (
+        <div className="space-y-2">
+          {value.map((item, index) => (
+            <div key={index} className="flex items-start gap-3 p-2 rounded-md hover:bg-muted/50 transition-colors">
+              <div className="flex-shrink-0 w-2 h-2 bg-primary/60 rounded-full mt-2"></div>
+              <span className="text-foreground leading-relaxed flex-1 break-words">{String(item)}</span>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    // Handle array of objects (like search results)
+    if (key === 'results' && value.every(item => typeof item === 'object' && item !== null)) {
+      return (
+        <div className="space-y-4">
+          {value.map((result: any, index: number) => (
+            <Card key={index} className="transition-all hover:shadow-md border-l-4 border-l-primary/20">
+              <CardContent className="space-y-3">
+                {Object.entries(result).map(([resultKey, resultValue]) => (
+                  <div key={resultKey} className="group">
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-sm font-medium text-muted-foreground bg-muted px-2 py-1 rounded">
+                        {formatTitle(resultKey)}
+                      </span>
+                    </div>
+                    <div className="ml-0">
+                      {typeof resultValue === 'object' && resultValue !== null ? (
+                        <div className="bg-muted/30 rounded-md border p-3 max-h-48 overflow-y-auto">
+                          <pre className="text-xs text-foreground whitespace-pre-wrap font-mono leading-relaxed">
+                            {JSON.stringify(resultValue, null, 2)}
+                          </pre>
+                        </div>
+                      ) : (
+                        <div className="text-foreground break-words">{String(resultValue)}</div>
+                      )}
+                    </div>
+                  </div>
                 ))}
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      );
+    }
+
+    // Handle other complex arrays
+    return (
+      <div className="relative">
+        <div className="bg-muted/30 rounded-lg border p-4 max-h-96 overflow-y-auto scrollbar-thin scrollbar-track-gray-100 scrollbar-thumb-gray-300">
+          <pre className="text-xs text-foreground whitespace-pre-wrap font-mono leading-relaxed">
+            {JSON.stringify(value, null, 2)}
+          </pre>
+        </div>
+        <div className="absolute top-2 right-2 bg-background/80 backdrop-blur-sm px-2 py-1 rounded text-xs text-muted-foreground">
+          {value.length} items
+        </div>
+      </div>
+    );
+  }
+
+  if (typeof value === 'object' && value !== null) {
+    // Handle nested objects
+    return (
+      <div className="space-y-4">
+        {Object.entries(value).map(([nestedKey, nestedValue]) => (
+          <div key={nestedKey} className="relative">
+            <div className="border-l-2 border-primary/20 pl-4 pb-4">
+              <div className="flex items-center gap-2 mb-3">
+                <div className="w-2 h-2 bg-primary/60 rounded-full"></div>
+                <span className="font-medium text-foreground text-sm">
+                  {formatTitle(nestedKey)}
+                </span>
+              </div>
+              <div className="ml-2">
+                {renderValue(nestedValue, nestedKey)}
               </div>
             </div>
-          )}
+          </div>
+        ))}
+      </div>
+    );
+  }
 
-          {data.analysis.limitations.length > 0 && (
-            <div className="mt-4">
-              <h5 className="text-sm font-medium text-gray-700 mb-2">Limitations:</h5>
-              <ul className="space-y-1 text-sm text-gray-600">
-                {data.analysis.limitations.map((limitation, index) => (
-                  <li key={index} className="flex items-start">
-                    <span className="text-orange-500 mr-2 mt-0.5">⚠️</span>
-                    <span>{limitation}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+  return (
+    <div className="text-foreground break-words">
+      {String(value)}
+    </div>
+  );
+};
 
-      {/* Raw Query Results */}
-      {data.analysis.raw_query_results.length > 0 && (
-        <Card className="border-slate-200">
-          <CardHeader className="bg-slate-50">
-            <CardTitle className="text-slate-900 flex items-center">
-              <span className="mr-2">🔧</span>
-              Raw Query Results ({data.analysis.raw_query_results.length})
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="pt-4">
-            <div className="bg-slate-100 rounded-lg p-4 max-h-96 overflow-y-auto">
-              <pre className="text-xs text-slate-700 whitespace-pre-wrap">
-                {JSON.stringify(data.analysis.raw_query_results, null, 2)}
-              </pre>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+// Helper function to format structured search results dynamically
+const formatStructuredResults = (data: any) => {
+  // Get all keys from the data object
+  const dataKeys = Object.keys(data);
+  
+  return (
+    <div className="space-y-8">
+      {dataKeys.map((key, index) => {
+        const value = data[key];
+        const style = getCardStyle(key, index);
+        
+        // Skip null/undefined values
+        if (value === null || value === undefined) {
+          return null;
+        }
+        
+        // Calculate count for arrays
+        let count = '';
+        let countBadge = null;
+        if (Array.isArray(value)) {
+          count = ` (${value.length})`;
+          countBadge = (
+            <span className="inline-flex items-center px-2 py-1 bg-primary/10 text-primary text-xs font-medium rounded-full">
+              {value.length} items
+            </span>
+          );
+        } else if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+          const objKeys = Object.keys(value);
+          if (objKeys.length > 0) {
+            count = ` (${objKeys.length} props)`;
+            countBadge = (
+              <span className="inline-flex items-center px-2 py-1 bg-primary/10 text-primary text-xs font-medium rounded-full">
+                {objKeys.length} properties
+              </span>
+            );
+          }
+        }
+
+        return (
+          <Card key={key} className={`${style.border} shadow-sm hover:shadow-md transition-all duration-200 overflow-hidden`}>
+            <CardHeader className={`${style.header} border-b border-border/50`}>
+              <div className="flex items-center justify-between w-full">
+                <CardTitle className={`${style.text} flex items-center gap-3`}>
+                  <span className="text-lg">{style.icon}</span>
+                  <span className="font-semibold tracking-tight">{formatTitle(key)}</span>
+                </CardTitle>
+                {countBadge}
+              </div>
+            </CardHeader>
+            <CardContent className="p-6">
+              <div className="max-w-none">
+                {renderValue(value, key)}
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })}
     </div>
   );
 };
@@ -313,9 +363,61 @@ export default function SearchPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<StructuredSearchResponse | BasicSearchResponse | null>(null);
+  const [searchHistory, setSearchHistory] = useState<SearchHistoryItem[]>([]);
+  const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
+  const [loadingHistory, setLoadingHistory] = useState(false);
   
   const { status } = useSession();
   const router = useRouter();
+
+  // Function to save search to history
+  const saveSearchToHistory = async (searchResult: StructuredSearchResponse | BasicSearchResponse) => {
+    try {
+      const payload = {
+        query: isStructuredResponse(searchResult) ? searchResult.query : query,
+        queryType: isStructuredResponse(searchResult) ? 'ai_agent' : 'basic',
+        success: isStructuredResponse(searchResult) ? searchResult.success : true,
+        executionTime: isStructuredResponse(searchResult) ? searchResult.execution_time : null,
+        searchResult: searchResult // Store the complete search result as JSON
+      };
+
+      const response = await fetch('/api/search-history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (response.ok) {
+        // Refresh search history after saving
+        fetchSearchHistory();
+      }
+    } catch (error) {
+      console.error('Failed to save search history:', error);
+    }
+  };
+
+  // Function to fetch search history
+  const fetchSearchHistory = async () => {
+    try {
+      setLoadingHistory(true);
+      const response = await fetch('/api/search-history?limit=10');
+      if (response.ok) {
+        const data = await response.json();
+        setSearchHistory(data.searches || []);
+      }
+    } catch (error) {
+      console.error('Failed to fetch search history:', error);
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
+  // Load search history on component mount
+  useEffect(() => {
+    if (status === 'authenticated') {
+      fetchSearchHistory();
+    }
+  }, [status]);
 
   if (status === 'unauthenticated') {
     router.push('/auth/signin');
@@ -334,9 +436,11 @@ export default function SearchPage() {
     setResult(null);
 
     try {
-      const res = await fetch(`${AI_BACKEND_URL}/api/ai/search/crew`, {
+      const res = await fetch(`/api/search/crew`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json'
+        },
         body: JSON.stringify({ query }),
       });
 
@@ -346,6 +450,8 @@ export default function SearchPage() {
         setError(data.detail || 'An error occurred during search.');
       } else {
         setResult(data);
+        // Save search to history after successful search
+        await saveSearchToHistory(data);
       }
     } catch (err) {
       setError('A network error occurred. Please try again.');
@@ -358,62 +464,218 @@ export default function SearchPage() {
     return data && typeof data === 'object' && 'analysis' in data && 'results' in data;
   };
 
-  return (
-    <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
-      <div className="max-w-5xl mx-auto">
-        <h1 className="text-3xl font-bold text-gray-900 mb-6">Natural Language Search</h1>
-        
-        <form onSubmit={handleSubmit} className="space-y-4 mb-8">
-          <div className="flex items-center space-x-2">
-            <Input
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Ask a question about your knowledge graph..."
-              className="flex-grow"
-            />
-            <Button type="submit" disabled={loading}>
-              {loading ? 'Searching...' : 'Search'}
-            </Button>
-          </div>
-          
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-            <div className="flex items-center mb-2">
-              <span className="text-blue-600 mr-2">🤖</span>
-              <span className="font-medium text-blue-900">AI Agent Search</span>
+  // Function to render search history
+  const renderSearchHistory = () => {
+    if (loadingHistory) {
+      return (
+        <Card className="shadow-sm">
+          <CardHeader className="border-b border-border/50">
+            <CardTitle className="flex items-center gap-2">
+              <span>📜</span>
+              Recent Searches
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-6">
+            <div className="flex items-center justify-center py-8">
+              <div className="flex flex-col items-center gap-3">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+                <p className="text-muted-foreground text-sm">Loading search history...</p>
+              </div>
             </div>
-            <p className="text-sm text-blue-700">
-              Enhanced analysis using CrewAI agents with structured insights powered by Neo4j MCP tools
-            </p>
-          </div>
+          </CardContent>
+        </Card>
+      );
+    }
 
-          <div className="text-sm text-gray-600">
-            <p className="mb-2"><strong>Try asking questions like:</strong></p>
-            <ul className="space-y-1 ml-4 text-gray-500">
-              <li>• "Show me all cases related to contract disputes"</li>
-              <li>• "What are the most common legal doctrines?"</li>
-              <li>• "Find cases involving specific parties or judges"</li>
-              <li>• "Analyze patterns in legal precedents"</li>
-            </ul>
-          </div>
-        </form>
+    if (searchHistory.length === 0) {
+      return (
+        <Card className="shadow-sm">
+          <CardHeader className="border-b border-border/50">
+            <CardTitle className="flex items-center gap-2">
+              <span>📜</span>
+              Recent Searches
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-6">
+            <div className="flex flex-col items-center justify-center py-8 text-center">
+              <div className="text-4xl mb-3">🔍</div>
+              <p className="text-muted-foreground text-sm">No search history yet.</p>
+              <p className="text-muted-foreground text-sm">Try searching for something!</p>
+            </div>
+          </CardContent>
+        </Card>
+      );
+    }
 
-        {error && (
-          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-6">
-            <p className="font-bold">Error</p>
-            <p>{error}</p>
-          </div>
-        )}
+    return (
+      <Card className="shadow-sm">
+        <CardHeader className="border-b border-border/50">
+          <CardTitle className="flex items-center justify-between">
+            <span className="flex items-center gap-2">
+              <span>📜</span>
+              Recent Searches
+            </span>
+            <span className="text-sm font-normal text-muted-foreground">
+              {searchHistory.length} searches
+            </span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-4">
+          <div className="space-y-3 max-h-[70vh] overflow-y-auto scrollbar-thin scrollbar-track-transparent scrollbar-thumb-border">
+            {searchHistory.map((historyItem) => (
+              <div key={historyItem.id} className="border rounded-lg hover:bg-muted/50 transition-colors">
+                <div 
+                  className="cursor-pointer p-4"
+                  onClick={() => setExpandedHistoryId(
+                    expandedHistoryId === historyItem.id ? null : historyItem.id
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-foreground text-sm truncate mb-2">{historyItem.query}</p>
+                      <div className="flex items-center gap-2 text-xs flex-wrap">
+                        <span className={`inline-flex items-center px-2 py-1 rounded-full font-medium ${
+                          historyItem.success 
+                            ? 'bg-green-100 text-green-700 border border-green-200' 
+                            : 'bg-red-100 text-red-700 border border-red-200'
+                        }`}>
+                          {historyItem.success ? '✅' : '❌'}
+                        </span>
+                        <span className="text-muted-foreground">
+                          {(() => {
+                            const result = historyItem.searchResult as any;
+                            // Try to find any numeric field that might represent result count
+                            if (result.total_results !== undefined) return `${result.total_results} results`;
+                            if (result.count !== undefined) return `${result.count} results`;
+                            if (result.results && Array.isArray(result.results)) return `${result.results.length} results`;
+                            if (typeof result === 'object') {
+                              // Count all array properties
+                              const arrays = Object.values(result).filter(v => Array.isArray(v));
+                              const totalItems = arrays.reduce((sum, arr) => sum + arr.length, 0);
+                              return totalItems > 0 ? `${totalItems} items` : 'No count';
+                            }
+                            return 'Unknown';
+                          })()}
+                        </span>
+                        {historyItem.executionTime && (
+                          <span className="text-muted-foreground">⏱️ {historyItem.executionTime.toFixed(1)}s</span>
+                        )}
+                        <span className="text-muted-foreground">{new Date(historyItem.createdAt).toLocaleDateString()}</span>
+                      </div>
+                    </div>
+                    <Button variant="ghost" size="sm" className="flex-shrink-0 h-8 w-8 p-0">
+                      <span className="text-xs">
+                        {expandedHistoryId === historyItem.id ? '▼' : '▶'}
+                      </span>
+                    </Button>
+                  </div>
+                </div>
 
-        {result && (
-          <div className="space-y-6">
-            {isStructuredResponse(result) ? (
-              formatStructuredResults(result)
-            ) : (
-              formatBasicResults(result as BasicSearchResponse)
+                {expandedHistoryId === historyItem.id && (
+                  <div className="border-t border-border/50 p-4 bg-muted/20">
+                    <div className="space-y-4 max-h-96 overflow-y-auto scrollbar-thin scrollbar-track-transparent scrollbar-thumb-border">
+                      {formatStructuredResults(historyItem.searchResult)}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-background to-muted/20 p-4 sm:p-6 lg:p-8">
+      <div className="max-w-7xl mx-auto">
+        <div className="mb-8">
+          <h1 className="text-4xl font-bold text-foreground mb-2 tracking-tight">Natural Language Search</h1>
+          <p className="text-muted-foreground text-lg">Explore your knowledge graph with AI-powered insights</p>
+        </div>
+        
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Main search area */}
+          <div className="lg:col-span-2 space-y-8">
+            <Card className="shadow-sm">
+              <CardContent className="p-6">
+                <form onSubmit={handleSubmit} className="space-y-6">
+                  <div className="flex items-center gap-3">
+                    <Input
+                      type="text"
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                      placeholder="Ask a question about your knowledge graph..."
+                      className="flex-grow text-base"
+                    />
+                    <Button type="submit" disabled={loading} className="px-6">
+                      {loading ? 'Searching...' : 'Search'}
+                    </Button>
+                  </div>
+                  
+                  <div className="bg-primary/5 border border-primary/20 rounded-lg p-4">
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-primary text-lg">🤖</span>
+                      <span className="font-semibold text-primary">AI Agent Search</span>
+                    </div>
+                    <p className="text-sm text-muted-foreground leading-relaxed">
+                      Enhanced analysis using CrewAI agents with structured insights powered by Neo4j MCP tools
+                    </p>
+                  </div>
+
+                  <div className="bg-muted/30 rounded-lg p-4 border">
+                    <p className="font-medium text-foreground mb-3">Try asking questions like:</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                      <div className="flex items-start gap-2">
+                        <div className="w-1.5 h-1.5 bg-primary rounded-full mt-2 flex-shrink-0"></div>
+                        <span className="text-muted-foreground">"Show me all cases related to contract disputes"</span>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <div className="w-1.5 h-1.5 bg-primary rounded-full mt-2 flex-shrink-0"></div>
+                        <span className="text-muted-foreground">"What are the most common legal doctrines?"</span>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <div className="w-1.5 h-1.5 bg-primary rounded-full mt-2 flex-shrink-0"></div>
+                        <span className="text-muted-foreground">"Find cases involving specific parties"</span>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <div className="w-1.5 h-1.5 bg-primary rounded-full mt-2 flex-shrink-0"></div>
+                        <span className="text-muted-foreground">"Analyze patterns in legal precedents"</span>
+                      </div>
+                    </div>
+                  </div>
+                </form>
+              </CardContent>
+            </Card>
+
+            {error && (
+              <Card className="border-destructive/50 bg-destructive/5">
+                <CardContent className="p-6">
+                  <div className="flex items-start gap-3">
+                    <span className="text-destructive text-lg">⚠️</span>
+                    <div>
+                      <p className="font-semibold text-destructive mb-1">Error</p>
+                      <p className="text-destructive/80">{error}</p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {result && (
+              <div className="space-y-8">
+                {formatStructuredResults(result)}
+              </div>
             )}
           </div>
-        )}
+          
+          {/* Search history sidebar */}
+          <div className="lg:col-span-1">
+            <div className="sticky top-8">
+              {renderSearchHistory()}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
