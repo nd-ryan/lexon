@@ -40,7 +40,7 @@ function SignInPageContent() {
         setError('Invalid email or password')
         setLoading(false)
       }
-    } catch (error) {
+    } catch {
       setError('Network error. Please try again.')
       setLoading(false)
     }
@@ -119,7 +119,7 @@ function SignInPageContent() {
               href="/auth/signup" // This path should be correct if signup page is src/app/auth/signup/page.tsx
               className="text-indigo-600 hover:text-indigo-500"
             >
-              Don't have an account? Sign up
+              Don&apos;t have an account? Sign up
             </Link>
           </div>
         </form>

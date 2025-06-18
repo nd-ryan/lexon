@@ -40,13 +40,6 @@ interface StructuredSearchResponse {
   agent_reasoning: any[];
 }
 
-// Basic search response (legacy)
-interface BasicSearchResponse {
-  cypher_query: string;
-  results: any[];
-  count: number;
-}
-
 // Search history types
 interface SearchHistoryItem {
   id: string;
@@ -54,7 +47,7 @@ interface SearchHistoryItem {
   queryType: string;
   success: boolean;
   executionTime?: number;
-  searchResult: StructuredSearchResponse | BasicSearchResponse; // Complete search result as JSON
+  searchResult: StructuredSearchResponse; // Complete search result as JSON
   createdAt: string;
   updatedAt: string;
 }
@@ -325,104 +318,58 @@ const formatStructuredResults = (data: any) => {
   );
 };
 
-// Helper function to format basic search results (legacy)
-const formatBasicResults = (data: BasicSearchResponse) => {
-  return (
-    <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <CardTitle>Generated Cypher Query</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <pre className="bg-gray-100 p-4 rounded-md overflow-x-auto">
-            <code>{data.cypher_query}</code>
-          </pre>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Results ({data.count})</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {data.results.length > 0 ? (
-            <pre className="bg-gray-100 p-4 rounded-md overflow-x-auto max-h-96">
-              <code>{JSON.stringify(data.results, null, 2)}</code>
-            </pre>
-          ) : (
-            <p className="text-gray-500 text-center py-8">No results found.</p>
-          )}
-        </CardContent>
-      </Card>
-    </div>
-  );
-};
-
-export default function SearchPage() {
+const SearchPage = () => {
   const [query, setQuery] = useState('');
+  const [searchType, setSearchType] = useState<'basic' | 'crew'>('crew');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [result, setResult] = useState<StructuredSearchResponse | BasicSearchResponse | null>(null);
+  const [searchResult, setSearchResult] = useState<StructuredSearchResponse | null>(null);
   const [searchHistory, setSearchHistory] = useState<SearchHistoryItem[]>([]);
   const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
-  const [loadingHistory, setLoadingHistory] = useState(false);
-  
-  const { status } = useSession();
+  const { data: session, status } = useSession();
   const router = useRouter();
 
-  // Function to save search to history
-  const saveSearchToHistory = async (searchResult: StructuredSearchResponse | BasicSearchResponse) => {
+  useEffect(() => {
+    if (status === 'unauthenticated') {
+      router.push('/auth/signin');
+    } else if (status === 'authenticated') {
+      fetchSearchHistory();
+    }
+  }, [status, router]);
+
+  const saveSearchToHistory = async (result: StructuredSearchResponse) => {
     try {
-      const payload = {
-        query: isStructuredResponse(searchResult) ? searchResult.query : query,
-        queryType: isStructuredResponse(searchResult) ? 'ai_agent' : 'basic',
-        success: isStructuredResponse(searchResult) ? searchResult.success : true,
-        executionTime: isStructuredResponse(searchResult) ? searchResult.execution_time : null,
-        searchResult: searchResult // Store the complete search result as JSON
-      };
-
-      const response = await fetch('/api/search-history', {
+      await fetch('/api/search-history', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query: result.query,
+          queryType: searchType,
+          success: result.success,
+          executionTime: result.execution_time,
+          searchResult: result, // Send the whole thing
+        }),
       });
-
-      if (response.ok) {
-        // Refresh search history after saving
-        fetchSearchHistory();
-      }
-    } catch (error) {
-      console.error('Failed to save search history:', error);
+      // Refresh history after saving
+      fetchSearchHistory();
+    } catch {
+      console.error("Failed to save search history:");
     }
   };
 
-  // Function to fetch search history
   const fetchSearchHistory = async () => {
     try {
-      setLoadingHistory(true);
       const response = await fetch('/api/search-history?limit=10');
       if (response.ok) {
         const data = await response.json();
         setSearchHistory(data.searches || []);
       }
-    } catch (error) {
-      console.error('Failed to fetch search history:', error);
-    } finally {
-      setLoadingHistory(false);
+    } catch {
+      console.error('Failed to fetch search history:');
     }
   };
-
-  // Load search history on component mount
-  useEffect(() => {
-    if (status === 'authenticated') {
-      fetchSearchHistory();
-    }
-  }, [status]);
-
-  if (status === 'unauthenticated') {
-    router.push('/auth/signin');
-    return null;
-  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -433,40 +380,40 @@ export default function SearchPage() {
 
     setLoading(true);
     setError('');
-    setResult(null);
+    setSearchResult(null);
 
     try {
-      const res = await fetch(`/api/search/crew`, {
+      const endpoint = searchType === 'crew' ? '/api/search/crew' : '/api/search';
+      const res = await fetch(endpoint, {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json'
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query }),
       });
 
       const data = await res.json();
 
       if (!res.ok) {
-        setError(data.detail || 'An error occurred during search.');
-      } else {
-        setResult(data);
-        // Save search to history after successful search
-        await saveSearchToHistory(data);
+        throw new Error(data.detail || 'An error occurred during the search.');
       }
-    } catch (err) {
-      setError('A network error occurred. Please try again.');
+
+      setSearchResult(data);
+      if (data.success) {
+        saveSearchToHistory(data);
+      }
+    } catch {
+      setError('An error occurred. Please try again.');
+      console.error("Search failed:");
     } finally {
       setLoading(false);
     }
   };
 
   const isStructuredResponse = (data: any): data is StructuredSearchResponse => {
-    return data && typeof data === 'object' && 'analysis' in data && 'results' in data;
+    return 'results' in data && 'analysis' in data && 'total_results' in data;
   };
 
-  // Function to render search history
   const renderSearchHistory = () => {
-    if (loadingHistory) {
+    if (loading) {
       return (
         <Card className="shadow-sm">
           <CardHeader className="border-b border-border/50">
@@ -546,7 +493,6 @@ export default function SearchPage() {
                             const result = historyItem.searchResult as any;
                             // Try to find any numeric field that might represent result count
                             if (result.total_results !== undefined) return `${result.total_results} results`;
-                            if (result.count !== undefined) return `${result.count} results`;
                             if (result.results && Array.isArray(result.results)) return `${result.results.length} results`;
                             if (typeof result === 'object') {
                               // Count all array properties
@@ -662,9 +608,9 @@ export default function SearchPage() {
               </Card>
             )}
 
-            {result && (
+            {searchResult && (
               <div className="space-y-8">
-                {formatStructuredResults(result)}
+                {formatStructuredResults(searchResult)}
               </div>
             )}
           </div>
@@ -679,4 +625,29 @@ export default function SearchPage() {
       </div>
     </div>
   );
+};
+
+export default function SearchPageContainer() {
+  const { data: session, status } = useSession();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (status === 'unauthenticated') {
+      router.push('/auth/signin');
+    }
+  }, [status, router]);
+
+  if (status === 'loading') {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <p>Loading...</p>
+      </div>
+    );
+  }
+
+  if (status === 'unauthenticated') {
+    return null;
+  }
+
+  return <SearchPage />;
 } 

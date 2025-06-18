@@ -12,7 +12,7 @@ export default function ImportPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [processingMode, setProcessingMode] = useState<'standard' | 'advanced'>('standard');
-  const { data: session, status } = useSession();
+  const { status } = useSession();
   const router = useRouter();
 
   useEffect(() => {
@@ -78,7 +78,7 @@ export default function ImportPage() {
         }
         setFile(null);
       }
-    } catch (err) {
+    } catch {
       setError('A network error occurred. Please try again.');
     } finally {
       setLoading(false);

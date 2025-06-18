@@ -52,7 +52,7 @@ export default function SignUpPage() {
         // Redirect to sign-in page with a success message
         router.push('/auth/signin?message=Signup successful! Please sign in.')
       }
-    } catch (err) {
+    } catch {
       setError('Network error. Please try again.')
     } finally {
       setLoading(false)
