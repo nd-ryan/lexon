@@ -21,8 +21,12 @@ const eslintConfig = [
   // ✅ TypeScript rules for your app code
   {
     files: ["**/*.ts", "**/*.tsx"],
-    parser: "@typescript-eslint/parser",
-    plugins: ["@typescript-eslint"],
+    languageOptions: {
+      parser: require.resolve("@typescript-eslint/parser"),
+    },
+    plugins: {
+      "@typescript-eslint": require("@typescript-eslint/eslint-plugin"),
+    },
     rules: {
       "@typescript-eslint/no-explicit-any": "error",
       "@typescript-eslint/no-unused-expressions": "error",
