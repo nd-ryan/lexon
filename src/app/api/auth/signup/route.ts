@@ -3,6 +3,14 @@ import bcrypt from 'bcryptjs'
 import { prisma } from '@/lib/prisma'
 
 export async function POST(request: NextRequest) {
+  // Temporarily disable sign-up
+  return NextResponse.json(
+    { error: 'Sign-up is temporarily disabled. Please contact the administrator for access.' },
+    { status: 403 }
+  )
+
+  // Original sign-up code (commented out for temporary disable)
+  /*
   try {
     const { name, email, password } = await request.json()
 
@@ -60,4 +68,5 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     )
   }
+  */
 }

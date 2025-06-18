@@ -24,6 +24,11 @@ export default function SignUpPage() {
     }
   }, [status, router]);
 
+  useEffect(() => {
+    // Temporarily disable access to sign-up page
+    router.replace('/auth/signin');
+  }, [router]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoading(true)

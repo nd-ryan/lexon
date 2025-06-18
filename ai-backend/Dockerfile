@@ -19,7 +19,7 @@ RUN pip install poetry
 RUN poetry config virtualenvs.in-project true
 
 # Copy only the files needed for dependency installation from the ai-backend directory
-COPY ai-backend/poetry.lock ai-backend/pyproject.toml ./
+COPY poetry.lock pyproject.toml ./
 
 # Install project dependencies
 # --no-root: Don't install the project itself, only dependencies
@@ -40,7 +40,7 @@ COPY --from=builder /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
 
 # Copy the application code from the ai-backend directory
-COPY ./ai-backend/ ./
+COPY . ./
 
 # Expose the port the app runs on
 EXPOSE 8000

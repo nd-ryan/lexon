@@ -114,14 +114,14 @@ function SignInPageContent() {
             </Button>
           </div>
 
-          <div className="text-center">
+          {/* <div className="text-center">
             <Link 
               href="/auth/signup" // This path should be correct if signup page is src/app/auth/signup/page.tsx
               className="text-indigo-600 hover:text-indigo-500"
             >
               Don&apos;t have an account? Sign up
             </Link>
-          </div>
+          </div> */}
         </form>
       </div>
     </div>
