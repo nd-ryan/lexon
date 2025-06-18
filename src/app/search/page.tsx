@@ -108,7 +108,7 @@ const renderValue = (value: unknown, key: string): React.ReactNode => {
 
   if (typeof value === 'boolean') {
     return (
-      <div className="flex justify-start">
+      <div className="flex justify-start px-2">
         <span className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
           value 
             ? 'bg-green-50 text-green-700 border border-green-200' 
@@ -137,12 +137,12 @@ const renderValue = (value: unknown, key: string): React.ReactNode => {
     if (value.length > 500) {
       return (
         <div className="relative">
-          <div className="bg-muted/50 rounded-lg border p-4 max-h-64 overflow-y-auto scrollbar-thin scrollbar-track-gray-100 scrollbar-thumb-gray-300">
+          <div className="bg-muted/50 rounded-lg border p-6 max-h-64 overflow-y-auto scrollbar-thin scrollbar-track-gray-100 scrollbar-thumb-gray-300">
             <pre className="text-sm text-foreground whitespace-pre-wrap leading-relaxed font-mono">
               {value}
             </pre>
           </div>
-          <div className="absolute top-2 right-2 bg-background/80 backdrop-blur-sm px-2 py-1 rounded text-xs text-muted-foreground">
+          <div className="absolute top-3 right-3 bg-background/90 backdrop-blur-sm px-3 py-1.5 rounded-md text-xs text-muted-foreground font-medium">
             {value.length} chars
           </div>
         </div>
@@ -150,7 +150,7 @@ const renderValue = (value: unknown, key: string): React.ReactNode => {
     }
     return (
       <div className="prose prose-sm max-w-none">
-        <p className="text-foreground leading-relaxed m-0">{value}</p>
+        <p className="text-foreground leading-relaxed m-0 px-2 text-sm py-1">{value}</p>
       </div>
     );
   }
@@ -158,7 +158,7 @@ const renderValue = (value: unknown, key: string): React.ReactNode => {
   if (Array.isArray(value)) {
     if (value.length === 0) {
       return (
-        <div className="flex items-center justify-center py-6 text-muted-foreground border-2 border-dashed rounded-lg">
+        <div className="flex items-center justify-center py-8 text-muted-foreground border-2 border-dashed rounded-lg">
           <span className="text-sm italic">Empty list</span>
         </div>
       );
@@ -167,11 +167,11 @@ const renderValue = (value: unknown, key: string): React.ReactNode => {
     // Handle array of strings/simple values
     if (value.every(item => typeof item === 'string' || typeof item === 'number')) {
       return (
-        <div className="space-y-2">
+        <div className="space-y-3">
           {value.map((item, index) => (
-            <div key={index} className="flex items-start gap-3 p-2 rounded-md hover:bg-muted/50 transition-colors">
-              <div className="flex-shrink-0 w-2 h-2 bg-primary/60 rounded-full mt-2"></div>
-              <span className="text-foreground leading-relaxed flex-1 break-words">{String(item)}</span>
+            <div key={index} className="flex items-start gap-4 p-3 rounded-lg hover:bg-muted/50 transition-colors border border-transparent hover:border-border/30">
+              <div className="flex-shrink-0 w-2 h-2 bg-primary/60 rounded-full mt-2.5"></div>
+              <span className="text-foreground leading-relaxed flex-1 break-words text-sm">{String(item)}</span>
             </div>
           ))}
         </div>
@@ -181,26 +181,26 @@ const renderValue = (value: unknown, key: string): React.ReactNode => {
     // Handle array of objects (like search results)
     if (key === 'results' && value.every(item => typeof item === 'object' && item !== null)) {
       return (
-        <div className="space-y-4">
+        <div className="space-y-6">
           {value.map((result: Record<string, unknown>, index: number) => (
             <Card key={index} className="transition-all hover:shadow-md border-l-4 border-l-primary/20">
-              <CardContent className="space-y-3">
+              <CardContent className="space-y-4 p-6">
                 {Object.entries(result).map(([resultKey, resultValue]) => (
                   <div key={resultKey} className="group">
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="text-sm font-medium text-muted-foreground bg-muted px-2 py-1 rounded">
+                    <div className="flex items-center gap-2 mb-3">
+                      <span className="text-sm font-medium text-muted-foreground bg-muted px-3 py-1.5 rounded-md">
                         {formatTitle(resultKey)}
                       </span>
                     </div>
-                    <div className="ml-0">
+                    <div className="ml-0 pl-4 border-l-2 border-border/20">
                       {typeof resultValue === 'object' && resultValue !== null ? (
-                        <div className="bg-muted/30 rounded-md border p-3 max-h-48 overflow-y-auto">
+                        <div className="bg-muted/30 rounded-lg border p-4 max-h-48 overflow-y-auto">
                           <pre className="text-xs text-foreground whitespace-pre-wrap font-mono leading-relaxed">
                             {JSON.stringify(resultValue, null, 2)}
                           </pre>
                         </div>
                       ) : (
-                        <div className="text-foreground break-words">{String(resultValue)}</div>
+                        <div className="text-foreground break-words text-sm leading-relaxed">{String(resultValue)}</div>
                       )}
                     </div>
                   </div>
@@ -215,12 +215,12 @@ const renderValue = (value: unknown, key: string): React.ReactNode => {
     // Handle other complex arrays
     return (
       <div className="relative">
-        <div className="bg-muted/30 rounded-lg border p-4 max-h-96 overflow-y-auto scrollbar-thin scrollbar-track-gray-100 scrollbar-thumb-gray-300">
-          <pre className="text-xs text-foreground whitespace-pre-wrap font-mono leading-relaxed">
+        <div className="bg-muted/30 rounded-lg border p-6 max-h-96 overflow-y-auto scrollbar-thin scrollbar-track-gray-100 scrollbar-thumb-gray-300">
+          <pre className="text-sm text-foreground whitespace-pre-wrap font-mono leading-relaxed">
             {JSON.stringify(value, null, 2)}
           </pre>
         </div>
-        <div className="absolute top-2 right-2 bg-background/80 backdrop-blur-sm px-2 py-1 rounded text-xs text-muted-foreground">
+        <div className="absolute top-3 right-3 bg-background/90 backdrop-blur-sm px-3 py-1.5 rounded-md text-xs text-muted-foreground font-medium">
           {value.length} items
         </div>
       </div>
@@ -230,17 +230,17 @@ const renderValue = (value: unknown, key: string): React.ReactNode => {
   if (typeof value === 'object' && value !== null) {
     // Handle nested objects
     return (
-      <div className="space-y-4">
+      <div className="space-y-6">
         {Object.entries(value).map(([nestedKey, nestedValue]) => (
           <div key={nestedKey} className="relative">
-            <div className="border-l-2 border-primary/20 pl-4 pb-4">
-              <div className="flex items-center gap-2 mb-3">
-                <div className="w-2 h-2 bg-primary/60 rounded-full"></div>
+            <div className="border-l-2 border-primary/30 pl-6 pb-4">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-2.5 h-2.5 bg-primary/60 rounded-full"></div>
                 <span className="font-medium text-foreground text-sm">
                   {formatTitle(nestedKey)}
                 </span>
               </div>
-              <div className="ml-2">
+              <div className="ml-2 pl-4">
                 {renderValue(nestedValue, nestedKey)}
               </div>
             </div>
@@ -263,7 +263,7 @@ const formatStructuredResults = (data: StructuredSearchResponse) => {
   const dataKeys = Object.keys(data) as Array<keyof StructuredSearchResponse>;
   
   return (
-    <div className="space-y-8">
+    <div className="space-y-12">
       {dataKeys.map((key, index) => {
         const value = data[key];
         const style = getCardStyle(key, index);
@@ -277,7 +277,7 @@ const formatStructuredResults = (data: StructuredSearchResponse) => {
         let countBadge = null;
         if (Array.isArray(value)) {
           countBadge = (
-            <span className="inline-flex items-center px-2 py-1 bg-primary/10 text-primary text-xs font-medium rounded-full">
+            <span className="inline-flex items-center px-3 py-1.5 bg-primary/10 text-primary text-xs font-medium rounded-full">
               {value.length} items
             </span>
           );
@@ -285,7 +285,7 @@ const formatStructuredResults = (data: StructuredSearchResponse) => {
           const objKeys = Object.keys(value);
           if (objKeys.length > 0) {
             countBadge = (
-              <span className="inline-flex items-center px-2 py-1 bg-primary/10 text-primary text-xs font-medium rounded-full">
+              <span className="inline-flex items-center px-3 py-1.5 bg-primary/10 text-primary text-xs font-medium rounded-full">
                 {objKeys.length} properties
               </span>
             );
@@ -294,16 +294,16 @@ const formatStructuredResults = (data: StructuredSearchResponse) => {
 
         return (
           <Card key={key} className={`${style.border} shadow-sm hover:shadow-md transition-all duration-200 overflow-hidden`}>
-            <CardHeader className={`${style.header} border-b border-border/50`}>
+            <CardHeader className={`${style.header} border-b border-border/50 py-6`}>
               <div className="flex items-center justify-between w-full">
-                <CardTitle className={`${style.text} flex items-center gap-3`}>
-                  <span className="text-lg">{style.icon}</span>
-                  <span className="font-semibold tracking-tight">{formatTitle(key)}</span>
+                <CardTitle className={`${style.text} flex items-center gap-4`}>
+                  <span className="text-xl">{style.icon}</span>
+                  <span className="font-semibold tracking-tight text-lg">{formatTitle(key)}</span>
                 </CardTitle>
                 {countBadge}
               </div>
             </CardHeader>
-            <CardContent className="p-6">
+            <CardContent className="p-8">
               <div className="max-w-none">
                 {renderValue(value, key)}
               </div>
@@ -596,134 +596,108 @@ const SearchPage = () => {
     <div className="min-h-screen bg-gradient-to-br from-background to-muted/20 p-4 sm:p-6 lg:p-8">
       <div className="max-w-7xl mx-auto">
         <div className="mb-8">
-          <h1 className="text-4xl font-bold text-foreground mb-2 tracking-tight">Natural Language Search</h1>
-          <p className="text-muted-foreground text-lg">Explore your knowledge graph with AI-powered insights</p>
+          <h1 className="text-4xl font-bold text-foreground mb-2 tracking-tight">Lexon Search</h1>
         </div>
         
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Main search area */}
-          <div className="lg:col-span-2 space-y-8">
-            <Card className="shadow-sm">
-              <CardContent className="p-6">
-                <form onSubmit={handleSubmit} className="space-y-6">
-                  <div className="flex items-center gap-3">
-                    <Input
-                      type="text"
-                      value={query}
-                      onChange={(e) => setQuery(e.target.value)}
-                      placeholder="Ask a question about your knowledge graph..."
-                      className="flex-grow text-base"
-                    />
-                    <Button type="submit" disabled={loading} className="px-6">
-                      {loading ? 'Searching...' : 'Search'}
-                    </Button>
-                  </div>
-                  
-                  <div className="bg-primary/5 border border-primary/20 rounded-lg p-4">
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="text-primary text-lg">🤖</span>
-                      <span className="font-semibold text-primary">AI Agent Search</span>
-                    </div>
-                    <p className="text-sm text-muted-foreground leading-relaxed">
-                      Enhanced analysis using CrewAI agents with structured insights powered by Neo4j MCP tools
-                    </p>
-                  </div>
+        <div className="max-w-4xl mx-auto space-y-8">
+          <Card className="shadow-sm">
+            <CardContent className="p-6">
+              <form onSubmit={handleSubmit} className="space-y-6">
+                <div className="flex items-center gap-3">
+                  <Input
+                    type="text"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="Ask a question about your knowledge graph..."
+                    className="flex-grow text-base"
+                  />
+                  <Button type="submit" disabled={loading} className="px-6">
+                    {loading ? 'Searching...' : 'Search'}
+                  </Button>
+                </div>
+                
 
-                  <div className="bg-muted/30 rounded-lg p-4 border">
-                    <p className="font-medium text-foreground mb-3">Try asking questions like:</p>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
-                      <div className="flex items-start gap-2">
-                        <div className="w-1.5 h-1.5 bg-primary rounded-full mt-2 flex-shrink-0"></div>
-                        <span className="text-muted-foreground">&ldquo;Show me all cases related to contract disputes&rdquo;</span>
-                      </div>
-                      <div className="flex items-start gap-2">
-                        <div className="w-1.5 h-1.5 bg-primary rounded-full mt-2 flex-shrink-0"></div>
-                        <span className="text-muted-foreground">&ldquo;What are the most common legal doctrines?&rdquo;</span>
-                      </div>
-                      <div className="flex items-start gap-2">
-                        <div className="w-1.5 h-1.5 bg-primary rounded-full mt-2 flex-shrink-0"></div>
-                        <span className="text-muted-foreground">&ldquo;Find cases involving specific parties&rdquo;</span>
-                      </div>
-                      <div className="flex items-start gap-2">
-                        <div className="w-1.5 h-1.5 bg-primary rounded-full mt-2 flex-shrink-0"></div>
-                        <span className="text-muted-foreground">&ldquo;Analyze patterns in legal precedents&rdquo;</span>
-                      </div>
-                    </div>
+                <div className="bg-muted/30 rounded-lg p-4 border">
+                  <p className="font-medium text-foreground mb-3">Notes:</p>
+                  <div className="flex flex-col gap-2">
+                    <p className="text-sm text-muted-foreground leading-relaxed">
+                      Embedding search is not supported yet.
+                    </p>
+                    <p className="text-sm text-muted-foreground leading-relaxed">
+                      Current results includes data that will not be shown to the eventual end user, such as the raw query and technical details.
+                    </p>
+                    <p className="text-sm text-muted-foreground leading-relaxed"></p>
                   </div>
-                </form>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+
+          {error && (
+            <Card className="border-destructive/50 bg-destructive/5">
+              <CardContent className="p-6">
+                <div className="flex items-start gap-3">
+                  <span className="text-destructive text-lg">⚠️</span>
+                  <div>
+                    <p className="font-semibold text-destructive mb-1">Error</p>
+                    <p className="text-destructive/80">{error}</p>
+                  </div>
+                </div>
               </CardContent>
             </Card>
+          )}
 
-            {error && (
-              <Card className="border-destructive/50 bg-destructive/5">
-                <CardContent className="p-6">
-                  <div className="flex items-start gap-3">
-                    <span className="text-destructive text-lg">⚠️</span>
-                    <div>
-                      <p className="font-semibold text-destructive mb-1">Error</p>
-                      <p className="text-destructive/80">{error}</p>
-                    </div>
+          {loading && (
+            <Card className="border-blue-200 bg-blue-50/50">
+              <CardContent className="p-6">
+                <div className="flex items-start gap-4">
+                  <div className="flex-shrink-0">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
                   </div>
-                </CardContent>
-              </Card>
-            )}
-
-            {loading && (
-              <Card className="border-blue-200 bg-blue-50/50">
-                <CardContent className="p-6">
-                  <div className="flex items-start gap-4">
-                    <div className="flex-shrink-0">
-                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-3">
+                      <span className="text-blue-600 text-lg">🤖</span>
+                      <p className="font-semibold text-blue-900">AI Search in Progress</p>
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-3">
-                        <span className="text-blue-600 text-lg">🤖</span>
-                        <p className="font-semibold text-blue-900">AI Search in Progress</p>
+                    
+                    {streamingStatus && (
+                      <div className="mb-4">
+                        <p className="text-blue-800 font-medium mb-2">Current Status:</p>
+                        <div className="bg-blue-100 border border-blue-200 rounded-lg p-3">
+                          <p className="text-blue-900 text-sm">{streamingStatus}</p>
+                        </div>
                       </div>
-                      
-                      {streamingStatus && (
-                        <div className="mb-4">
-                          <p className="text-blue-800 font-medium mb-2">Current Status:</p>
-                          <div className="bg-blue-100 border border-blue-200 rounded-lg p-3">
-                            <p className="text-blue-900 text-sm">{streamingStatus}</p>
-                          </div>
-                        </div>
-                      )}
+                    )}
 
-                      {streamingProgress.length > 0 && (
-                        <div>
-                          <p className="text-blue-800 font-medium mb-2">Progress Log:</p>
-                          <div className="bg-white border border-blue-200 rounded-lg p-3 max-h-32 overflow-y-auto">
-                            <div className="space-y-1">
-                              {streamingProgress.map((step, index) => (
-                                <div key={index} className="flex items-start gap-2 text-sm">
-                                  <span className="text-blue-500 text-xs mt-1">•</span>
-                                  <span className="text-blue-900 flex-1">{step}</span>
-                                </div>
-                              ))}
-                            </div>
+                    {streamingProgress.length > 0 && (
+                      <div>
+                        <p className="text-blue-800 font-medium mb-2">Progress Log:</p>
+                        <div className="bg-white border border-blue-200 rounded-lg p-3 max-h-32 overflow-y-auto">
+                          <div className="space-y-1">
+                            {streamingProgress.map((step, index) => (
+                              <div key={index} className="flex items-start gap-2 text-sm">
+                                <span className="text-blue-500 text-xs mt-1">•</span>
+                                <span className="text-blue-900 flex-1">{step}</span>
+                              </div>
+                            ))}
                           </div>
                         </div>
-                      )}
-                    </div>
+                      </div>
+                    )}
                   </div>
-                </CardContent>
-              </Card>
-            )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
-            {searchResult && (
-              <div className="space-y-8">
+                      {searchResult && (
+              <div className="space-y-12">
                 {formatStructuredResults(searchResult)}
               </div>
             )}
-          </div>
-          
-          {/* Search history sidebar */}
-          <div className="lg:col-span-1">
-            <div className="sticky top-8">
-              {renderSearchHistory()}
-            </div>
-          </div>
+
+          {/* Search history moved below main content */}
+          {renderSearchHistory()}
         </div>
       </div>
     </div>
