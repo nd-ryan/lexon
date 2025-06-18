@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Generator
 from app.crews.agents import (
     create_search_agent, create_document_agent, create_embeddings_agent,
     create_research_agent, create_writer_agent, MCPEnabledAgents, create_mcp_enabled_agents,
@@ -20,6 +21,8 @@ from crewai import Crew, Process, Agent, Task, LLM
 from crewai_tools import MCPServerAdapter
 import logging
 import os
+import json
+import time
 
 logger = logging.getLogger(__name__)
 router = APIRouter(dependencies=[Depends(get_api_key)])
@@ -946,3 +949,140 @@ async def verify_mcp_tools():
             "expected_tools": ["read-neo4j-cypher", "get-neo4j-schema"],
             "available_tools": []
         }
+
+# Add streaming response for crew search
+@router.post("/search/crew/stream")
+async def search_with_crew_stream(request: QueryRequest):
+    """
+    Search with CrewAI agents using Server-Sent Events streaming.
+    Provides real-time updates during the AI processing.
+    """
+    async def generate_stream() -> Generator[str, None, None]:
+        try:
+            start_time = time.time()
+            
+            # Send initial status
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Initializing AI search...', 'timestamp': time.time()})}\n\n"
+            
+            # Initialize MCP tools
+            yield f"data: {json.dumps({'type': 'status', 'message': 'Setting up Neo4j MCP tools...', 'timestamp': time.time()})}\n\n"
+            
+            with MCPEnabledAgents() as mcp_context:
+                mcp_tools = get_mcp_tools()
+                
+                if mcp_tools:
+                    yield f"data: {json.dumps({'type': 'status', 'message': f'MCP tools loaded: {len(mcp_tools)} tools available', 'timestamp': time.time()})}\n\n"
+                    
+                    # Create agent with tools
+                    search_agent = create_search_agent(tools=mcp_tools)
+                    mcp_tools_used = True
+                    logger.info(f"Crew search using MCP tools: {[tool.name for tool in mcp_tools]}")
+                else:
+                    yield f"data: {json.dumps({'type': 'warning', 'message': 'No MCP tools available, using basic agent', 'timestamp': time.time()})}\n\n"
+                    search_agent = create_search_agent()
+                    mcp_tools_used = False
+                
+                # Create task
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Creating search task...', 'timestamp': time.time()})}\n\n"
+                search_task = create_search_task(search_agent, request.query, request.max_results)
+                
+                # Create crew
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Assembling AI crew...', 'timestamp': time.time()})}\n\n"
+                crew = Crew(
+                    agents=[search_agent],
+                    tasks=[search_task],
+                    process=Process.sequential,
+                    verbose=True
+                )
+                
+                # Execute with progress updates
+                yield f"data: {json.dumps({'type': 'status', 'message': 'AI crew is analyzing your query...', 'timestamp': time.time()})}\n\n"
+                yield f"data: {json.dumps({'type': 'progress', 'message': 'Executing Cypher queries against Neo4j...', 'timestamp': time.time()})}\n\n"
+                
+                # Execute the crew within the MCP context
+                result = crew.kickoff()
+                
+                yield f"data: {json.dumps({'type': 'progress', 'message': 'Processing results and generating insights...', 'timestamp': time.time()})}\n\n"
+                
+                execution_time = time.time() - start_time
+                
+                # Extract structured data from result
+                if hasattr(result, 'pydantic') and result.pydantic:
+                    analysis = result.pydantic
+                else:
+                    # Fallback: parse raw result into structured format
+                    raw_result = result.raw if hasattr(result, 'raw') else str(result)
+                    
+                    # Try to extract formatted results from the raw text
+                    formatted_results = []
+                    raw_query_results = []
+                    
+                    # Look for bullet points or numbered lists in the result
+                    lines = raw_result.split('\n')
+                    for line in lines:
+                        line = line.strip()
+                        if line.startswith(('•', '-', '*', '1.', '2.', '3.', '4.', '5.')):
+                            formatted_results.append(line)
+                    
+                    # If no formatted results found, create a basic one
+                    if not formatted_results:
+                        formatted_results = [f"Analysis result: {raw_result[:300] + '...' if len(raw_result) > 300 else raw_result}"]
+                    
+                    analysis = SearchAnalysis(
+                        query_interpretation=f"Interpreted query: '{request.query}'",
+                        methodology=["Used Neo4j MCP tools", "Executed Cypher queries", "Analyzed results"],
+                        key_insights=[raw_result[:200] + "..." if len(raw_result) > 200 else raw_result],
+                        patterns_identified=[],
+                        limitations=["Result parsing may be incomplete - structured output not available"],
+                        formatted_results=formatted_results,
+                        raw_query_results=raw_query_results
+                    )
+                
+                # Mock results for now - in a real implementation, these would be extracted from the MCP tool responses
+                mock_results = [
+                    SearchResult(
+                        entity_type="Analysis",
+                        entity_id="analysis_1",
+                        name="Search Analysis Result",
+                        description="AI-generated analysis of the search query",
+                        properties={"analysis": str(result)},
+                        relationships=[],
+                        relevance_score=1.0
+                    )
+                ]
+                
+                # Format structured response
+                final_response = StructuredSearchResponse(
+                    success=True,
+                    query=request.query,
+                    total_results=len(mock_results),
+                    results=mock_results,
+                    cypher_queries=["Cypher queries executed via MCP tools"],
+                    analysis=analysis,
+                    execution_time=execution_time,
+                    mcp_tools_used=mcp_tools_used,
+                    agent_reasoning=[]
+                )
+                
+                # Send final result
+                yield f"data: {json.dumps({'type': 'complete', 'data': final_response.dict(), 'timestamp': time.time()})}\n\n"
+                
+        except Exception as e:
+            logger.error(f"Error in streaming crew search: {e}")
+            error_response = {
+                'type': 'error',
+                'message': str(e),
+                'timestamp': time.time()
+            }
+            yield f"data: {json.dumps(error_response)}\n\n"
+    
+    return StreamingResponse(
+        generate_stream(),
+        media_type="text/plain",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )

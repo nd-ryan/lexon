@@ -323,6 +323,8 @@ const SearchPage = () => {
   const [searchResult, setSearchResult] = useState<StructuredSearchResponse | null>(null);
   const [searchHistory, setSearchHistory] = useState<SearchHistoryItem[]>([]);
   const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
+  const [streamingStatus, setStreamingStatus] = useState<string>('');
+  const [streamingProgress, setStreamingProgress] = useState<string[]>([]);
   const { status } = useSession();
   const router = useRouter();
 
@@ -378,28 +380,93 @@ const SearchPage = () => {
     setLoading(true);
     setError('');
     setSearchResult(null);
+    setStreamingStatus('');
+    setStreamingProgress([]);
 
     try {
-      const endpoint = searchType === 'crew' ? '/api/search/crew' : '/api/search';
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query }),
-      });
+      // Use streaming endpoint for crew search
+      if (searchType === 'crew') {
+        const response = await fetch('/api/search/crew/stream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query }),
+        });
 
-      const data = await res.json();
+        if (!response.ok) {
+          throw new Error('Failed to start streaming search');
+        }
 
-      if (!res.ok) {
-        throw new Error(data.detail || 'An error occurred during the search.');
+        const reader = response.body?.getReader();
+        const decoder = new TextDecoder();
+
+        if (!reader) {
+          throw new Error('Failed to get response reader');
+        }
+
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            const chunk = decoder.decode(value);
+            const lines = chunk.split('\n\n');
+
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                try {
+                  const data = JSON.parse(line.slice(6));
+                  
+                  switch (data.type) {
+                    case 'status':
+                    case 'progress':
+                      setStreamingStatus(data.message);
+                      setStreamingProgress(prev => [...prev, data.message]);
+                      break;
+                    case 'warning':
+                      setStreamingStatus(data.message);
+                      setStreamingProgress(prev => [...prev, `⚠️ ${data.message}`]);
+                      break;
+                    case 'complete':
+                      setSearchResult(data.data);
+                      setStreamingStatus('Search completed!');
+                      if (data.data.success) {
+                        saveSearchToHistory(data.data);
+                      }
+                      break;
+                    case 'error':
+                      throw new Error(data.message);
+                  }
+                } catch (parseError) {
+                  console.error('Error parsing SSE data:', parseError);
+                }
+              }
+            }
+          }
+        } finally {
+          reader.releaseLock();
+        }
+      } else {
+        // Use regular endpoint for basic search
+        const res = await fetch('/api/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query }),
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          throw new Error(data.detail || 'An error occurred during the search.');
+        }
+
+        setSearchResult(data);
+        if (data.success) {
+          saveSearchToHistory(data);
+        }
       }
-
-      setSearchResult(data);
-      if (data.success) {
-        saveSearchToHistory(data);
-      }
-    } catch {
+    } catch (error) {
       setError('An error occurred. Please try again.');
-      console.error("Search failed:");
+      console.error("Search failed:", error);
     } finally {
       setLoading(false);
     }
@@ -595,6 +662,49 @@ const SearchPage = () => {
                     <div>
                       <p className="font-semibold text-destructive mb-1">Error</p>
                       <p className="text-destructive/80">{error}</p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {loading && (
+              <Card className="border-blue-200 bg-blue-50/50">
+                <CardContent className="p-6">
+                  <div className="flex items-start gap-4">
+                    <div className="flex-shrink-0">
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-3">
+                        <span className="text-blue-600 text-lg">🤖</span>
+                        <p className="font-semibold text-blue-900">AI Search in Progress</p>
+                      </div>
+                      
+                      {streamingStatus && (
+                        <div className="mb-4">
+                          <p className="text-blue-800 font-medium mb-2">Current Status:</p>
+                          <div className="bg-blue-100 border border-blue-200 rounded-lg p-3">
+                            <p className="text-blue-900 text-sm">{streamingStatus}</p>
+                          </div>
+                        </div>
+                      )}
+
+                      {streamingProgress.length > 0 && (
+                        <div>
+                          <p className="text-blue-800 font-medium mb-2">Progress Log:</p>
+                          <div className="bg-white border border-blue-200 rounded-lg p-3 max-h-32 overflow-y-auto">
+                            <div className="space-y-1">
+                              {streamingProgress.map((step, index) => (
+                                <div key={index} className="flex items-start gap-2 text-sm">
+                                  <span className="text-blue-500 text-xs mt-1">•</span>
+                                  <span className="text-blue-900 flex-1">{step}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </CardContent>
