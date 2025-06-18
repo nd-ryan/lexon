@@ -30,8 +30,8 @@ export async function POST(req: NextRequest) {
       results 
     });
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error in search API:', error);
-    return NextResponse.json({ error: error.message || 'An internal server error occurred.' }, { status: 500 });
+    return NextResponse.json({ error: error instanceof Error ? error.message : 'An internal server error occurred.' }, { status: 500 });
   }
 } 

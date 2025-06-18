@@ -13,8 +13,8 @@ interface SearchResult {
   entity_id?: string;
   name?: string;
   description?: string;
-  properties: Record<string, any>;
-  relationships: any[];
+  properties: Record<string, unknown>;
+  relationships: unknown[];
   relevance_score?: number;
 }
 
@@ -25,7 +25,7 @@ interface SearchAnalysis {
   patterns_identified: string[];
   limitations: string[];
   formatted_results: string[];
-  raw_query_results: any[];
+  raw_query_results: unknown[];
 }
 
 interface StructuredSearchResponse {
@@ -37,7 +37,7 @@ interface StructuredSearchResponse {
   analysis: SearchAnalysis;
   execution_time?: number;
   mcp_tools_used: boolean;
-  agent_reasoning: any[];
+  agent_reasoning: unknown[];
 }
 
 // Search history types
@@ -97,7 +97,7 @@ const formatTitle = (key: string) => {
     .join(' ');
 };
 
-const renderValue = (value: any, key: string): React.ReactNode => {
+const renderValue = (value: unknown, key: string): React.ReactNode => {
   if (value === null || value === undefined) {
     return (
       <div className="flex items-center justify-center py-4 text-muted-foreground">
@@ -258,9 +258,9 @@ const renderValue = (value: any, key: string): React.ReactNode => {
 };
 
 // Helper function to format structured search results dynamically
-const formatStructuredResults = (data: any) => {
+const formatStructuredResults = (data: StructuredSearchResponse) => {
   // Get all keys from the data object
-  const dataKeys = Object.keys(data);
+  const dataKeys = Object.keys(data) as Array<keyof StructuredSearchResponse>;
   
   return (
     <div className="space-y-8">
@@ -274,10 +274,8 @@ const formatStructuredResults = (data: any) => {
         }
         
         // Calculate count for arrays
-        let count = '';
         let countBadge = null;
         if (Array.isArray(value)) {
-          count = ` (${value.length})`;
           countBadge = (
             <span className="inline-flex items-center px-2 py-1 bg-primary/10 text-primary text-xs font-medium rounded-full">
               {value.length} items
@@ -286,7 +284,6 @@ const formatStructuredResults = (data: any) => {
         } else if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
           const objKeys = Object.keys(value);
           if (objKeys.length > 0) {
-            count = ` (${objKeys.length} props)`;
             countBadge = (
               <span className="inline-flex items-center px-2 py-1 bg-primary/10 text-primary text-xs font-medium rounded-full">
                 {objKeys.length} properties
@@ -320,7 +317,7 @@ const formatStructuredResults = (data: any) => {
 
 const SearchPage = () => {
   const [query, setQuery] = useState('');
-  const [searchType, _setSearchType] = useState<'basic' | 'crew'>('crew');
+  const [searchType] = useState<'basic' | 'crew'>('crew');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [searchResult, setSearchResult] = useState<StructuredSearchResponse | null>(null);
@@ -486,7 +483,7 @@ const SearchPage = () => {
                         </span>
                         <span className="text-muted-foreground">
                           {(() => {
-                            const result = historyItem.searchResult as any;
+                            const result = historyItem.searchResult;
                             // Try to find any numeric field that might represent result count
                             if (result.total_results !== undefined) return `${result.total_results} results`;
                             if (result.results && Array.isArray(result.results)) return `${result.results.length} results`;
@@ -570,19 +567,19 @@ const SearchPage = () => {
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
                       <div className="flex items-start gap-2">
                         <div className="w-1.5 h-1.5 bg-primary rounded-full mt-2 flex-shrink-0"></div>
-                        <span className="text-muted-foreground">"Show me all cases related to contract disputes"</span>
+                        <span className="text-muted-foreground">&ldquo;Show me all cases related to contract disputes&rdquo;</span>
                       </div>
                       <div className="flex items-start gap-2">
                         <div className="w-1.5 h-1.5 bg-primary rounded-full mt-2 flex-shrink-0"></div>
-                        <span className="text-muted-foreground">"What are the most common legal doctrines?"</span>
+                        <span className="text-muted-foreground">&ldquo;What are the most common legal doctrines?&rdquo;</span>
                       </div>
                       <div className="flex items-start gap-2">
                         <div className="w-1.5 h-1.5 bg-primary rounded-full mt-2 flex-shrink-0"></div>
-                        <span className="text-muted-foreground">"Find cases involving specific parties"</span>
+                        <span className="text-muted-foreground">&ldquo;Find cases involving specific parties&rdquo;</span>
                       </div>
                       <div className="flex items-start gap-2">
                         <div className="w-1.5 h-1.5 bg-primary rounded-full mt-2 flex-shrink-0"></div>
-                        <span className="text-muted-foreground">"Analyze patterns in legal precedents"</span>
+                        <span className="text-muted-foreground">&ldquo;Analyze patterns in legal precedents&rdquo;</span>
                       </div>
                     </div>
                   </div>
