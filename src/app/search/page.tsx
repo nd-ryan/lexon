@@ -320,13 +320,13 @@ const formatStructuredResults = (data: any) => {
 
 const SearchPage = () => {
   const [query, setQuery] = useState('');
-  const [searchType, setSearchType] = useState<'basic' | 'crew'>('crew');
+  const [searchType, _setSearchType] = useState<'basic' | 'crew'>('crew');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [searchResult, setSearchResult] = useState<StructuredSearchResponse | null>(null);
   const [searchHistory, setSearchHistory] = useState<SearchHistoryItem[]>([]);
   const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
-  const { data: session, status } = useSession();
+  const { status } = useSession();
   const router = useRouter();
 
   useEffect(() => {
@@ -406,10 +406,6 @@ const SearchPage = () => {
     } finally {
       setLoading(false);
     }
-  };
-
-  const isStructuredResponse = (data: any): data is StructuredSearchResponse => {
-    return 'results' in data && 'analysis' in data && 'total_results' in data;
   };
 
   const renderSearchHistory = () => {
@@ -628,7 +624,7 @@ const SearchPage = () => {
 };
 
 export default function SearchPageContainer() {
-  const { data: session, status } = useSession();
+  const { status } = useSession();
   const router = useRouter();
 
   useEffect(() => {
