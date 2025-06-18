@@ -23,16 +23,16 @@ export default function SignOutPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="mt-6 flex flex-col gap-3">
-          <Button asChild className="w-full"> {/* Replaced Link with Button asChild */}
-            <Link href="/auth/signin">
+          <Link href="/auth/signin" className="w-full">
+            <Button className="w-full">
               Sign in again
-            </Link>
-          </Button>
-          <Button asChild variant="outline" className="w-full"> {/* Replaced Link with Button asChild and variant outline */}
-            <Link href="/">
+            </Button>
+          </Link>
+          <Link href="/" className="w-full">
+            <Button variant="outline" className="w-full">
               Go to Homepage
-            </Link>
-          </Button>
+            </Button>
+          </Link>
         </CardContent>
       </Card>
     </div>

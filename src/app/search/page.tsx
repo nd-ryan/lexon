@@ -182,7 +182,7 @@ const renderValue = (value: unknown, key: string): React.ReactNode => {
     if (key === 'results' && value.every(item => typeof item === 'object' && item !== null)) {
       return (
         <div className="space-y-4">
-          {value.map((result: any, index: number) => (
+          {value.map((result: Record<string, unknown>, index: number) => (
             <Card key={index} className="transition-all hover:shadow-md border-l-4 border-l-primary/20">
               <CardContent className="space-y-3">
                 {Object.entries(result).map(([resultKey, resultValue]) => (
