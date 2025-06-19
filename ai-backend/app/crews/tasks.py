@@ -1,5 +1,6 @@
 from crewai import Task
 from typing import List
+from app.models.search import StructuredSearchResponse
 
 # Search and Query Tasks
 def create_search_task(agent, query: str, structured_output=False):
@@ -36,8 +37,9 @@ def create_search_task(agent, query: str, structured_output=False):
         
         IMPORTANT: Always start by calling get-neo4j-schema to understand the database structure before constructing any queries.
         """,
-        expected_output="A comprehensive analysis including: how you interpreted the query, the methodology used (step-by-step process), formatted results as bullet points or lists (MUST include ALL results found - do not truncate, summarize, or filter out incomplete records), key insights from the search results, patterns identified in the data, any limitations or considerations, and the complete raw JSON results from your Neo4j queries.",
+        expected_output="Structured analysis with comprehensive search results",
         agent=agent,
+        output_pydantic=StructuredSearchResponse
     )
     
     return task
