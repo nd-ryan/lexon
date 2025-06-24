@@ -852,119 +852,7 @@ async def search_with_crew_stream(request: QueryRequest):
     
     return StreamingResponse(
         generate_stream(),
-        media_type="text/plain",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "*",
-        }
-    )
-
-@router.post("/search/crew/specialized/stream")
-async def search_with_specialized_crew_stream(request: QueryRequest):
-    """
-    Search using specialized CrewAI agents following one-agent-one-task best practices.
-    
-    This endpoint uses 5 specialized agents:
-    1. Schema Analyst - Analyzes Neo4j schema
-    2. Query Generator - Generates optimized Cypher queries  
-    3. Query Executor - Executes queries and returns raw results
-    4. Results Analyst - Analyzes raw results and extracts insights
-    5. Insights Synthesizer - Creates final comprehensive response
-    """
-    async def generate_stream() -> AsyncGenerator[str, None]:
-        try:
-            start_time = time.time()
-            
-            # Send initial status
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Initializing specialized AI search crew...', 'timestamp': time.time()})}\n\n"
-            
-            # Initialize MCP tools
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Setting up Neo4j MCP tools...', 'timestamp': time.time()})}\n\n"
-            
-            with MCPEnabledAgents() as mcp_context:
-                neo4j_mcp_tools = get_mcp_tools()
-                
-                if not neo4j_mcp_tools:
-                    error_msg = "Specialized crew requires MCP tools. Please check MCP tool configuration."
-                    yield f"data: {json.dumps({'type': 'error', 'message': error_msg, 'timestamp': time.time()})}\n\n"
-                    return
-                
-                yield f"data: {json.dumps({'type': 'status', 'message': f'MCP tools loaded: {len(neo4j_mcp_tools)} tools available', 'timestamp': time.time()})}\n\n"
-                yield f"data: {json.dumps({'type': 'status', 'message': 'Assembling specialized AI crew (4 agents, 4 tasks)...', 'timestamp': time.time()})}\n\n"
-                
-                # Define a callback for logging agent steps
-                def log_step_callback(agent_action):
-                    logger.info("--- AGENT STEP START ---")
-                    logger.info(f"Action: {agent_action}")
-                    logger.info("--- AGENT STEP END ---")
-
-                # Create specialized crew
-                crew = create_specialized_search_crew(
-                    request.query, 
-                    neo4j_mcp_tools,
-                    step_callback=log_step_callback
-                )
-                
-                print(f"Using specialized crew with agents: Schema Analyst, Query Generator, Query Executor, Insights Synthesizer")
-                print(f"MCP tools available: {[tool.name for tool in neo4j_mcp_tools]}")
-                
-                # Execute with detailed progress updates
-                yield f"data: {json.dumps({'type': 'status', 'message': 'Agent 1/4: Schema Analyst analyzing database structure...', 'timestamp': time.time()})}\n\n"
-                yield f"data: {json.dumps({'type': 'progress', 'message': 'Agent 2/4: Query Generator creating optimized Cypher queries...', 'timestamp': time.time()})}\n\n"
-                yield f"data: {json.dumps({'type': 'progress', 'message': 'Agent 3/4: Query Executor running queries against Neo4j...', 'timestamp': time.time()})}\n\n"
-                yield f"data: {json.dumps({'type': 'progress', 'message': 'Agent 4/4: Insights Synthesizer creating final analysis...', 'timestamp': time.time()})}\n\n"
-                
-                # Execute the specialized crew
-                result = crew.kickoff()
-                
-                execution_time = time.time() - start_time
-                
-                # Extract structured data from result
-                if hasattr(result, 'pydantic') and result.pydantic:
-                    print("Specialized crew: Using pydantic structured output")
-                    
-                    if isinstance(result.pydantic, StructuredSearchResponse):
-                        print("Specialized crew: Got complete StructuredSearchResponse from final agent!")
-                        final_response = result.pydantic
-                        final_response.execution_time = execution_time
-                    else:
-                        print(f"Specialized crew: Got {type(result.pydantic)}, creating wrapper response")
-                        final_response = StructuredSearchResponse(
-                            query=request.query,
-                            cypher_queries=["Could not be retrieved in fallback."],
-                            raw_results=[{"error": f"Agent returned an unexpected Pydantic model: {type(result.pydantic)}" , "data": str(result.pydantic)}],
-                            explanation=f"The final agent returned an unexpected structured output. The raw output is: {str(result.pydantic)}",
-                            execution_time=execution_time
-                        )
-                else:
-                    print("Specialized crew: Using fallback parsing")
-                    raw_result = result.raw if hasattr(result, 'raw') else str(result)
-                    
-                    final_response = StructuredSearchResponse(
-                        query=request.query,
-                        cypher_queries=["Could not be retrieved in fallback parsing."],
-                        raw_results=[{"error": "Could not be retrieved in fallback parsing."}],
-                        explanation=f"The agent failed to return a structured Pydantic response. The final raw output was: {raw_result}",
-                        execution_time=execution_time
-                    )
-                
-                # Send final result
-                yield f"data: {json.dumps({'type': 'complete', 'data': final_response.model_dump(), 'timestamp': time.time()})}\n\n"
-                
-        except Exception as e:
-            logger.error(f"Error in specialized crew search: {e}")
-            error_response = {
-                'type': 'error',
-                'message': str(e),
-                'timestamp': time.time()
-            }
-            yield f"data: {json.dumps(error_response)}\n\n"
-    
-    return StreamingResponse(
-        generate_stream(),
-        media_type="text/plain",
+        media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
@@ -1085,7 +973,7 @@ async def search_with_legacy_crew_stream(request: QueryRequest):
     
     return StreamingResponse(
         generate_stream(),
-        media_type="text/plain",
+        media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",

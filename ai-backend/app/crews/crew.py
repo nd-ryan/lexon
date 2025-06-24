@@ -76,7 +76,7 @@ def create_specialized_search_crew(query: str, neo4j_mcp_tools: list, step_callb
         agents=[schema_agent, query_gen_agent, query_exec_agent, insights_agent],
         tasks=[schema_task, query_gen_task, query_exec_task, insights_task],
         process=Process.sequential,
-        verbose=True,
+        verbose=False,  # Disable default verbose logging to avoid duplication
         memory=True,  # Enable memory to pass context between tasks
         step_callback=step_callback,
         embedder={
