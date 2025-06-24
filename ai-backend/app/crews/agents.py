@@ -88,6 +88,78 @@ def create_search_agent(tools: Optional[List] = None) -> Agent:
         max_iter=5
     )
 
+# NEW: Specialized agents following one-agent-one-task pattern
+def create_schema_analysis_agent(tools: Optional[List] = None, llm: Optional[LLM] = None) -> Agent:
+    """Create an agent that retrieves the raw Neo4j schema."""
+    if not tools:
+        raise ValueError("Schema analysis agent requires MCP tools.")
+    
+    return Agent(
+        role="Schema Retriever",
+        goal="Retrieve the raw Neo4j database schema using the `get_neo4j_schema` tool.",
+        backstory="You are a simple and efficient bot. Your one and only purpose is to call the `get_neo4j_schema` tool and pass on its raw, unmodified output.",
+        tools=tools,
+        llm=llm,
+        verbose=False,
+        allow_delegation=False,
+        max_iter=3
+    )
+
+def create_query_generation_agent(llm: Optional[LLM] = None) -> Agent:
+    """Create an agent specialized in generating structured Cypher query JSON."""
+    return Agent(
+        role="Structured Cypher Query Architect",
+        goal="Generate a JSON object containing three distinct, optimized Cypher queries (primary, alternative, fallback).",
+        backstory="You are a meticulous Cypher query architect. You don't just write queries; you structure them. Your specialty is taking a user's request and the database schema and producing a clean, predictable JSON object containing a primary, alternative, and fallback query. Your output is always machine-readable and strictly follows the required Pydantic model.",
+        tools=[],  # No tools needed - this agent just generates queries
+        llm=llm,
+        verbose=False,
+        allow_delegation=False,
+        max_iter=3
+    )
+
+def create_query_execution_agent(tools: Optional[List] = None, llm: Optional[LLM] = None) -> Agent:
+    """Create an agent specialized in strategically executing Cypher queries."""
+    if not tools:
+        raise ValueError("Query execution agent requires MCP tools.")
+    
+    return Agent(
+        role="Strategic Query Executor",
+        goal="Strategically execute a prioritized list of Cypher queries, stopping as soon as one returns results.",
+        backstory="You are a highly efficient database execution specialist. You don't just run all queries you're given; you execute them strategically. You start with the primary query. If it yields results, you stop. If not, you proceed to the alternative, and then the fallback, ensuring you find data in the most efficient way possible.",
+        tools=tools,
+        llm=llm,
+        verbose=True,
+        allow_delegation=False,
+        max_iter=5 # Increased max_iter to allow for conditional logic
+    )
+
+def create_results_analysis_agent(llm: Optional[LLM] = None) -> Agent:
+    """Create an agent specialized in analyzing and interpreting query results"""
+    return Agent(
+        role="Results Analyst", 
+        goal="Analyze and interpret Neo4j query results to extract insights and patterns",
+        backstory="You are a data analyst who specializes in interpreting Neo4j query results. You identify patterns, relationships, and insights from raw data and present them in a user-friendly format.",
+        tools=[],  # No tools needed - this agent analyzes provided data
+        llm=llm,
+        verbose=True,
+        allow_delegation=False,
+        max_iter=5
+    )
+
+def create_insights_synthesis_agent(llm: Optional[LLM] = None) -> Agent:
+    """Create an agent that analyzes raw data and synthesizes a final explanation."""
+    return Agent(
+        role="Principal Analyst and Explainer",
+        goal="Analyze raw Neo4j query results and write a clear, continuous prose explanation of the findings.",
+        backstory="You are a senior data analyst and expert communicator. Your specialty is taking raw, complex JSON data from a database and explaining what it means in simple, clear language. You don't just list the data; you synthesize it, identify the key takeaways, and present a coherent narrative that directly answers the user's original question.",
+        tools=[],  # No tools needed - this agent synthesizes provided information
+        llm=llm,
+        verbose=True,
+        allow_delegation=False,
+        max_iter=5
+    )
+
 # Note: Basic search tools removed - now using Neo4j MCP tools exclusively
 # The MCP tools provide:
 # - get-neo4j-schema: Get database schema information  

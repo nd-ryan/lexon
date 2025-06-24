@@ -1,44 +1,20 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 
+class GeneratedCypherQueries(BaseModel):
+    """A model to hold the three generated Cypher queries."""
+    primary_query: str = Field(..., description="The most direct query to answer the user's request.")
+    alternative_query: str = Field(..., description="A broader query including related concepts.")
+    fallback_query: str = Field(..., description="A simpler query to run if the others fail or return no results.")
+
 # Structured Output Models for Search Results
-class SearchResult(BaseModel):
-    """Individual search result from Neo4j query"""
-    entity_type: str = Field(..., description="Type of entity (Case, Party, Provision, etc.)")
-    entity_id: Optional[str] = Field(None, description="Unique identifier for the entity")
-    name: Optional[str] = Field(None, description="Name or title of the entity")
-    description: Optional[str] = Field(None, description="Brief description of the entity")
-    properties: Dict[str, Any] = Field(default_factory=dict, description="All properties from Neo4j node")
-    relationships: List[Dict[str, Any]] = Field(default_factory=list, description="Related entities and relationships")
-    relevance_score: Optional[float] = Field(None, description="Relevance score for the search query")
-
-class SearchAnalysis(BaseModel):
-    """Analysis and insights from the search"""
-    query_interpretation: str = Field(..., description="How the AI interpreted the user's query")
-    methodology: List[str] = Field(..., description="Steps taken to complete the search")
-    key_insights: List[str] = Field(..., description="Key insights derived from the results")
-    patterns_identified: List[str] = Field(default_factory=list, description="Patterns found in the data")
-    limitations: List[str] = Field(default_factory=list, description="Any limitations in the search results")
-    formatted_results: List[str] = Field(..., description="User-friendly formatted results (e.g., bullet points of cases)")
-    raw_query_results: List[Dict[str, Any]] = Field(..., description="Raw JSON results from Neo4j queries")
-
 class StructuredSearchResponse(BaseModel):
-    """Structured response for AI Agent search with comprehensive data"""
-    success: bool = Field(..., description="Whether the search was successful")
+    """Simplified structured response for AI Agent search."""
+    explanation: str = Field(..., description="A continuous prose explanation of the search results, drawing insights from the raw data.")
+    raw_results: List[Dict[str, Any]] = Field(..., description="The raw JSON results from the executed Cypher queries.")
+    cypher_queries: List[str] = Field(..., description="Cypher queries executed by the agent.")
     query: str = Field(..., description="Original user query")
-    total_results: int = Field(..., description="Total number of results found")
-    
-    # Core search data
-    results: List[SearchResult] = Field(..., description="List of search results")
-    cypher_queries: List[str] = Field(..., description="Cypher queries executed")
-    
-    # AI Analysis
-    analysis: SearchAnalysis = Field(..., description="AI analysis of the search results")
-    
-    # Technical metadata
     execution_time: Optional[float] = Field(None, description="Time taken to execute the search")
-    mcp_tools_used: bool = Field(True, description="Whether MCP tools were used")
-    agent_reasoning: List[Dict[str, Any]] = Field(default_factory=list, description="Step-by-step agent reasoning")
 
 # Request Models
 class SearchRequest(BaseModel):

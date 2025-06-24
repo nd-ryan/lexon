@@ -1,8 +1,123 @@
 from crewai import Task
 from typing import List
-from app.models.search import StructuredSearchResponse
+from app.models.search import StructuredSearchResponse, GeneratedCypherQueries
 
-# Search and Query Tasks
+# NEW: Specialized tasks following one-agent-one-task pattern
+
+def create_schema_analysis_task(agent, query: str):
+    """Task 1: Retrieve the raw Neo4j schema."""
+    return Task(
+        description="Your one and only task is to call the `get_neo4j_schema` tool to retrieve the complete database schema. Then, return its direct output.",
+        expected_output="The direct, raw, unmodified JSON output from the `get_neo4j_schema` tool. Nothing else.",
+        agent=agent
+    )
+
+def create_query_generation_task(agent, query: str, context: list = None):
+    """Task 2: Generate optimal Cypher queries based on schema and user query"""
+    return Task(
+        description=f"""
+        Generate optimal Cypher queries for: "{query}" using the schema analysis from the previous task.
+        
+        You will receive the schema analysis results from the Schema Analyst agent as context.
+        
+        Your specific task is to:
+        1. **Analyze the user query**: "{query}" to understand intent.
+        2. **Use the provided schema analysis** to identify relevant node types and relationships.
+        3. **Generate 3 distinct Cypher queries** following the guidance below:
+
+        **Query Generation Guidance:**
+        - **Use fuzzy search** for string matching (e.g., `CONTAINS` or `STARTS WITH`) and ensure all comparisons are **case-insensitive** by using `toLower()`.
+        - If the user searches for a proper noun (e.g., a specific case name or doctrine), consider that it might be stored as an **acronym** in the database and include that in your search logic.
+        - `primary_query`: The most direct query to answer the user's request.
+        - `alternative_query`: A broader search including related concepts or synonyms.
+        - `fallback_query`: A simpler, more general query to run if the others fail or return no results.
+
+        4. **Format your output** as a single JSON object that strictly conforms to the `GeneratedCypherQueries` Pydantic model.
+        """,
+        expected_output="A single, valid JSON object with three keys: `primary_query`, `alternative_query`, and `fallback_query`, each containing a raw Cypher query string.",
+        agent=agent,
+        context=context,
+        output_pydantic=GeneratedCypherQueries
+    )
+
+def create_query_execution_task(agent, context: list = None):
+    """Task 3: Execute Cypher queries and return raw results"""
+    return Task(
+        description=f"""
+        Execute the Cypher queries from the structured JSON object provided by the Query Generator agent.
+
+        You will receive a JSON object with keys `primary_query`, `alternative_query`, and `fallback_query`. Your task is to execute them with conditional logic:
+        
+        1.  **Execute the Primary Query**: Run the query from the `primary_query` field.
+        2.  **Check the Result**:
+            - If the query returns a non-empty list or any data, STOP. Your task is complete.
+            - If the query returns an empty list (`[]`) or no results, proceed to the next step.
+        3.  **Execute the Alternative Query**: Run the query from the `alternative_query` field.
+        4.  **Check the Result**:
+            - If this query returns results, STOP.
+            - If it returns no results, proceed to the next step.
+        5.  **Execute the Fallback Query**: Run the query from the `fallback_query` field.
+        
+        **Your final output for this task must be ONLY the raw JSON results from the *first* query that successfully returned data.** Do not include any of your own text, explanations, or summaries.
+        """,
+        expected_output="The direct, raw, unmodified JSON output from the first successfully executed query that returned data. Nothing else.",
+        agent=agent,
+        context=context,
+        output_pydantic=GeneratedCypherQueries
+    )
+
+# def create_results_analysis_task(agent, query: str, context: list = None):
+#     """Task 4: Analyze raw query results to extract insights"""
+#     return Task(
+#         description=f"""
+#         Analyze the raw Neo4j query results for: "{query}"
+        
+#         You will receive the raw query execution results from the previous task as context.
+        
+#         Your specific task:
+#         1. **Process each result set** from the executed queries
+#         2. **Extract key entities** and their properties
+#         3. **Identify relationships** and connection patterns
+#         4. **Categorize results** by relevance to the original query
+#         5. **Format results** into user-friendly bullet points
+#         6. **Identify patterns** and notable findings
+        
+#         Analysis focus:
+#         - What entities were found and their significance
+#         - How entities relate to each other
+#         - Patterns or trends in the data
+#         - Completeness and quality of results
+#         - Any gaps or limitations in the data
+        
+#         Format ALL results (don't truncate) with clear structure.
+#         """,
+#         expected_output="Comprehensive results analysis containing: formatted list of all entities found, relationship mappings, relevance scoring, pattern identification, data quality assessment, and structured presentation of findings",
+#         agent=agent,
+#         context=context
+#     )
+
+def create_insights_synthesis_task(agent, query: str, context: list = None):
+    """Task 4: Analyze raw results and create the final response."""
+    return Task(
+        description=f"""
+        Analyze the raw JSON results from the executed Cypher queries and generate a final, user-facing explanation. The original user query was: "{query}".
+
+        You will receive the raw JSON data directly from the Query Executor agent as context. This data is a list of outputs from one or more Cypher queries.
+
+        Your specific task is to:
+        1.  Carefully examine the raw JSON results to understand what entities, properties, and relationships were found.
+        2.  Synthesize these findings into a concise summary. Focus on what the data reveals in direct response to the user's query.
+        3.  Write a single, continuous prose explanation that summarizes the key findings from the data. Do NOT explain the search process or the Cypher queries. The user only wants to understand the results.
+        4.  Extract the Cypher queries that were run from the context.
+        5.  Assemble the final output into the required Pydantic structure.
+        """,
+        expected_output="A single, valid JSON object that strictly conforms to the 'StructuredSearchResponse' Pydantic model. It must contain your prose 'explanation' summarizing the results, the raw JSON results, the executed Cypher queries, and the original query.",
+        agent=agent,
+        output_pydantic=StructuredSearchResponse,
+        context=context
+    )
+
+# LEGACY: Keep original search task for backward compatibility
 def create_search_task(agent, query: str, structured_output=False):
     """Create a task for natural language knowledge graph search using Neo4j MCP tools."""
     task = Task(
