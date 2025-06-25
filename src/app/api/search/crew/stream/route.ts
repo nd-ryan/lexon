@@ -22,7 +22,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ detail: 'Query parameter is required.' }, { status: 400 });
     }
 
-    const targetUrl = `${AI_BACKEND_URL}/api/ai/search/crew/stream`;
+    const cleanedUrl = AI_BACKEND_URL.replace(/\/$/, '');
+    const targetUrl = `${cleanedUrl}/api/ai/search/crew/stream`;
     console.log('Attempting to enqueue job at:', targetUrl);
 
     const response = await fetch(targetUrl, {
