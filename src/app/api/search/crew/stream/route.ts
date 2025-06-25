@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
     }
 
     const targetUrl = `${AI_BACKEND_URL}/api/ai/search/crew/stream`;
-    console.log('Attempting to stream from:', targetUrl);
+    console.log('Attempting to enqueue job at:', targetUrl);
 
     const response = await fetch(targetUrl, {
       method: 'POST',
@@ -34,28 +34,27 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify({ query }),
     });
 
-    console.log('Stream response status:', response.status);
-    console.log('Stream response ok:', response.ok);
+    console.log('Enqueue response status:', response.status);
+    console.log('Enqueue response ok:', response.ok);
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('Backend streaming error:', errorText);
+      console.error('Backend enqueue error:', errorText);
       return new Response(errorText, { status: response.status });
     }
 
-    // Forward the streaming response
-    return new Response(response.body, {
+    // This should return a JSON response with job_id
+    const result = await response.json();
+    console.log('Job enqueued successfully:', result);
+    
+    return new Response(JSON.stringify(result), {
       status: 200,
       headers: {
-        'Content-Type': 'text/plain',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': '*',
+        'Content-Type': 'application/json',
       },
     });
   } catch (error) {
     console.error('Stream proxy error:', error);
-    return new Response('An error occurred while streaming the request.', { status: 500 });
+    return new Response('An error occurred while processing the request.', { status: 500 });
   }
 } 
