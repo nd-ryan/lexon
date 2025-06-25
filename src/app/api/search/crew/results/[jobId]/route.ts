@@ -1,22 +1,22 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 
 const AI_BACKEND_URL = process.env.AI_BACKEND_URL || 'http://localhost:8000';
 const API_KEY = process.env.FASTAPI_API_KEY;
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { jobId: string } }
+  { params }: { params: Promise<{ jobId: string }> }
 ) {
-  const jobId = params.jobId;
+  const { jobId } = await params;
   console.log(`=== SSE Proxy for Job ID: ${jobId} ===`);
 
   if (!API_KEY) {
     console.error('FASTAPI_API_KEY is not set.');
-    return new Response('Internal server configuration error.', { status: 500 });
+    return new NextResponse('Internal server configuration error.', { status: 500 });
   }
 
   if (!jobId) {
-    return new Response('Job ID is required.', { status: 400 });
+    return new NextResponse('Job ID is required.', { status: 400 });
   }
 
   const targetUrl = `${AI_BACKEND_URL}/api/ai/search/results/${jobId}`;
@@ -35,11 +35,11 @@ export async function GET(
     if (!response.ok) {
         const errorText = await response.text();
         console.error(`Backend error for job ${jobId}:`, errorText);
-        return new Response(errorText, { status: response.status });
+        return new NextResponse(errorText, { status: response.status });
     }
 
     // Return a streaming response
-    return new Response(response.body, {
+    return new NextResponse(response.body, {
       status: 200,
       headers: {
         'Content-Type': 'text/event-stream',
@@ -50,6 +50,6 @@ export async function GET(
 
   } catch (error) {
     console.error(`Error proxying SSE for job ${jobId}:`, error);
-    return new Response('An error occurred while setting up the stream.', { status: 500 });
+    return new NextResponse('An error occurred while setting up the stream.', { status: 500 });
   }
 } 
