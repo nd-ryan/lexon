@@ -431,6 +431,14 @@ const SearchPage = () => {
         }
 
         const { token, backendUrl } = await tokenResponse.json();
+        
+        // Debug logging for JWT token
+        console.log('🔍 JWT Token received from Vercel API:');
+        console.log('🔍 Token length:', token?.length);
+        console.log('🔍 Token first 50 chars:', token?.substring(0, 50));
+        console.log('🔍 Backend URL:', backendUrl);
+        console.log('🔍 Full EventSource URL:', `${backendUrl}/api/ai/search/results/${job_id}?token=${token}`);
+        
         setStreamingStatus(`Connecting to results stream...`);
 
         // Step 3: Connect to the results stream using EventSource with token
@@ -473,7 +481,9 @@ const SearchPage = () => {
         };
 
         es.onerror = (err) => {
-          console.error("EventSource failed:", err);
+          console.error("❌ EventSource failed:", err);
+          console.error("❌ EventSource readyState:", es.readyState);
+          console.error("❌ EventSource URL:", es.url);
           setError('An error occurred while streaming results. The connection may have been lost.');
           setLoading(false);
           es.close();

@@ -6,10 +6,15 @@ This guide explains how to set up the secure JWT-based streaming authentication 
 
 The system uses JWT tokens to authenticate streaming connections while keeping sensitive credentials secure:
 
-1. **Frontend** → **Vercel API** (gets JWT token)
-2. **Frontend** → **Fly.io Backend** (direct connection with JWT)
+**Job Enqueueing Flow:**
+1. **Frontend** → **Vercel API** → **Python Backend** (secure proxy with API key)
+2. **Python Backend** enqueues job in **Redis Queue** using RQ
 
-This eliminates Vercel's 60-second timeout limitations while maintaining security.
+**Streaming Flow:**
+1. **Frontend** → **Vercel API** (gets JWT token)
+2. **Frontend** → **Python Backend** (direct connection with JWT)
+
+This eliminates Vercel's 60-second timeout limitations while maintaining security and proper job queue management.
 
 ## 📋 Environment Variables Setup
 
@@ -45,9 +50,9 @@ In your Vercel dashboard, add:
 
 ## 🚀 How It Works
 
-### 1. Job Enqueueing (Quick Operation)
+### 1. Job Enqueueing (Secure Proxy → Backend Queue)
 ```typescript
-// Still goes through Vercel API for security
+// Frontend → Vercel API (secure proxy) → Python Backend (actual enqueueing)
 const response = await fetch('/api/search/crew/stream', {
   method: 'POST',
   body: JSON.stringify({ query })
@@ -55,9 +60,14 @@ const response = await fetch('/api/search/crew/stream', {
 const { job_id } = await response.json();
 ```
 
-### 2. Token Generation (Secure)
+**What happens:**
+- Vercel API securely forwards request to Python backend
+- Python backend creates job in Redis queue using RQ (Redis Queue)
+- Background worker processes the job asynchronously
+
+### 2. Token Generation (Secure Authentication)
 ```typescript
-// Get JWT token from Vercel API
+// Get JWT token from Vercel API for streaming access
 const tokenResponse = await fetch('/api/auth/stream-token', {
   method: 'POST',
   body: JSON.stringify({ jobId: job_id })
@@ -65,18 +75,33 @@ const tokenResponse = await fetch('/api/auth/stream-token', {
 const { token, backendUrl } = await tokenResponse.json();
 ```
 
-### 3. Direct Streaming (No Timeout)
+### 3. Direct Streaming (Unlimited Duration)
 ```typescript
-// Connect directly to backend with JWT
+// Connect directly to backend with JWT token - bypasses Vercel timeout
 const es = new EventSource(`${backendUrl}/api/ai/search/results/${job_id}?token=${token}`);
 ```
 
-## 🔧 Backend Changes
+**What happens:**
+- Direct connection to Python backend (no Vercel proxy)
+- Backend streams results from Redis pub/sub
+- No 60-second timeout limitation
 
-The backend now validates JWT tokens on streaming endpoints:
+## 🔧 Backend Architecture
 
+### Job Queue System
 ```python
-@router.get("/search/results/{job_id}")
+# Job enqueueing (RQ + Redis)
+@router.post("/search/crew/stream")
+async def enqueue_search_job(request: QueryRequest):
+    job_id = str(uuid.uuid4())
+    search_queue.enqueue(run_search_crew, request.query, job_id, job_timeout="10m")
+    return {"job_id": job_id}
+```
+
+### Streaming with JWT Authentication
+```python
+# Streaming endpoint (separate router, no API key required)
+@streaming_router.get("/search/results/{job_id}")
 async def get_search_results(
     job_id: str,
     token_data: dict = Depends(validate_stream_token_async)
@@ -85,8 +110,15 @@ async def get_search_results(
     if token_data.get("jobId") != job_id:
         raise HTTPException(status_code=403, detail="Token not valid for this job")
     
-    # Your existing streaming logic...
+    # Stream from Redis pub/sub
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 ```
+
+### Key Components
+- **Redis Queue (RQ)**: Manages background job processing
+- **Background Workers**: Process AI search jobs asynchronously  
+- **Redis Pub/Sub**: Real-time job progress and results
+- **Separate Router**: Streaming endpoints bypass API key authentication
 
 ## 🌐 CORS Configuration
 

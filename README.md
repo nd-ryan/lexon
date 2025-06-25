@@ -40,13 +40,15 @@ OPENAI_API_KEY="your-openai-key"
 
 ## 📡 Streaming Architecture
 
-This project uses a secure JWT-based streaming system that bypasses Vercel's 60-second timeout limitations:
+This project uses a secure JWT-based streaming system with Redis job queue that bypasses Vercel's 60-second timeout limitations:
 
-- **Direct backend connections** for unlimited streaming duration
-- **JWT token authentication** for security
+- **Redis Queue (RQ)** for background job processing
+- **Direct backend connections** for unlimited streaming duration  
+- **JWT token authentication** for secure streaming access
+- **Redis pub/sub** for real-time progress updates
 - **No exposed credentials** in the frontend
 
-See [SETUP_STREAMING.md](./SETUP_STREAMING.md) for detailed setup instructions.
+See [SETUP_STREAMING.md](./SETUP_STREAMING.md) for setup instructions and [ARCHITECTURE.md](./ARCHITECTURE.md) for detailed system design.
 
 ## 🏗️ Architecture
 
