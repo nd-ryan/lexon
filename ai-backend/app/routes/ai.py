@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any, Generator, AsyncGenerator
+from app.lib.auth import validate_stream_token_async
 from app.crews.agents import (
     create_search_agent, create_document_agent, create_embeddings_agent,
     create_research_agent, create_writer_agent, MCPEnabledAgents, create_mcp_enabled_agents,
@@ -24,9 +25,11 @@ import logging
 import os
 import json
 import time
+import asyncio
 
 logger = logging.getLogger(__name__)
 router = APIRouter(dependencies=[Depends(get_api_key)])
+streaming_router = APIRouter()  # No API key dependency for streaming endpoints
 
 # Import models from separate module
 from app.models.search import (
@@ -770,14 +773,24 @@ async def enqueue_search_job(request: QueryRequest):
     
     return {"job_id": job_id}
 
-@router.get("/search/results/{job_id}")
-async def get_search_results(job_id: str):
+@streaming_router.get("/search/results/{job_id}")
+async def get_search_results(
+    job_id: str,
+    token_data: dict = Depends(validate_stream_token_async)
+):
     """
     A streaming endpoint that listens to a Redis channel for results
     from a background job and streams them to the client.
+    Requires valid JWT token for authentication.
     """
     from app.lib.queue import redis_conn
     import asyncio
+    
+    # Verify the token is for this specific job
+    if token_data.get("jobId") != job_id:
+        raise HTTPException(status_code=403, detail="Token not valid for this job")
+    
+    logger.info(f"Starting stream for job {job_id} for user {token_data.get('userId')}")
 
     async def event_stream():
         pubsub = redis_conn.pubsub()
@@ -796,6 +809,8 @@ async def get_search_results(job_id: str):
                         yield f"data: {json.dumps(data)}\n\n"
                         # Stop listening if the worker signals the end
                         if data.get("type") == "end":
+                            # Add a small delay to ensure the final message is fully delivered
+                            await asyncio.sleep(0.1)
                             break
                     except json.JSONDecodeError:
                         logger.warning(f"Received non-JSON message on channel {channel_name}: {message_data}")

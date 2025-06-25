@@ -1,36 +1,80 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Lexon - Legal Knowledge Graph Platform
 
-## Getting Started
+This is a [Next.js](https://nextjs.org) project with AI-powered legal document search and analysis.
 
-First, run the development server:
+## 🚀 Quick Start
 
+### Frontend (Next.js)
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### Backend (FastAPI)
+```bash
+cd ai-backend
+poetry install
+poetry run uvicorn app.main:app --reload
+```
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## 🔧 Configuration
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### Required Environment Variables
 
-## Learn More
+**Frontend (.env.local):**
+```env
+JWT_SECRET="your-secure-jwt-secret"
+AI_BACKEND_URL="https://your-backend.fly.dev"
+NEXTAUTH_SECRET="your-nextauth-secret"
+FASTAPI_API_KEY="your-api-key"
+```
 
-To learn more about Next.js, take a look at the following resources:
+**Backend (.env):**
+```env
+JWT_SECRET="your-secure-jwt-secret"  # Must match frontend
+FASTAPI_API_KEY="your-api-key"
+REDIS_URL="redis://localhost:6379"
+NEO4J_URI="bolt://localhost:7687"
+OPENAI_API_KEY="your-openai-key"
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## 📡 Streaming Architecture
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+This project uses a secure JWT-based streaming system that bypasses Vercel's 60-second timeout limitations:
 
-## Deploy on Vercel
+- **Direct backend connections** for unlimited streaming duration
+- **JWT token authentication** for security
+- **No exposed credentials** in the frontend
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+See [SETUP_STREAMING.md](./SETUP_STREAMING.md) for detailed setup instructions.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## 🏗️ Architecture
+
+- **Frontend**: Next.js with TypeScript, Tailwind CSS
+- **Backend**: FastAPI with CrewAI agents
+- **Database**: Neo4j knowledge graph + PostgreSQL
+- **Queue**: Redis with RQ for background jobs
+- **Authentication**: NextAuth.js with JWT tokens
+- **Deployment**: Vercel (frontend) + Fly.io (backend)
+
+## 📚 Learn More
+
+- [Next.js Documentation](https://nextjs.org/docs)
+- [FastAPI Documentation](https://fastapi.tiangolo.com/)
+- [CrewAI Documentation](https://docs.crewai.com/)
+- [Neo4j Documentation](https://neo4j.com/docs/)
+
+## 🚀 Deploy
+
+### Frontend (Vercel)
+The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new).
+
+### Backend (Fly.io)
+```bash
+cd ai-backend
+fly deploy
+```
+
+Note: Fly.io will automatically detect and use your `pyproject.toml` for Poetry projects.
+
+Make sure to set the required environment variables in both platforms.

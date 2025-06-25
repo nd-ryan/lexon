@@ -417,10 +417,24 @@ const SearchPage = () => {
           throw new Error('No job ID received from the server.');
         }
 
-        setStreamingStatus(`Job enqueued (ID: ${job_id}). Waiting for results...`);
+        setStreamingStatus(`Job enqueued (ID: ${job_id}). Getting secure access...`);
 
-        // Step 2: Connect to the results stream using EventSource
-        const es = new EventSource(`/api/search/crew/results/${job_id}`);
+        // Step 2: Get streaming token for secure access
+        const tokenResponse = await fetch('/api/auth/stream-token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jobId: job_id }),
+        });
+
+        if (!tokenResponse.ok) {
+          throw new Error('Failed to get streaming token');
+        }
+
+        const { token, backendUrl } = await tokenResponse.json();
+        setStreamingStatus(`Connecting to results stream...`);
+
+        // Step 3: Connect to the results stream using EventSource with token
+        const es = new EventSource(`${backendUrl}/api/ai/search/results/${job_id}?token=${token}`);
         setEventSource(es);
 
         es.onmessage = (event) => {
