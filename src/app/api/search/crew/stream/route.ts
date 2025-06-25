@@ -1,4 +1,4 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 
 const AI_BACKEND_URL = process.env.AI_BACKEND_URL || 'http://localhost:8000';
 const API_KEY = process.env.FASTAPI_API_KEY;
@@ -10,7 +10,7 @@ export async function POST(req: NextRequest) {
 
   if (!API_KEY) {
     console.error('FASTAPI_API_KEY is not set in the environment.');
-    return new Response('Internal server configuration error.', { status: 500 });
+    return NextResponse.json({ detail: 'Internal server configuration error.' }, { status: 500 });
   }
 
   try {
@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
     console.log('Query received:', query);
 
     if (!query) {
-      return new Response('Query parameter is required.', { status: 400 });
+      return NextResponse.json({ detail: 'Query parameter is required.' }, { status: 400 });
     }
 
     const targetUrl = `${AI_BACKEND_URL}/api/ai/search/crew/stream`;
@@ -40,21 +40,19 @@ export async function POST(req: NextRequest) {
     if (!response.ok) {
       const errorText = await response.text();
       console.error('Backend enqueue error:', errorText);
-      return new Response(errorText, { status: response.status });
+      return NextResponse.json({ detail: errorText }, { status: response.status });
     }
 
     // This should return a JSON response with job_id
     const result = await response.json();
     console.log('Job enqueued successfully:', result);
     
-    return new Response(JSON.stringify(result), {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
+    return NextResponse.json(result);
   } catch (error) {
     console.error('Stream proxy error:', error);
-    return new Response('An error occurred while processing the request.', { status: 500 });
+    return NextResponse.json({ 
+      detail: 'An error occurred while processing the request.',
+      debug: process.env.NODE_ENV === 'development' ? (error instanceof Error ? error.message : String(error)) : undefined
+    }, { status: 500 });
   }
 } 
