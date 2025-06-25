@@ -752,232 +752,294 @@ async def verify_mcp_tools():
             "available_tools": []
         }
 
-# Add streaming response for crew search
+# --- New Asynchronous Search Endpoints ---
+
 @router.post("/search/crew/stream")
-async def search_with_crew_stream(request: QueryRequest):
+async def enqueue_search_job(request: QueryRequest):
     """
-    Search with CrewAI agents using Server-Sent Events streaming.
-    Provides real-time updates during the AI processing.
-    Uses the new specialized multi-agent approach by default.
+    Accepts a search query, enqueues it as a background job,
+    and returns a job ID for the client to use for retrieving results.
     """
-    async def generate_stream() -> AsyncGenerator[str, None]:
-        try:
-            start_time = time.time()
-            
-            # Send initial status
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Initializing specialized AI search crew...', 'timestamp': time.time()})}\n\n"
-            
-            # Initialize MCP tools
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Setting up Neo4j MCP tools...', 'timestamp': time.time()})}\n\n"
-            
-            with MCPEnabledAgents() as mcp_context:
-                neo4j_mcp_tools = get_mcp_tools()
-                
-                if not neo4j_mcp_tools:
-                    error_msg = "Specialized crew requires MCP tools. Please check MCP tool configuration."
-                    yield f"data: {json.dumps({'type': 'error', 'message': error_msg, 'timestamp': time.time()})}\n\n"
-                    return
-                
-                yield f"data: {json.dumps({'type': 'status', 'message': f'MCP tools loaded: {len(neo4j_mcp_tools)} tools available', 'timestamp': time.time()})}\n\n"
-                yield f"data: {json.dumps({'type': 'status', 'message': 'Assembling specialized AI crew (5 agents, 5 tasks)...', 'timestamp': time.time()})}\n\n"
-                
-                # Define a callback for logging agent steps
-                def log_step_callback(agent_action):
-                    logger.info("--- AGENT STEP START ---")
-                    logger.info(f"Action: {agent_action}")
-                    logger.info("--- AGENT STEP END ---")
+    import uuid
+    from app.lib.queue import search_queue
+    from app.jobs.search_crew_job import run_search_crew
 
-                # Create specialized crew
-                crew = create_specialized_search_crew(
-                    request.query, 
-                    neo4j_mcp_tools,
-                    step_callback=log_step_callback
-                )
-                
-                print(f"Using specialized crew with agents: Schema Analyst, Query Generator, Query Executor, Results Analyst, Insights Synthesizer")
-                print(f"MCP tools available: {[tool.name for tool in neo4j_mcp_tools]}")
-                
-                # Execute with detailed progress updates
-                yield f"data: {json.dumps({'type': 'status', 'message': 'Agent 1/5: Schema Analyst analyzing database structure...', 'timestamp': time.time()})}\n\n"
-                yield f"data: {json.dumps({'type': 'progress', 'message': 'Agent 2/5: Query Generator creating optimized Cypher queries...', 'timestamp': time.time()})}\n\n"
-                yield f"data: {json.dumps({'type': 'progress', 'message': 'Agent 3/5: Query Executor running queries against Neo4j...', 'timestamp': time.time()})}\n\n"
-                yield f"data: {json.dumps({'type': 'progress', 'message': 'Agent 4/5: Results Analyst processing raw data...', 'timestamp': time.time()})}\n\n"
-                yield f"data: {json.dumps({'type': 'progress', 'message': 'Agent 5/5: Insights Synthesizer creating final analysis...', 'timestamp': time.time()})}\n\n"
-                
-                # Execute the specialized crew
-                result = crew.kickoff()
-                
-                execution_time = time.time() - start_time
-                
-                # Extract structured data from result
-                if hasattr(result, 'pydantic') and result.pydantic:
-                    print("Specialized crew: Using pydantic structured output")
-                    
-                    if isinstance(result.pydantic, StructuredSearchResponse):
-                        print("Specialized crew: Got complete StructuredSearchResponse from final agent!")
-                        final_response = result.pydantic
-                        final_response.execution_time = execution_time
-                    else:
-                        print(f"Specialized crew: Got {type(result.pydantic)}, creating wrapper response")
-                        final_response = StructuredSearchResponse(
-                            query=request.query,
-                            cypher_queries=["Could not be retrieved in fallback."],
-                            raw_results=[{"error": f"Agent returned an unexpected Pydantic model: {type(result.pydantic)}" , "data": str(result.pydantic)}],
-                            explanation=f"The final agent returned an unexpected structured output. The raw output is: {str(result.pydantic)}",
-                            execution_time=execution_time
-                        )
-                else:
-                    print("Specialized crew: Using fallback parsing")
-                    raw_result = result.raw if hasattr(result, 'raw') else str(result)
-                    
-                    final_response = StructuredSearchResponse(
-                        query=request.query,
-                        cypher_queries=["Could not be retrieved in fallback parsing."],
-                        raw_results=[{"error": "Could not be retrieved in fallback parsing."}],
-                        explanation=f"The agent failed to return a structured Pydantic response. The final raw output was: {raw_result}",
-                        execution_time=execution_time
-                    )
-                
-                # Send final result
-                yield f"data: {json.dumps({'type': 'complete', 'data': final_response.model_dump(), 'timestamp': time.time()})}\n\n"
-                
-        except Exception as e:
-            logger.error(f"Error in specialized crew search: {e}")
-            error_response = {
-                'type': 'error',
-                'message': str(e),
-                'timestamp': time.time()
-            }
-            yield f"data: {json.dumps(error_response)}\n\n"
+    job_id = str(uuid.uuid4())
+    # Set a 10-minute timeout for the job
+    search_queue.enqueue(run_search_crew, request.query, job_id, job_timeout="10m")
     
-    return StreamingResponse(
-        generate_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "*",
-        }
-    )
+    return {"job_id": job_id}
 
-@router.post("/search/crew/legacy/stream")
-async def search_with_legacy_crew_stream(request: QueryRequest):
+@router.get("/search/results/{job_id}")
+async def get_search_results(job_id: str):
     """
-    Search using legacy single-agent CrewAI approach for comparison.
-    This endpoint uses the original single agent with one complex task.
+    A streaming endpoint that listens to a Redis channel for results
+    from a background job and streams them to the client.
     """
-    async def generate_stream() -> AsyncGenerator[str, None]:
+    from app.lib.queue import redis_conn
+    import asyncio
+
+    async def event_stream():
+        pubsub = redis_conn.pubsub()
+        channel_name = f"job:{job_id}"
+        await asyncio.to_thread(pubsub.subscribe, channel_name)
+        
         try:
-            start_time = time.time()
+            while True:
+                # Use asyncio.to_thread to run the blocking get_message in a separate thread
+                message = await asyncio.to_thread(pubsub.get_message, ignore_subscribe_messages=True, timeout=60.0)
+                if message:
+                    # Decode message data
+                    message_data = message['data'].decode('utf-8')
+                    try:
+                        data = json.loads(message_data)
+                        yield f"data: {json.dumps(data)}\n\n"
+                        # Stop listening if the worker signals the end
+                        if data.get("type") == "end":
+                            break
+                    except json.JSONDecodeError:
+                        logger.warning(f"Received non-JSON message on channel {channel_name}: {message_data}")
+
+                # Prevent busy-waiting
+                await asyncio.sleep(0.1)
+        except asyncio.CancelledError:
+            # This is expected when the client disconnects
+            logger.info(f"Client disconnected from job {job_id}")
+            raise
+        finally:
+            # Clean up the subscription
+            logger.info(f"Closing pubsub for job {job_id}")
+            pubsub.unsubscribe(channel_name)
+            pubsub.close()
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+# Add streaming response for crew search
+# @router.post("/search/crew/stream")
+# async def search_with_crew_stream(request: QueryRequest):
+#     """
+#     Search with CrewAI agents using Server-Sent Events streaming.
+#     Provides real-time updates during the AI processing.
+#     Uses the new specialized multi-agent approach by default.
+#     """
+#     async def generate_stream() -> AsyncGenerator[str, None]:
+#         try:
+#             start_time = time.time()
             
-            yield f"data: {json.dumps({'type': 'status', 'message': 'Initializing legacy single-agent search...', 'timestamp': time.time()})}\n\n"
+#             # Send initial status
+#             yield f"data: {json.dumps({'type': 'status', 'message': 'Initializing specialized AI search crew...', 'timestamp': time.time()})}\n\n"
             
-            with MCPEnabledAgents() as mcp_context:
-                neo4j_mcp_tools = get_mcp_tools()
+#             # Initialize MCP tools
+#             yield f"data: {json.dumps({'type': 'status', 'message': 'Setting up Neo4j MCP tools...', 'timestamp': time.time()})}\n\n"
+            
+#             with MCPEnabledAgents() as mcp_context:
+#                 neo4j_mcp_tools = get_mcp_tools()
                 
-                if not neo4j_mcp_tools:
-                    error_msg = "Legacy crew requires MCP tools. Please check MCP tool configuration."
-                    yield f"data: {json.dumps({'type': 'error', 'message': error_msg, 'timestamp': time.time()})}\n\n"
-                    return
+#                 if not neo4j_mcp_tools:
+#                     error_msg = "Specialized crew requires MCP tools. Please check MCP tool configuration."
+#                     yield f"data: {json.dumps({'type': 'error', 'message': error_msg, 'timestamp': time.time()})}\n\n"
+#                     return
                 
-                yield f"data: {json.dumps({'type': 'status', 'message': f'MCP tools loaded: {len(neo4j_mcp_tools)} tools available', 'timestamp': time.time()})}\n\n"
-                yield f"data: {json.dumps({'type': 'status', 'message': 'Creating legacy single-agent crew...', 'timestamp': time.time()})}\n\n"
+#                 yield f"data: {json.dumps({'type': 'status', 'message': f'MCP tools loaded: {len(neo4j_mcp_tools)} tools available', 'timestamp': time.time()})}\n\n"
+#                 yield f"data: {json.dumps({'type': 'status', 'message': 'Assembling specialized AI crew (5 agents, 5 tasks)...', 'timestamp': time.time()})}\n\n"
                 
-                # Create legacy crew
-                crew = create_legacy_search_crew(request.query, neo4j_mcp_tools)
+#                 # Define a callback for logging agent steps
+#                 def log_step_callback(agent_action):
+#                     logger.info("--- AGENT STEP START ---")
+#                     logger.info(f"Action: {agent_action}")
+#                     logger.info("--- AGENT STEP END ---")
+
+#                 # Create specialized crew
+#                 crew = create_specialized_search_crew(
+#                     request.query, 
+#                     neo4j_mcp_tools,
+#                     step_callback=log_step_callback
+#                 )
                 
-                print(f"Using legacy single-agent crew with MCP tools: {[tool.name for tool in neo4j_mcp_tools]}")
+#                 print(f"Using specialized crew with agents: Schema Analyst, Query Generator, Query Executor, Results Analyst, Insights Synthesizer")
+#                 print(f"MCP tools available: {[tool.name for tool in neo4j_mcp_tools]}")
                 
-                yield f"data: {json.dumps({'type': 'progress', 'message': 'Single agent handling all tasks (schema, query, execution, analysis)...', 'timestamp': time.time()})}\n\n"
+#                 # Execute with detailed progress updates
+#                 yield f"data: {json.dumps({'type': 'status', 'message': 'Agent 1/5: Schema Analyst analyzing database structure...', 'timestamp': time.time()})}\n\n"
+#                 yield f"data: {json.dumps({'type': 'progress', 'message': 'Agent 2/5: Query Generator creating optimized Cypher queries...', 'timestamp': time.time()})}\n\n"
+#                 yield f"data: {json.dumps({'type': 'progress', 'message': 'Agent 3/5: Query Executor running queries against Neo4j...', 'timestamp': time.time()})}\n\n"
+#                 yield f"data: {json.dumps({'type': 'progress', 'message': 'Agent 4/5: Results Analyst processing raw data...', 'timestamp': time.time()})}\n\n"
+#                 yield f"data: {json.dumps({'type': 'progress', 'message': 'Agent 5/5: Insights Synthesizer creating final analysis...', 'timestamp': time.time()})}\n\n"
                 
-                # Execute legacy crew
-                result = crew.kickoff()
+#                 # Execute the specialized crew
+#                 result = crew.kickoff()
                 
-                execution_time = time.time() - start_time
+#                 execution_time = time.time() - start_time
                 
-                # Process result (same logic as original)
-                if hasattr(result, 'pydantic') and result.pydantic:
-                    if isinstance(result.pydantic, StructuredSearchResponse):
-                        final_response = result.pydantic
-                        final_response.execution_time = execution_time
-                        final_response.mcp_tools_used = True
-                    else:
-                        final_response = StructuredSearchResponse(
-                            success=True,
-                            query=request.query,
-                            total_results=1,
-                            results=[SearchResult(
-                                entity_type="Legacy Analysis",
-                                entity_id="legacy_analysis_1",
-                                name="Single-Agent Search Analysis",
-                                description="Analysis from legacy single-agent approach",
-                                properties={"analysis": str(result.pydantic)},
-                                relationships=[],
-                                relevance_score=1.0
-                            )],
-                            cypher_queries=["Cypher queries executed via single agent"],
-                            analysis=SearchAnalysis(
-                                query_interpretation=f"Single-agent interpretation: '{request.query}'",
-                                methodology=["Legacy single agent with all tasks"],
-                                key_insights=[str(result.pydantic)[:200] + "..." if len(str(result.pydantic)) > 200 else str(result.pydantic)],
-                                patterns_identified=[],
-                                limitations=["Legacy single-agent processing"],
-                                formatted_results=[str(result.pydantic)],
-                                raw_query_results=[]
-                            ),
-                            execution_time=execution_time,
-                            mcp_tools_used=True,
-                            agent_reasoning=[]
-                        )
-                else:
-                    raw_result = result.raw if hasattr(result, 'raw') else str(result)
-                    final_response = StructuredSearchResponse(
-                        success=True,
-                        query=request.query,
-                        total_results=1,
-                        results=[SearchResult(
-                            entity_type="Legacy Analysis",
-                            entity_id="legacy_analysis_1",
-                            name="Single-Agent Search Analysis", 
-                            description="Analysis from legacy single-agent approach",
-                            properties={"analysis": raw_result},
-                            relationships=[],
-                            relevance_score=1.0
-                        )],
-                        cypher_queries=["Cypher queries executed via single agent"],
-                        analysis=SearchAnalysis(
-                            query_interpretation=f"Single-agent interpretation: '{request.query}'",
-                            methodology=["Legacy single agent with all tasks"],
-                            key_insights=[raw_result[:200] + "..." if len(raw_result) > 200 else raw_result],
-                            patterns_identified=[],
-                            limitations=["Legacy single-agent processing - fallback parsing used"],
-                            formatted_results=[f"Legacy result: {raw_result}"],
-                            raw_query_results=[]
-                        ),
-                        execution_time=execution_time,
-                        mcp_tools_used=True,
-                        agent_reasoning=[]
-                    )
+#                 # Extract structured data from result
+#                 if hasattr(result, 'pydantic') and result.pydantic:
+#                     print("Specialized crew: Using pydantic structured output")
+                    
+#                     if isinstance(result.pydantic, StructuredSearchResponse):
+#                         print("Specialized crew: Got complete StructuredSearchResponse from final agent!")
+#                         final_response = result.pydantic
+#                         final_response.execution_time = execution_time
+#                     else:
+#                         print(f"Specialized crew: Got {type(result.pydantic)}, creating wrapper response")
+#                         final_response = StructuredSearchResponse(
+#                             query=request.query,
+#                             cypher_queries=["Could not be retrieved in fallback."],
+#                             raw_results=[{"error": f"Agent returned an unexpected Pydantic model: {type(result.pydantic)}" , "data": str(result.pydantic)}],
+#                             explanation=f"The final agent returned an unexpected structured output. The raw output is: {str(result.pydantic)}",
+#                             execution_time=execution_time
+#                         )
+#                 else:
+#                     print("Specialized crew: Using fallback parsing")
+#                     raw_result = result.raw if hasattr(result, 'raw') else str(result)
+                    
+#                     final_response = StructuredSearchResponse(
+#                         query=request.query,
+#                         cypher_queries=["Could not be retrieved in fallback parsing."],
+#                         raw_results=[{"error": "Could not be retrieved in fallback parsing."}],
+#                         explanation=f"The agent failed to return a structured Pydantic response. The final raw output was: {raw_result}",
+#                         execution_time=execution_time
+#                     )
                 
-                yield f"data: {json.dumps({'type': 'complete', 'data': final_response.model_dump(), 'timestamp': time.time()})}\n\n"
+#                 # Send final result
+#                 yield f"data: {json.dumps({'type': 'complete', 'data': final_response.model_dump(), 'timestamp': time.time()})}\n\n"
                 
-        except Exception as e:
-            logger.error(f"Error in legacy crew search: {e}")
-            error_response = {
-                'type': 'error',
-                'message': str(e),
-                'timestamp': time.time()
-            }
-            yield f"data: {json.dumps(error_response)}\n\n"
+#         except Exception as e:
+#             logger.error(f"Error in specialized crew search: {e}")
+#             error_response = {
+#                 'type': 'error',
+#                 'message': str(e),
+#                 'timestamp': time.time()
+#             }
+#             yield f"data: {json.dumps(error_response)}\n\n"
     
-    return StreamingResponse(
-        generate_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "*",
-        }
-    )
+#     return StreamingResponse(
+#         generate_stream(),
+#         media_type="text/event-stream",
+#         headers={
+#             "Cache-Control": "no-cache",
+#             "Connection": "keep-alive",
+#             "Access-Control-Allow-Origin": "*",
+#             "Access-Control-Allow-Headers": "*",
+#         }
+#     )
+
+# @router.post("/search/crew/legacy/stream")
+# async def search_with_legacy_crew_stream(request: QueryRequest):
+#     """
+#     Search using legacy single-agent CrewAI approach for comparison.
+#     This endpoint uses the original single agent with one complex task.
+#     """
+#     async def generate_stream() -> AsyncGenerator[str, None]:
+#         try:
+#             start_time = time.time()
+            
+#             yield f"data: {json.dumps({'type': 'status', 'message': 'Initializing legacy single-agent search...', 'timestamp': time.time()})}\n\n"
+            
+#             with MCPEnabledAgents() as mcp_context:
+#                 neo4j_mcp_tools = get_mcp_tools()
+                
+#                 if not neo4j_mcp_tools:
+#                     error_msg = "Legacy crew requires MCP tools. Please check MCP tool configuration."
+#                     yield f"data: {json.dumps({'type': 'error', 'message': error_msg, 'timestamp': time.time()})}\n\n"
+#                     return
+                
+#                 yield f"data: {json.dumps({'type': 'status', 'message': f'MCP tools loaded: {len(neo4j_mcp_tools)} tools available', 'timestamp': time.time()})}\n\n"
+#                 yield f"data: {json.dumps({'type': 'status', 'message': 'Creating legacy single-agent crew...', 'timestamp': time.time()})}\n\n"
+                
+#                 # Create legacy crew
+#                 crew = create_legacy_search_crew(request.query, neo4j_mcp_tools)
+                
+#                 print(f"Using legacy single-agent crew with MCP tools: {[tool.name for tool in neo4j_mcp_tools]}")
+                
+#                 yield f"data: {json.dumps({'type': 'progress', 'message': 'Single agent handling all tasks (schema, query, execution, analysis)...', 'timestamp': time.time()})}\n\n"
+                
+#                 # Execute legacy crew
+#                 result = crew.kickoff()
+                
+#                 execution_time = time.time() - start_time
+                
+#                 # Process result (same logic as original)
+#                 if hasattr(result, 'pydantic') and result.pydantic:
+#                     if isinstance(result.pydantic, StructuredSearchResponse):
+#                         final_response = result.pydantic
+#                         final_response.execution_time = execution_time
+#                         final_response.mcp_tools_used = True
+#                     else:
+#                         final_response = StructuredSearchResponse(
+#                             success=True,
+#                             query=request.query,
+#                             total_results=1,
+#                             results=[SearchResult(
+#                                 entity_type="Legacy Analysis",
+#                                 entity_id="legacy_analysis_1",
+#                                 name="Single-Agent Search Analysis",
+#                                 description="Analysis from legacy single-agent approach",
+#                                 properties={"analysis": str(result.pydantic)},
+#                                 relationships=[],
+#                                 relevance_score=1.0
+#                             )],
+#                             cypher_queries=["Cypher queries executed via single agent"],
+#                             analysis=SearchAnalysis(
+#                                 query_interpretation=f"Single-agent interpretation: '{request.query}'",
+#                                 methodology=["Legacy single agent with all tasks"],
+#                                 key_insights=[str(result.pydantic)[:200] + "..." if len(str(result.pydantic)) > 200 else str(result.pydantic)],
+#                                 patterns_identified=[],
+#                                 limitations=["Legacy single-agent processing"],
+#                                 formatted_results=[str(result.pydantic)],
+#                                 raw_query_results=[]
+#                             ),
+#                             execution_time=execution_time,
+#                             mcp_tools_used=True,
+#                             agent_reasoning=[]
+#                         )
+#                 else:
+#                     raw_result = result.raw if hasattr(result, 'raw') else str(result)
+#                     final_response = StructuredSearchResponse(
+#                         success=True,
+#                         query=request.query,
+#                         total_results=1,
+#                         results=[SearchResult(
+#                             entity_type="Legacy Analysis",
+#                             entity_id="legacy_analysis_1",
+#                             name="Single-Agent Search Analysis", 
+#                             description="Analysis from legacy single-agent approach",
+#                             properties={"analysis": raw_result},
+#                             relationships=[],
+#                             relevance_score=1.0
+#                         )],
+#                         cypher_queries=["Cypher queries executed via single agent"],
+#                         analysis=SearchAnalysis(
+#                             query_interpretation=f"Single-agent interpretation: '{request.query}'",
+#                             methodology=["Legacy single agent with all tasks"],
+#                             key_insights=[raw_result[:200] + "..." if len(raw_result) > 200 else raw_result],
+#                             patterns_identified=[],
+#                             limitations=["Legacy single-agent processing - fallback parsing used"],
+#                             formatted_results=[f"Legacy result: {raw_result}"],
+#                             raw_query_results=[]
+#                         ),
+#                         execution_time=execution_time,
+#                         mcp_tools_used=True,
+#                         agent_reasoning=[]
+#                     )
+                
+#                 yield f"data: {json.dumps({'type': 'complete', 'data': final_response.model_dump(), 'timestamp': time.time()})}\n\n"
+                
+#         except Exception as e:
+#             logger.error(f"Error in legacy crew search: {e}")
+#             error_response = {
+#                 'type': 'error',
+#                 'message': str(e),
+#                 'timestamp': time.time()
+#             }
+#             yield f"data: {json.dumps(error_response)}\n\n"
+    
+#     return StreamingResponse(
+#         generate_stream(),
+#         media_type="text/event-stream",
+#         headers={
+#             "Cache-Control": "no-cache",
+#             "Connection": "keep-alive",
+#             "Access-Control-Allow-Origin": "*",
+#             "Access-Control-Allow-Headers": "*",
+#         }
+#     )

@@ -1,0 +1,2 @@
+web: uvicorn app.main:app --reload --port 8000
+worker: OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES python worker.py 

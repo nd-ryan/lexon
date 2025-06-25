@@ -325,6 +325,7 @@ const SearchPage = () => {
   const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
   const [streamingStatus, setStreamingStatus] = useState<string>('');
   const [streamingProgress, setStreamingProgress] = useState<string[]>([]);
+  const [eventSource, setEventSource] = useState<EventSource | null>(null);
   const { status } = useSession();
   const router = useRouter();
 
@@ -335,6 +336,15 @@ const SearchPage = () => {
       fetchSearchHistory();
     }
   }, [status, router]);
+
+  // Effect to clean up EventSource on component unmount
+  useEffect(() => {
+    return () => {
+      if (eventSource) {
+        eventSource.close();
+      }
+    };
+  }, [eventSource]);
 
   const saveSearchToHistory = async (result: StructuredSearchResponse) => {
     try {
@@ -377,76 +387,86 @@ const SearchPage = () => {
       return;
     }
 
+    // Close any existing stream before starting a new one
+    if (eventSource) {
+      eventSource.close();
+    }
+
     setLoading(true);
     setError('');
     setSearchResult(null);
-    setStreamingStatus('');
+    setStreamingStatus('Enqueueing search job...');
     setStreamingProgress([]);
 
     try {
-      // Use streaming endpoint for crew search
       if (searchType === 'crew') {
-        const response = await fetch('/api/search/crew/stream', {
+        // Step 1: Enqueue the job and get a job ID
+        const enqueueResponse = await fetch('/api/search/crew/stream', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ query }),
         });
 
-        if (!response.ok) {
-          throw new Error('Failed to start streaming search');
+        if (!enqueueResponse.ok) {
+          const errorText = await enqueueResponse.text();
+          throw new Error(`Failed to enqueue search job: ${errorText}`);
         }
 
-        const reader = response.body?.getReader();
-        const decoder = new TextDecoder();
-
-        if (!reader) {
-          throw new Error('Failed to get response reader');
+        const { job_id } = await enqueueResponse.json();
+        if (!job_id) {
+          throw new Error('No job ID received from the server.');
         }
 
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
+        setStreamingStatus(`Job enqueued (ID: ${job_id}). Waiting for results...`);
 
-            const chunk = decoder.decode(value);
-            const lines = chunk.split('\n\n');
+        // Step 2: Connect to the results stream using EventSource
+        const es = new EventSource(`/api/search/crew/results/${job_id}`);
+        setEventSource(es);
 
-            for (const line of lines) {
-              if (line.startsWith('data: ')) {
-                try {
-                  const data = JSON.parse(line.slice(6));
-                  
-                  switch (data.type) {
-                    case 'status':
-                    case 'progress':
-                      setStreamingStatus(data.message);
-                      setStreamingProgress(prev => [...prev, data.message]);
-                      break;
-                    case 'warning':
-                      setStreamingStatus(data.message);
-                      setStreamingProgress(prev => [...prev, `⚠️ ${data.message}`]);
-                      break;
-                    case 'complete':
-                      setSearchResult(data.data);
-                      setStreamingStatus('Search completed!');
-                      if (data.data.success) {
-                        saveSearchToHistory(data.data);
-                      }
-                      break;
-                    case 'error':
-                      throw new Error(data.message);
+        es.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            
+            switch (data.type) {
+              case 'status':
+              case 'progress':
+                setStreamingStatus(data.message);
+                setStreamingProgress(prev => [...prev, data.message]);
+                break;
+              case 'warning':
+                setStreamingStatus(`Warning: ${data.message}`);
+                setStreamingProgress(prev => [...prev, `⚠️ ${data.message}`]);
+                break;
+              case 'complete':
+              case 'end': // The backend uses 'end' to signal completion
+                setStreamingStatus('Search completed!');
+                setLoading(false); // Stop loading indicator
+                if (data.data) {
+                  setSearchResult(data.data);
+                  if (data.data.success) {
+                    saveSearchToHistory(data.data);
                   }
-                } catch (parseError) {
-                  console.error('Error parsing SSE data:', parseError);
                 }
-              }
+                es.close();
+                setEventSource(null);
+                break;
+              case 'error':
+                throw new Error(data.message || 'An error occurred in the search job.');
             }
+          } catch (parseError) {
+            console.error('Error parsing SSE data:', parseError, 'Raw data:', event.data);
           }
-        } finally {
-          reader.releaseLock();
-        }
+        };
+
+        es.onerror = (err) => {
+          console.error("EventSource failed:", err);
+          setError('An error occurred while streaming results. The connection may have been lost.');
+          setLoading(false);
+          es.close();
+          setEventSource(null);
+        };
       } else {
-        // Use regular endpoint for basic search
+        // This is the logic for a non-streaming, basic search (unchanged)
         const res = await fetch('/api/search', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -463,11 +483,12 @@ const SearchPage = () => {
         if (data.success) {
           saveSearchToHistory(data);
         }
+        setLoading(false);
       }
     } catch (error) {
-      setError('An error occurred. Please try again.');
+      const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred.';
+      setError(`An error occurred: ${errorMessage}`);
       console.error("Search failed:", error);
-    } finally {
       setLoading(false);
     }
   };
