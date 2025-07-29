@@ -1,7 +1,7 @@
 import os
 import json
 from app.crews.crew import create_specialized_search_crew
-from app.crews.agents import MCPEnabledAgents, get_mcp_tools
+from app.crews.utils.mcp_integration import MCPEnabledAgents, get_mcp_tools
 from app.lib.queue import redis_conn
 import logging
 
@@ -54,6 +54,7 @@ def run_search_crew(query: str, job_id: str):
             else:
                 # Handle fallback if Pydantic model fails
                 final_response = {
+                    "success": False,
                     "explanation": f"The agent failed to return a structured Pydantic response. The final raw output was: {result.raw if hasattr(result, 'raw') else str(result)}",
                     "raw_results": [],
                     "cypher_queries": [],

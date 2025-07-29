@@ -1,0 +1,84 @@
+schema_analysis_task:
+  description: "Your one and only task is to call the `get_neo4j_schema` tool to retrieve the complete database schema. Then, return its direct output."
+  expected_output: "The direct, raw, unmodified JSON output from the `get_neo4j_schema` tool. Nothing else."
+
+query_generation_task:
+  description: |
+    Generate optimal Cypher queries for the user query using the schema analysis from the previous task.
+    
+    You will receive the schema analysis results from the Schema Analyst agent as context.
+    
+    Your specific task is to:
+    1. **Analyze the user query** to understand intent.
+    2. **Use the provided schema analysis** to identify relevant node types and relationships.
+    3. **Generate 3 distinct Cypher queries** following the guidance below:
+
+    **Query Generation Guidance:**
+    - **Use fuzzy search** for string matching (e.g., `CONTAINS` or `STARTS WITH`) and ensure all comparisons are **case-insensitive** by using `toLower()`.
+    - If the user searches for a proper noun (e.g., a specific case name or doctrine), consider that it might be stored as an **acronym** in the database and include that in your search logic.
+    - `primary_query`: The most direct query to answer the user's request.
+    - `alternative_query`: A broader search including related concepts or synonyms.
+    - `fallback_query`: A simpler, more general query to run if the others fail or return no results.
+
+    4. **Format your output** as a single JSON object that strictly conforms to the `GeneratedCypherQueries` Pydantic model.
+  expected_output: "A single, valid JSON object with three keys: `primary_query`, `alternative_query`, and `fallback_query`, each containing a raw Cypher query string."
+
+query_execution_task:
+  description: |
+    Execute the Cypher queries from the structured JSON object provided by the Query Generator agent.
+
+    You will receive a JSON object with keys `primary_query`, `alternative_query`, and `fallback_query`. Your task is to execute them with conditional logic:
+    
+    1.  **Execute the Primary Query**: Run the query from the `primary_query` field.
+    2.  **Check the Result**:
+        - If the query returns a non-empty list or any data, STOP. Your task is complete.
+        - If the query returns an empty list (`[]`) or no results, proceed to the next step.
+    3.  **Execute the Alternative Query**: Run the query from the `alternative_query` field.
+    4.  **Check the Result**:
+        - If this query returns results, STOP.
+        - If it returns no results, proceed to the next step.
+    5.  **Execute the Fallback Query**: Run the query from the `fallback_query` field.
+    
+    **Your final output for this task must be ONLY the raw JSON results from the *first* query that successfully returned data.** Do not include any of your own text, explanations, or summaries.
+  expected_output: "The direct, raw, unmodified JSON output from the first successfully executed query that returned data. Nothing else."
+
+insights_synthesis_task:
+  description: |
+    Analyze the raw JSON results from the executed Cypher queries and generate a final, user-facing explanation.
+
+    You will receive the raw JSON data directly from the Query Executor agent as context. This data is a list of outputs from one or more Cypher queries.
+
+    Your specific task is to:
+    1.  Carefully examine the raw JSON results to understand what entities, properties, and relationships were found.
+    2.  Synthesize these findings into a concise summary. Focus on what the data reveals in direct response to the user's query.
+    3.  Write a single, continuous prose explanation that summarizes the key findings from the data. Do NOT explain the search process or the Cypher queries. The user only wants to understand the results.
+    4.  Extract the Cypher queries that were run from the context.
+    5.  Assemble the final output into the required Pydantic structure.
+  expected_output: "A single, valid JSON object that strictly conforms to the 'StructuredSearchResponse' Pydantic model. It must contain your prose 'explanation' summarizing the results, the raw JSON results, the executed Cypher queries, and the original query."
+
+document_processing_task:
+  description: |
+    Process document using advanced AI-powered dynamic extraction that adapts to existing knowledge graph schema.
+    
+    Your process_document_tool now uses an enhanced 8-step AI-powered pipeline:
+    1. **Schema Analysis**: Query Neo4j to understand existing node types, relationships, and properties
+    2. **Document Text Extraction**: Extract clean text from the uploaded document
+    3. **Node Identification**: Use AI to identify ALL possible entity types (nodes) in the document
+    4. **Relationship Identification**: Use AI to identify ALL possible relationships between entities
+    5. **Schema Alignment**: Compare document metadata with existing schema and align naming/structure
+    6. **Content Extraction**: Use AI to extract actual data based on the aligned metadata structure
+    7. **Cypher Generation**: Generate dynamic MERGE queries for seamless data integration
+    8. **Neo4j Import**: Execute queries to merge new data with existing knowledge graph
+    
+    YOU MUST use the process_document_tool to complete this task.
+    
+    This tool will handle all 8 steps of the AI processing pipeline automatically.
+    
+    This AI approach ensures:
+    - Consistency with existing schema where applicable
+    - Discovery and integration of new entity types from documents
+    - Flexible adaptation to different document formats
+    - Intelligent relationship mapping
+    
+    Provide a comprehensive analysis of the AI processing results.
+  expected_output: "Comprehensive AI processing report containing: existing Neo4j schema analysis, complete inventory of identified document nodes/relationships, schema alignment results (what matched vs what's new), detailed extraction statistics by entity type, Cypher queries executed count, integration success status, and processing insights for optimization" 

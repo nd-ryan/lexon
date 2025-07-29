@@ -58,6 +58,12 @@ IMPORTANT: When filtering on text-based properties like names or descriptions, a
 For example, to find a case named "Schenck", do NOT use \`{case_name: 'Schenck'}\`. Instead, use \`WHERE toLower(c.case_name) CONTAINS 'schenck'\`. 
 This is more flexible and user-friendly. For ID properties (e.g., \`case_id\`, \`party_id\`), you should continue to use exact matches.
 
+CRITICAL: Neo4j v4.4+ has deprecated the exists(variable.property) syntax. You MUST use "variable.property IS NOT NULL" instead.
+- WRONG: WHERE exists(n.name)
+- CORRECT: WHERE n.name IS NOT NULL
+- WRONG: WHERE exists((n)-[:RELATIONSHIP]->())
+- CORRECT: WHERE (n)-[:RELATIONSHIP]->() (relationship existence checks don't need exists())
+
 You must not include any explanations, introductory text, or markdown formatting in your response. Only return the raw Cypher query.
 For example, if the user asks "show me all cases", you should return "MATCH (c:Case) RETURN c.case_name, c.summary".
 `;

@@ -3,6 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.routes.ai import router as ai_router, streaming_router
 import os
 from dotenv import load_dotenv
+import warnings
+# Suppress Pydantic deprecation warnings from dependencies like ChromaDB
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="chromadb")
+warnings.filterwarnings("ignore", message=".*PydanticDeprecatedSince.*")
 
 load_dotenv()
 

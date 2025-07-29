@@ -9,9 +9,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ detail: 'Internal server configuration error.' }, { status: 500 });
   }
   
-  // The 'mode' query parameter will distinguish between 'standard' and 'advanced'
-  const mode = req.nextUrl.searchParams.get('mode') || 'standard';
-  const endpoint = mode === 'advanced' ? '/api/ai/import-kg/advanced' : '/api/ai/import-kg';
+  // Always use the advanced (direct Neo4j) endpoint as it's more reliable
+  const endpoint = '/api/ai/import-kg/advanced';
 
   try {
     const formData = await req.formData();

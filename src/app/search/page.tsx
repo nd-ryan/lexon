@@ -608,9 +608,6 @@ const SearchPage = () => {
                             return 'Unknown';
                           })()}
                         </span>
-                        {historyItem.executionTime && (
-                          <span className="text-muted-foreground">⏱️ {historyItem.executionTime.toFixed(1)}s</span>
-                        )}
                         <span className="text-muted-foreground">{new Date(historyItem.createdAt).toLocaleDateString()}</span>
                       </div>
                     </div>

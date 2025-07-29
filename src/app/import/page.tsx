@@ -11,7 +11,7 @@ export default function ImportPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const [processingMode, setProcessingMode] = useState<'standard' | 'advanced'>('standard');
+
   const { status } = useSession();
   const router = useRouter();
 
@@ -54,7 +54,7 @@ export default function ImportPage() {
     formData.append('file', file);
 
     try {
-      const res = await fetch(`/api/import-kg?mode=${processingMode}`, {
+      const res = await fetch('/api/import-kg', {
         method: 'POST',
         body: formData,
       });
@@ -64,17 +64,13 @@ export default function ImportPage() {
       if (!res.ok) {
         setError(data.detail || 'An error occurred during upload.');
       } else {
-        // Handle the new CrewAI response format
-        if (data.type === 'crew_processing' || data.type === 'crew_processing_advanced') {
-          // Extract counts from the analysis if available, or show general success
-          const analysisText = data.analysis || '';
-          const mode = data.type === 'crew_processing_advanced' ? 'Advanced' : 'Standard';
-          const mcpInfo = data.mcp_tools_used ? ' (with MCP tools)' : '';
-          
-          setSuccess(`✅ ${mode} processing complete${mcpInfo}! File: "${data.filename}"\n\nAnalysis: ${analysisText.substring(0, 300)}${analysisText.length > 300 ? '...' : ''}`);
+        // Handle the response from advanced processing
+        if (data.success) {
+          const resultText = data.result || data.message || '';
+          setSuccess(`✅ Document processing complete! File: "${data.filename}"\n\nResult: ${resultText.substring(0, 300)}${resultText.length > 300 ? '...' : ''}`);
         } else {
-          // Fallback for any legacy response format
-          setSuccess(`Successfully imported: ${data.counts?.cases || 0} cases, ${data.counts?.parties || 0} parties, ${data.counts?.provisions || 0} provisions.`);
+          // Handle any error in the response
+          setError(data.error || 'Processing failed but no specific error was provided.');
         }
         setFile(null);
       }
@@ -120,37 +116,7 @@ export default function ImportPage() {
             />
           </div>
 
-          <div className="space-y-3">
-            <label className="text-sm font-medium text-gray-700">Processing Mode</label>
-            <div className="flex items-center space-x-6">
-              <label className="flex items-center space-x-2">
-                <input
-                  type="radio"
-                  value="standard"
-                  checked={processingMode === 'standard'}
-                  onChange={(e) => setProcessingMode(e.target.value as 'standard' | 'advanced')}
-                  className="text-blue-600"
-                />
-                <span className="text-sm text-gray-700">Standard</span>
-              </label>
-              <label className="flex items-center space-x-2">
-                <input
-                  type="radio"
-                  value="advanced"
-                  checked={processingMode === 'advanced'}
-                  onChange={(e) => setProcessingMode(e.target.value as 'standard' | 'advanced')}
-                  className="text-blue-600"
-                />
-                <span className="text-sm text-gray-700">Advanced (MCP)</span>
-              </label>
-            </div>
-            <p className="text-xs text-gray-500">
-              {processingMode === 'standard' 
-                ? 'AI agent processing with document analysis tools'
-                : 'Enhanced processing with direct Neo4j database tools'
-              }
-            </p>
-          </div>
+
 
           <div>
             <Button
