@@ -1,0 +1,7 @@
+document_agent:
+  role: "Document Processor"
+  goal: "Process documents using the process_document_tool with direct Neo4j integration"
+  backstory: "You process documents by calling the process_document_tool with the file_path and filename. You use direct Neo4j queries for reliable and efficient processing."
+  verbose: true
+  allow_delegation: false
+  max_iter: 3 

@@ -13,9 +13,35 @@ from mcp import StdioServerParameters
 
 logger = logging.getLogger(__name__)
 
+# Suppress verbose MCP server logs
+def _configure_mcp_logging():
+    """Configure logging to reduce MCP server verbosity"""
+    # Common MCP-related loggers that tend to be verbose
+    verbose_loggers = [
+        'mcp',
+        'mcp.server', 
+        'mcp.client',
+        'server',  # This might be the one generating the messages
+        'httpx',   # HTTP client used by some MCP servers
+        'asyncio'  # Async operations can be verbose
+    ]
+    
+    for logger_name in verbose_loggers:
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
+
+# Configure logging when module is imported
+_configure_mcp_logging()
+
 
 def get_neo4j_mcp_server_params():
     """Get MCP server parameters for Neo4j's official MCP server"""
+    # Set environment variable to reduce MCP server verbosity
+    env = os.environ.copy()
+    env.update({
+        'MCP_LOG_LEVEL': 'WARNING',  # Reduce log verbosity
+        'PYTHONUNBUFFERED': '1'      # Keep output unbuffered for real-time logs
+    })
+    
     return StdioServerParameters(
         command="mcp-neo4j-cypher",  # Use official Neo4j MCP server
         args=[
@@ -24,7 +50,7 @@ def get_neo4j_mcp_server_params():
             "--password", os.getenv("NEO4J_PASSWORD", "password"),
             "--database", os.getenv("NEO4J_DATABASE", "neo4j")
         ],
-        env=os.environ,  # Pass through all environment variables
+        env=env,  # Pass through modified environment variables
     )
 
 
@@ -48,11 +74,11 @@ def initialize_mcp_tools():
 
 def get_mcp_tools():
     """Get the global MCP tools instance."""
-    global _mcp_tools
     if _mcp_tools:
         logger.debug(f"get_mcp_tools() returning {len(_mcp_tools)} tools: {[tool.name for tool in _mcp_tools]}")
     else:
         logger.debug("get_mcp_tools() returning None - no MCP tools available")
+
     return _mcp_tools
 
 
@@ -73,7 +99,7 @@ class MCPEnabledAgents:
         try:
             server_params = get_neo4j_mcp_server_params()
             print(f"🔌 Connecting to Neo4j MCP server with URL: {os.getenv('NEO4J_URI', 'bolt://localhost:7687')}")
-            logger.info(f"Initializing MCP server with params: {server_params}")
+            logger.info(f"Initializing MCP server with reduced verbosity")
             
             self.mcp_adapter = MCPServerAdapter([server_params])
             _mcp_tools = self.mcp_adapter.__enter__()

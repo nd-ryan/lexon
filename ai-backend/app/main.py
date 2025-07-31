@@ -1,14 +1,22 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routes.ai import router as ai_router, streaming_router
+from app.lib.logging_config import configure_root_logging, setup_logger, setup_clean_file_logging
 import os
 from dotenv import load_dotenv
 import warnings
-# Suppress Pydantic deprecation warnings from dependencies like ChromaDB
-warnings.filterwarnings("ignore", category=DeprecationWarning, module="chromadb")
+# Suppress warnings to keep logs clean everywhere
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", message=".*PydanticDeprecatedSince.*")
+warnings.filterwarnings("ignore", message=".*Using extra keyword arguments.*")
 
 load_dotenv()
+
+# Set up logging with proper real-time output and clean file logging
+configure_root_logging()
+setup_clean_file_logging()
+logger = setup_logger("fastapi-main")
 
 app = FastAPI(title="CrewAI Backend", version="1.0.0")
 
@@ -28,6 +36,13 @@ app.add_middleware(
 # Include routers
 app.include_router(ai_router, prefix="/api/ai", tags=["AI"])
 app.include_router(streaming_router, prefix="/api/ai", tags=["Streaming"])
+
+@app.on_event("startup")
+async def startup_event():
+    """Log server startup with clean formatting."""
+    logger.info("🚀 FastAPI CrewAI Backend server starting up")
+    logger.info("✅ Logging configured for real-time output")
+    logger.info("📁 Clean logs saved to logs/app.log")
 
 @app.get("/")
 async def root():

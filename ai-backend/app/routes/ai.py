@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Depends
 from fastapi.responses import StreamingResponse
 from app.lib.auth import validate_stream_token_async
-from app.crews.crew import create_document_processing_crew
+from app.flow_import import ImportFlow
 from app.lib.security import get_api_key
 import logging
 import json
@@ -33,18 +33,22 @@ async def import_with_direct_processing(file: UploadFile = File(...)):
             temp_file_path = temp_file.name
         
         try:
-            # Use direct Neo4j approach (no MCP initialization)
+            # Use direct Neo4j approach with ImportFlow
             print(f"📄 Processing document: {file.filename}")
             print(f"Document processing started for: {file.filename}")
             
-            # Create and execute document processing crew
-            crew = create_document_processing_crew(temp_file_path, file.filename)
+            # Create and execute import flow
+            import_flow = ImportFlow()
             
-            print("🚀 Starting document processing crew...")
-            result = crew.kickoff()
+            # Set file details in flow state before kickoff (structured state management)
+            import_flow.state.file_path = temp_file_path
+            import_flow.state.filename = file.filename
+            
+            print("🚀 Starting import flow...")
+            result = import_flow.kickoff()
             
             # Extract result
-            result_text = result.raw if hasattr(result, 'raw') else str(result)
+            result_text = result if isinstance(result, str) else str(result)
             
             return {
                 "success": True,

@@ -1,0 +1,64 @@
+query_generation_task:
+  description: |
+    Generate optimal Cypher queries for the user query using the provided schema information.
+    
+    The schema information has been provided directly in this task description.
+    
+    Your specific task is to:
+    1. **Analyze the user query** to understand intent.
+    2. **Use the provided schema information** to identify relevant node types and relationships.
+    3. **Generate 3 distinct Cypher queries** following the guidance below:
+
+    **Query Generation Guidance:**
+    - **Use fuzzy search** for string matching (e.g., `CONTAINS` or `STARTS WITH`) and ensure all comparisons are **case-insensitive** by using `toLower()`.
+    - If the user searches for a proper noun (e.g., a specific case name or doctrine), consider that it might be stored as an **acronym** in the database and include that in your search logic.
+    - `primary_query`: The most direct query to answer the user's request.
+    - `alternative_query`: A broader search including related concepts or synonyms.
+    - `fallback_query`: A simpler, more general query to run if the others fail or return no results.
+
+    4. **Format your output** as a single JSON object that strictly conforms to the `GeneratedCypherQueries` Pydantic model.
+  expected_output: "A single, valid JSON object with three keys: `primary_query`, `alternative_query`, and `fallback_query`, each containing a raw Cypher query string."
+
+query_execution_task:
+  description: |
+    Execute the generated Cypher queries strategically against the Neo4j database.
+    
+    You will receive the JSON object containing three Cypher queries from the Query Generation agent.
+    
+    Your specific task is to:
+    1. **Parse the JSON object** from the previous task to extract the three queries: `primary_query`, `alternative_query`, and `fallback_query`.
+    2. **Execute the queries strategically**:
+       - Start with the `primary_query`
+       - If it returns results, stop and return those results
+       - If no results, try the `alternative_query`
+       - If still no results, try the `fallback_query`
+    3. **Use the available Cypher execution tools** to run the queries against the Neo4j database.
+    4. **Return the raw execution results** in QueryExecutionResults format with:
+       - `success`: true if any query returned results
+       - `raw_results`: the actual database results from the executed query
+       - `cypher_queries`: list of the executed queries (in order tried)
+
+    **Important:** Stop as soon as you get meaningful results from any query. Don't run all three unless necessary.
+    Focus only on executing queries and returning raw results - no analysis or explanation needed.
+  expected_output: "A JSON object with the executed queries and their raw results, following the QueryExecutionResults Pydantic model format with raw_results containing the actual database data."
+
+insights_synthesis_task:
+  description: |
+    Create a comprehensive summary and analysis based on the execution results.
+    
+    You will receive a QueryExecutionResults object from the Query Execution agent containing the raw database results.
+    
+    Your specific task is to:
+    1. **Analyze the raw database results** to understand what information was found.
+    2. **Create a comprehensive summary** that directly answers the user's original question: "{query}".
+    3. **Provide meaningful insights** that include:
+       - A clear, concise summary of the key findings
+       - Detailed analysis of the results in relation to the user's query
+       - Relevant context and connections between data points
+       - Direct answers to what the user was looking for
+    4. **Return a SearchInsights object** with just your analysis in the summary field.
+    
+    **IMPORTANT:** Focus only on providing clear, actionable insights and analysis. Do not copy or include the raw execution data (raw_results, cypher_queries) - that will be handled separately.
+    
+    Your summary should be comprehensive enough to stand alone as an answer to the user's query.
+  expected_output: "A SearchInsights object containing only a comprehensive summary and analysis in the summary field, without any raw execution data." 

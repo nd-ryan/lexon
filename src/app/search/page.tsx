@@ -7,38 +7,31 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 
-// Types for structured search response
-interface SearchResult {
-  entity_type: string;
-  entity_id?: string;
-  name?: string;
-  description?: string;
-  properties: Record<string, unknown>;
-  relationships: unknown[];
-  relevance_score?: number;
-}
-
-interface SearchAnalysis {
-  query_interpretation: string;
-  methodology: string[];
-  key_insights: string[];
-  patterns_identified: string[];
-  limitations: string[];
-  formatted_results: string[];
-  raw_query_results: unknown[];
-}
-
+// Types for structured search response - Updated to match backend StructuredSearchResponse
 interface StructuredSearchResponse {
   success: boolean;
-  query: string;
-  total_results: number;
-  results: SearchResult[];
+  explanation: string;
+  raw_results: any[]; // Changed from SearchResult[] to any[] to match backend
   cypher_queries: string[];
-  analysis: SearchAnalysis;
+  query: string;
   execution_time?: number;
-  mcp_tools_used: boolean;
-  agent_reasoning: unknown[];
 }
+
+// Search result structure from Neo4j raw results
+interface SearchResult {
+  [key: string]: unknown; // Neo4j results can have any structure
+}
+
+// Remove the old SearchAnalysis interface as it's not used by backend
+// interface SearchAnalysis {
+//   query_interpretation: string;
+//   methodology: string[];
+//   key_insights: string[];
+//   patterns_identified: string[];
+//   limitations: string[];
+//   formatted_results: string[];
+//   raw_query_results: unknown[];
+// }
 
 // Search history types
 interface SearchHistoryItem {
@@ -67,21 +60,14 @@ const getCardStyle = (key: string, index: number) => {
     { border: 'border-teal-200', header: 'bg-teal-50', text: 'text-teal-900', icon: '🎨' }
   ];
   
-  // Use specific icons for known keys
+  // Use specific icons for known keys (updated for backend fields)
   const keyIcons: Record<string, string> = {
-    query_interpretation: '🧠',
-    methodology: '⚡',
-    key_insights: '💡',
-    formatted_results: '📋',
-    results: '📊',
-    patterns_identified: '🔍',
-    limitations: '⚠️',
-    cypher_queries: '🔧',
-    raw_query_results: '📄',
-    execution_time: '⏱️',
-    total_results: '📈',
+    query: '❓',
     success: '✅',
-    agent_reasoning: '🤖'
+    explanation: '📝',
+    raw_results: '📊',
+    cypher_queries: '🔧',
+    execution_time: '⏱️'
   };
   
   const color = colors[index % colors.length];
@@ -179,7 +165,7 @@ const renderValue = (value: unknown, key: string): React.ReactNode => {
     }
 
     // Handle array of objects (like search results)
-    if (key === 'results' && value.every(item => typeof item === 'object' && item !== null)) {
+    if (key === 'raw_results' && value.every(item => typeof item === 'object' && item !== null)) {
       return (
         <div className="space-y-6">
           {value.map((result: Record<string, unknown>, index: number) => (
@@ -259,6 +245,11 @@ const renderValue = (value: unknown, key: string): React.ReactNode => {
 
 // Helper function to format structured search results dynamically
 const formatStructuredResults = (data: StructuredSearchResponse) => {
+  // Check if data is null or undefined
+  if (!data) {
+    return <div className="p-4 bg-red-50 rounded">No valid data to display</div>;
+  }
+  
   // Get all keys from the data object
   const dataKeys = Object.keys(data) as Array<keyof StructuredSearchResponse>;
   
@@ -464,9 +455,21 @@ const SearchPage = () => {
                 setStreamingStatus('Search completed!');
                 setLoading(false); // Stop loading indicator
                 if (data.data) {
-                  setSearchResult(data.data);
-                  if (data.data.success) {
-                    saveSearchToHistory(data.data);
+                  const resultData = data.data;
+                  
+                  // Ensure the data has the expected structure
+                  const structuredResult: StructuredSearchResponse = {
+                    success: resultData.success ?? true,
+                    explanation: resultData.explanation ?? "No explanation provided",
+                    raw_results: Array.isArray(resultData.raw_results) ? resultData.raw_results : [],
+                    cypher_queries: Array.isArray(resultData.cypher_queries) ? resultData.cypher_queries : [],
+                    query: resultData.query ?? "",
+                    execution_time: resultData.execution_time
+                  };
+                  
+                  setSearchResult(structuredResult);
+                  if (structuredResult.success) {
+                    saveSearchToHistory(structuredResult);
                   }
                 }
                 es.close();
@@ -596,11 +599,10 @@ const SearchPage = () => {
                         <span className="text-muted-foreground">
                           {(() => {
                             const result = historyItem.searchResult;
-                            // Try to find any numeric field that might represent result count
-                            if (result.total_results !== undefined) return `${result.total_results} results`;
-                            if (result.results && Array.isArray(result.results)) return `${result.results.length} results`;
-                            if (typeof result === 'object') {
-                              // Count all array properties
+                            // Use the correct backend field names
+                            if (result && result.raw_results && Array.isArray(result.raw_results)) return `${result.raw_results.length} results`;
+                            if (typeof result === 'object' && result !== null) {
+                              // Count all array properties as fallback
                               const arrays = Object.values(result).filter(v => Array.isArray(v));
                               const totalItems = arrays.reduce((sum, arr) => sum + arr.length, 0);
                               return totalItems > 0 ? `${totalItems} items` : 'No count';

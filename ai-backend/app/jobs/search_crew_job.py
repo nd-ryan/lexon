@@ -1,15 +1,16 @@
 import os
 import json
-from app.crews.crew import create_specialized_search_crew
-from app.crews.utils.mcp_integration import MCPEnabledAgents, get_mcp_tools
+import time
+from app.flow_search import SearchFlow
 from app.lib.queue import redis_conn
-import logging
+from app.lib.logging_config import setup_logger
 
-logger = logging.getLogger(__name__)
+# Use our custom logger setup
+logger = setup_logger("search-job")
 
 def run_search_crew(query: str, job_id: str):
     """
-    The background job that runs the specialized search crew.
+    The background job that runs the search flow.
     """
     channel_name = f"job:{job_id}"
 
@@ -20,67 +21,64 @@ def run_search_crew(query: str, job_id: str):
             "message": message
         }
         redis_conn.publish(channel_name, json.dumps(progress_update))
-        logger.info(f"Published progress for job {job_id}: {message}")
 
     try:
-        publish_progress("Starting specialized search crew...")
+        # Start timing the entire job
+        job_start_time = time.time()
+        logger.info(f"🚀 JOB START - Query: '{query}' for job: {job_id}")
+        publish_progress("Starting search flow...")
 
-        # Define a callback for logging agent steps and publishing progress
-        def step_callback(agent_action):
-            # A more detailed message can be constructed if the action object structure is known
-            # For now, we'll use a generic message based on the string representation
-            message = f"Processing step: {str(agent_action)}"
-            publish_progress(message)
+        # Create and execute the search flow
+        setup_start_time = time.time()
+        search_flow = SearchFlow()
+        
+        # Following CrewAI Flows pattern: set query in state before kickoff
+        logger.info(f"⚙️ JOB SETUP - Setting query in flow state: '{query}'")
+        search_flow.state.query = query
+        setup_duration = time.time() - setup_start_time
+        logger.info(f"⏱️ Setup completed in {setup_duration:.2f}s")
+        
+        publish_progress("Flow initialized. Starting search execution...")
+        
+        logger.info(f"🚀 JOB KICKOFF - About to call flow.kickoff() with query in state")
+        # Use CrewAI Flows pattern - kickoff without inputs since query is in state
+        flow_start_time = time.time()
+        result = search_flow.kickoff()
+        flow_duration = time.time() - flow_start_time
+        total_duration = time.time() - job_start_time
+        
+        logger.info(f"✅ JOB RESULT - Flow completed, result type: {type(result)}")
+        logger.info(f"⏱️ Flow execution: {flow_duration:.2f}s, Total job duration: {total_duration:.2f}s")
 
-        with MCPEnabledAgents() as mcp_context:
-            neo4j_mcp_tools = get_mcp_tools()
-            if not neo4j_mcp_tools:
-                publish_progress("Error: MCP tools are not available. Aborting job.")
-                raise ValueError("Job failed: MCP tools are not available.")
-
-            publish_progress("MCP tools loaded. Assembling specialized crew...")
-
-            crew = create_specialized_search_crew(
-                query,
-                neo4j_mcp_tools,
-                step_callback=step_callback
-            )
-            
-            publish_progress("Crew assembled. Starting analysis...")
-            result = crew.kickoff()
-
-            if hasattr(result, 'pydantic') and result.pydantic:
-                final_response = result.pydantic
-            else:
-                # Handle fallback if Pydantic model fails
-                final_response = {
-                    "success": False,
-                    "explanation": f"The agent failed to return a structured Pydantic response. The final raw output was: {result.raw if hasattr(result, 'raw') else str(result)}",
-                    "raw_results": [],
-                    "cypher_queries": [],
-                    "query": query,
-                }
-            
-            publish_progress("Analysis complete. Finalizing results...")
-            
-            # Combine the result and the end signal into a single message
-            final_message = {
-                "type": "end",
-                "data": final_response.model_dump() if hasattr(final_response, 'model_dump') else final_response
+        # The SearchFlow returns a StructuredSearchResponse directly
+        publish_progress("Analysis complete. Finalizing results...")
+        
+        # Convert result to dict format for JSON serialization
+        if hasattr(result, 'model_dump'):
+            final_response = result.model_dump()
+        elif hasattr(result, 'dict'):
+            final_response = result.dict()
+        else:
+            # Fallback for unexpected result format
+            final_response = {
+                "success": False,
+                "explanation": f"Unexpected result format: {str(result)}",
+                "raw_results": [],
+                "cypher_queries": [],
+                "query": query,
             }
+        
+        # Combine the result and the end signal into a single message
+        final_message = {
+            "type": "end",
+            "data": final_response
+        }
 
-            # Publish the final message to the job's Redis channel
-            redis_conn.publish(channel_name, json.dumps(final_message))
-            logger.info(f"Successfully published final result for job {job_id} to channel {channel_name}")
+        # Publish the final message to the job's Redis channel
+        redis_conn.publish(channel_name, json.dumps(final_message))
 
     except Exception as e:
-        logger.error(f"Error in search crew job {job_id}: {e}", exc_info=True)
+        logger.error(f"Error in search flow job {job_id}: {e}", exc_info=True)
         # Publish an error message to the channel
         error_message = json.dumps({"type": "error", "message": str(e)})
-        redis_conn.publish(channel_name, error_message)
-    finally:
-        # The 'end' message is now part of the successful result payload,
-        # so we don't need a separate publish here.
-        # If an error occurs, the error message above will be sent.
-        # A final 'end' could be sent in all cases, but this is cleaner for the happy path.
-        pass 
+        redis_conn.publish(channel_name, error_message) 

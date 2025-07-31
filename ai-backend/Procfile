@@ -1,2 +1,2 @@
 web: uvicorn app.main:app --host 0.0.0.0 --port 8000
-worker: OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES python worker.py 
+worker: PYTHONUNBUFFERED=1 OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES python worker.py 
