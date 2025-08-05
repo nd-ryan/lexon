@@ -1,52 +1,75 @@
 query_generation_task:
   description: |
-    Generate optimal Cypher queries for the user query using the provided schema information.
+    Generate a single optimal Cypher query for the user query: "{query}"
     
-    The schema information has been provided directly in this task description.
+    Using the following Neo4j schema information:
+    {schema}
     
     Your specific task is to:
     1. **Analyze the user query** to understand intent.
     2. **Use the provided schema information** to identify relevant node types and relationships.
-    3. **Generate 3 distinct Cypher queries** following the guidance below:
+    3. **Decide which node and relationships types could contain relevant information to answer the user's query.
+    4. **Generate a single Cypher query** following the guidance below:
 
     **Query Generation Guidance:**
     - **Use fuzzy search** for string matching (e.g., `CONTAINS` or `STARTS WITH`) and ensure all comparisons are **case-insensitive** by using `toLower()`.
     - If the user searches for a proper noun (e.g., a specific case name or doctrine), consider that it might be stored as an **acronym** in the database and include that in your search logic.
-    - `primary_query`: The most direct query to answer the user's request.
-    - `alternative_query`: A broader search including related concepts or synonyms.
-    - `fallback_query`: A simpler, more general query to run if the others fail or return no results.
+    - Bias the query towards searching multiple nodes and relationships types, rather than fixating on just one (this is because, later in the process, an AI will reason through the eventual results to decide how to best answer the user's query).
+    
+    4. **Format your output** as a single JSON object that strictly conforms to the `GeneratedCypherQuery` Pydantic model.
+  expected_output: "A single, valid JSON object with a single key: `generated_query`, containing a raw Cypher query string."
 
-    4. **Format your output** as a single JSON object that strictly conforms to the `GeneratedCypherQueries` Pydantic model.
-  expected_output: "A single, valid JSON object with three keys: `primary_query`, `alternative_query`, and `fallback_query`, each containing a raw Cypher query string."
+query_enhancement_task:
+  description: |
+    Enhance the initial Cypher query to ensure it returns complete data for all targeted nodes and relationships.
+    
+    You will receive the JSON object containing the initial Cypher query: {initial_query_json}
+    
+    Using the following Neo4j schema information:
+    {schema}
+    
+    Your specific task is to:
+    1. **Parse the initial query** from the JSON object to understand what nodes and relationships are being targeted.
+    2. **Analyze the schema** to identify all available properties for the targeted node types.
+    3. **Analyze the schema** to identify all possible relationship types connected to the targeted nodes.
+    4. **Enhance the query** to ensure it returns:
+       - All available properties for each returned node (based on schema)
+       - All first-order relationship names for each node
+       - The IDs of nodes that the relationships point to
+    5. **Preserve the original query logic** while expanding the RETURN clause and potentially adding relationship traversal.
+    
+    **Enhancement Guidelines:**
+    - Maintain the original WHERE conditions and matching patterns
+    - Expand the RETURN clause to include all node properties using `n.*` or explicitly list properties from schema
+    - Add relationship collection using patterns like `[(n)-[r]-(connected) | {{type: type(r), connectedId: id(connected)}}]`
+    - Ensure the enhanced query is syntactically valid and efficient
+    - Do not change the core search logic, only enhance the data retrieval
+    
+    **Format your output** as a single JSON object that strictly conforms to the `GeneratedCypherQuery` Pydantic model.
+  expected_output: "A single, valid JSON object with a single key: `generated_query`, containing the enhanced Cypher query string."
 
 query_execution_task:
   description: |
-    Execute the generated Cypher queries strategically against the Neo4j database.
+    Execute the generated Cypher query against the Neo4j database.
     
-    You will receive the JSON object containing three Cypher queries from the Query Generation agent.
+    You will receive the JSON object containing the Cypher query from the Query Enhancement agent: {generated_query_json}
     
     Your specific task is to:
-    1. **Parse the JSON object** from the previous task to extract the three queries: `primary_query`, `alternative_query`, and `fallback_query`.
-    2. **Execute the queries strategically**:
-       - Start with the `primary_query`
-       - If it returns results, stop and return those results
-       - If no results, try the `alternative_query`
-       - If still no results, try the `fallback_query`
-    3. **Use the available Cypher execution tools** to run the queries against the Neo4j database.
-    4. **Return the raw execution results** in QueryExecutionResults format with:
+    1. **Parse the JSON object** from the previous task to extract the query: `generated_query`.
+    2. **Use the available Cypher execution tools** to run the query against the Neo4j database.
+    3. **Return the raw execution results** in QueryExecutionResults format with:
        - `success`: true if any query returned results
        - `raw_results`: the actual database results from the executed query
-       - `cypher_queries`: list of the executed queries (in order tried)
 
-    **Important:** Stop as soon as you get meaningful results from any query. Don't run all three unless necessary.
-    Focus only on executing queries and returning raw results - no analysis or explanation needed.
-  expected_output: "A JSON object with the executed queries and their raw results, following the QueryExecutionResults Pydantic model format with raw_results containing the actual database data."
+    **Important:** Stop as soon as you get meaningful results from the query.
+    Focus only on executing the query and returning raw results - no analysis or explanation needed.
+  expected_output: "A JSON object with the raw database results, following the QueryExecutionResults Pydantic model format with raw_results containing the actual database data."
 
 insights_synthesis_task:
   description: |
     Create a comprehensive summary and analysis based on the execution results.
     
-    You will receive a QueryExecutionResults object from the Query Execution agent containing the raw database results.
+    You will receive a QueryExecutionResults object from the Query Execution agent containing the raw database results: {execution_results_json}
     
     Your specific task is to:
     1. **Analyze the raw database results** to understand what information was found.

@@ -2,6 +2,7 @@ import re
 import json
 import logging
 import time
+import uuid
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from io import BytesIO
@@ -116,7 +117,7 @@ INSTRUCTIONS:
 2. Identify EVERY distinct type of entity/object mentioned
 3. For each entity type, list ALL properties/attributes that are mentioned for that type
 4. Use PascalCase for node type names (e.g., "LegalCase", "Party", "LegalProvision")
-5. Include an ID property for each node type (e.g., "case_id", "party_id", "provision_id")
+5. Include identifying properties for each node type, but don't worry about IDs as they will be generated automatically
 6. Be comprehensive - don't miss any entity types, even if they seem minor
 7. Examples of entity types might include: Cases, Parties, Provisions, Doctrines, Arguments, Allegations, Rulings, Relief, Evidence, Courts, Judges, Dates, Citations, etc.
 8. Return ONLY the JSON, no other text
@@ -160,30 +161,34 @@ IDENTIFIED NODE TYPES:
 {', '.join(node_types)}
 
 TASK: Identify ALL possible relationships that exist between entities in this document.
+For each relationship, you MUST also define its inverse.
 
 OUTPUT FORMAT (JSON only):
 {{
   "RELATIONSHIP_TYPE1": {{
     "from_node": "NodeType1",
     "to_node": "NodeType2",
+    "inverse": "INVERSE_REL_1",
     "properties": ["prop1", "prop2"]
   }},
-  "RELATIONSHIP_TYPE2": {{
-    "from_node": "NodeType2", 
-    "to_node": "NodeType3",
-    "properties": ["prop1"]
+  "INVERSE_REL_1": {{
+    "from_node": "NodeType2",
+    "to_node": "NodeType1",
+    "inverse": "RELATIONSHIP_TYPE1",
+    "properties": ["prop1", "prop2"]
   }}
 }}
 
 INSTRUCTIONS:
 1. Read through the document and identify HOW entities relate to each other
 2. Look for explicit connections, references, associations, and implicit relationships
-3. Use UPPER_CASE_WITH_UNDERSCORES for relationship types (e.g., "HAS_PARTY", "CITES_PROVISION", "ALLEGES_AGAINST")
+3. Use UPPER_CASE_WITH_UNDERSCORES for relationship types (e.g., "HAS_PARTY", "CITES_PROVISION")
 4. For each relationship, specify which node types it connects
-5. List any properties that the relationship itself might have (dates, roles, types, etc.)
-6. Be comprehensive - capture ALL relationships, not just obvious ones
-7. Examples might include: HAS_PARTY, CITES_PROVISION, FILED_BY, DECIDED_BY, APPEALS_TO, REFERENCES, SUPPORTS, CONTRADICTS, etc.
-8. Return ONLY the JSON, no other text
+5. CRITICAL: For EVERY relationship, add an "inverse" property and define the reverse relationship. For example, if a `Case` `RAISES` an `Issue`, then an `Issue` is `RAISED_BY` a `Case`.
+6. List any properties that the relationship itself might have (dates, roles, types, etc.)
+7. Be comprehensive - capture ALL relationships, not just obvious ones
+8. Examples might include: HAS_PARTY (inverse: IS_PARTY_IN), CITES_PROVISION (inverse: IS_CITED_IN), FILED_BY (inverse: FILED), etc.
+9. Return ONLY the JSON, no other text
 """
 
         try:
@@ -220,12 +225,6 @@ INSTRUCTIONS:
 EXISTING NEO4J SCHEMA:
 Node Labels: {', '.join(schema_info.node_labels)}
 Relationship Types: {', '.join(schema_info.relationship_types)}
-
-Node Properties:
-{json.dumps(schema_info.node_properties, indent=2)}
-
-Relationship Properties:
-{json.dumps(schema_info.relationship_properties, indent=2)}
 """
         
         prompt = f"""
@@ -247,25 +246,29 @@ OUTPUT FORMAT (JSON only):
     "EXISTING_RELATIONSHIP": {{
       "from_node": "NodeType1",
       "to_node": "NodeType2",
-      "properties": ["prop1"]
+      "properties": ["prop1"],
+      "inverse": "EXISTING_INVERSE"
     }},
     "NEW_RELATIONSHIP": {{
       "from_node": "NodeType3",
       "to_node": "NodeType4", 
-      "properties": ["prop1"]
+      "properties": ["prop1"],
+      "inverse": "NEW_INVERSE"
     }}
   }}
 }}
 
 ALIGNMENT RULES:
-1. If a document node type is similar to an existing schema node, use the existing name
-2. If a document relationship is similar to an existing schema relationship, use the existing name
-3. Merge property lists - keep existing properties and add new ones from document
-4. Preserve any completely new node types or relationships that don't exist in schema
-5. Ensure node type names match exactly with existing schema where applicable
-6. Ensure relationship type names match exactly with existing schema where applicable
-7. Maintain consistency in naming conventions
-8. Return ONLY the JSON, no other text
+1. If a document node type is similar to an existing schema node, use the existing name.
+2. If a document relationship is similar to an existing schema relationship, use the existing name.
+3. CRITICAL: When aligning a relationship, check the `Relationship Types` from the existing schema. If the document has a relationship like `(A)-[X]->(B)` and you find a plausible inverse in the schema like `(B)-[Y]->(A)`, you MUST use `Y` as the value for the `inverse` property of `X`. If no existing inverse is found, use the inverse from the document analysis.
+4. Merge property lists - keep existing properties and add new ones from the document.
+5. Preserve any completely new node types or relationships that don't exist in the schema.
+6. Preserve the "inverse" property for all relationships.
+7. Ensure node type names match exactly with the existing schema where applicable.
+8. Ensure relationship type names match exactly with the existing schema where applicable.
+9. Maintain consistency in naming conventions.
+10. Return ONLY the JSON, no other text.
 """
 
         try:
@@ -296,6 +299,50 @@ ALIGNMENT RULES:
             logger.warning("Returning original metadata due to alignment error")
             return (nodes, relationships)
     
+    def _inject_inverse_relationships(self, relationships: List[Dict[str, Any]], aligned_relationships: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Inject inverse relationships into the extracted data, avoiding duplicates."""
+        
+        inversed_relationships = []
+        
+        # Create a map from a relationship type to its inverse
+        inverse_map = {
+            rel_type: details.get("inverse")
+            for rel_type, details in aligned_relationships.items()
+        }
+        
+        # Create a set of existing relationship tuples to check for duplicates
+        existing_relationships = set()
+        for rel in relationships:
+            rel_tuple = (rel.get("type"), rel.get("from_id"), rel.get("to_id"))
+            existing_relationships.add(rel_tuple)
+        
+        for rel in relationships:
+            # Add the original relationship
+            inversed_relationships.append(rel)
+            
+            rel_type = rel.get("type")
+            inverse_type = inverse_map.get(rel_type)
+            
+            # If an inverse is defined, check if it already exists before creating it
+            if inverse_type:
+                inverse_tuple = (inverse_type, rel.get("to_id"), rel.get("from_id"))
+                
+                # Only create the inverse if it doesn't already exist
+                if inverse_tuple not in existing_relationships:
+                    inverse_rel = {
+                        "type": inverse_type,
+                        "from_id": rel.get("to_id"),
+                        "to_id": rel.get("from_id"),
+                        "from_type": rel.get("to_type"),
+                        "to_type": rel.get("from_type"),
+                        "properties": rel.get("properties", {})
+                    }
+                    inversed_relationships.append(inverse_rel)
+                    # Add to existing set to prevent duplicates within this injection process
+                    existing_relationships.add(inverse_tuple)
+                
+        return inversed_relationships
+        
     def chunk_document(self, document_text: str, chunk_size: int = 12000, overlap: int = 1000) -> List[str]:
         """Split document into overlapping chunks for processing"""
         if len(document_text) <= chunk_size:
@@ -362,30 +409,48 @@ TASK: Extract ALL instances of the specified entities and relationships from thi
 OUTPUT FORMAT (JSON only):
 {{
   "nodes": {{
-    "NodeType1": [
-      {{"case_id": "C0001", "case_name": "Example Case", "case_citation": "123 U.S. 456"}},
-      {{"party_id": "P0001", "party_name": "Plaintiff Name", "role": "plaintiff"}}
+    "EntityType1": [
+      {{"property1": "value1", "property2": "value2", "property3": "value3"}},
+      {{"property1": "value1", "property2": "value2"}}
     ],
-    "NodeType2": [
-      {{"forum_id": "F0001", "forum_name": "Supreme Court", "forum_type": "appellate"}}
+    "EntityType2": [
+      {{"property1": "value1", "property2": "value2"}}
     ]
   }},
   "relationships": [
-    {{"type": "HEARD_IN", "from_id": "C0001", "from_type": "Case", "to_id": "F0001", "to_type": "Forum", "properties": {{}}}},
-    {{"type": "INVOLVES", "from_id": "C0001", "from_type": "Case", "to_id": "P0001", "to_type": "Party", "properties": {{}}}}
+    {{"type": "RELATIONSHIP_TYPE", "from_id": "identifying_value_of_source_entity", "from_type": "EntityType1", "to_id": "identifying_value_of_target_entity", "to_type": "EntityType2", "properties": {{"rel_property": "value"}}}},
+    {{"type": "ANOTHER_RELATIONSHIP", "from_id": "another_identifying_value", "from_type": "EntityType1", "to_id": "target_identifying_value", "to_type": "EntityType2", "properties": {{}}}}
+  ]
+}}
+
+EXAMPLE (for reference only - use actual document content):
+{{
+  "nodes": {{
+    "Case": [
+      {{"case_name": "Smith v. Jones", "case_citation": "123 F.3d 456", "year": "2020"}},
+      {{"case_name": "Doe v. Roe", "court": "Supreme Court"}}
+    ],
+    "Party": [
+      {{"party_name": "Smith", "role": "plaintiff"}},
+      {{"party_name": "Jones", "role": "defendant"}}
+    ]
+  }},
+  "relationships": [
+    {{"type": "INVOLVES", "from_id": "Smith v. Jones", "from_type": "Case", "to_id": "Smith", "to_type": "Party", "properties": {{}}}},
+    {{"type": "INVOLVES", "from_id": "Smith v. Jones", "from_type": "Case", "to_id": "Jones", "to_type": "Party", "properties": {{}}}}
   ]
 }}
 
 EXTRACTION REQUIREMENTS:
 1. Extract EVERY instance of each node type from this chunk - don't miss any
-2. CRITICAL: Use the EXACT IDs that appear in the document (e.g., C0001, F0001, P0001, etc.) - DO NOT generate new IDs
-3. If the document shows relationships like "C0001 → F0001", use "C0001" and "F0001" as the actual node IDs
-4. Fill in ALL available properties for each node based on document content
+2. DO NOT include any ID fields in the nodes - UUIDs will be generated automatically  
+3. Extract ALL available properties for each node based on document content - property names should match what's actually in the document
+4. For relationships, use identifying values (like names, titles, citations) as from_id and to_id values - these will be automatically mapped to UUIDs later
 5. Create ALL relationships between nodes as specified in the schema
 6. Only create relationships between nodes that exist in THIS chunk
 7. Use exact node type names and relationship types from the schema
 8. If a property value is not available, use null
-9. Ensure all relationships reference valid node IDs that exist in the nodes section
+9. Ensure relationship from_id/to_id values match actual identifying properties of the referenced nodes
 10. CRITICAL: Output ALL relationships completely - do not truncate or add comments
 11. Return ONLY complete, valid JSON with no comments or truncation
 """
@@ -425,25 +490,41 @@ EXTRACTION REQUIREMENTS:
                 logger.error(f"Error processing chunk {i+1}: {e}")
                 continue
         
-        # Deduplicate nodes by ID
-        print(f"      🔄 Deduplicating nodes across chunks...")
-        deduplicated_nodes = {}
-        for node_type, nodes in all_nodes.items():
-            seen_ids = set()
-            unique_nodes = []
-            for node in nodes:
-                node_id = node.get("node_id") or node.get(f"{node_type.lower()}_id", "unknown")
-                if node_id not in seen_ids:
-                    seen_ids.add(node_id)
-                    unique_nodes.append(node)
-            deduplicated_nodes[node_type] = unique_nodes
+        # Inject inverse relationships
+        all_relationships = self._inject_inverse_relationships(all_relationships, aligned_relationships)
         
-        # Deduplicate relationships
-        print(f"      🔄 Deduplicating relationships across chunks...")
+        # First deduplicate within document to avoid duplicate work
+        print(f"      🔄 Deduplicating nodes within document...")
+        deduplicated_nodes = self._deduplicate_nodes_by_properties(all_nodes)
+        
+        # Assign UUIDs to all nodes with upload_code-based deduplication
+        print(f"      🔑 Assigning UUIDs with upload_code deduplication...")
+        
+        # Track deduplication stats
+        self._reused_count = 0
+        self._new_count = 0
+        
+        id_mapping = self._assign_uuids_to_nodes(deduplicated_nodes)
+        
+        # Count reused vs new UUIDs
+        total_nodes = sum(len(nodes) for nodes in deduplicated_nodes.values())
+        print(f"      📊 UUID Assignment Summary: {total_nodes} nodes processed ({self._reused_count} reused, {self._new_count} new)")
+        print(f"      📋 ID Mapping contains {len(id_mapping)} entries for relationship processing")
+        
+        # Update relationships to use UUID references
+        print(f"      🔗 Mapping relationships to use UUID references...")
+        print(f"      📋 Processing {len(all_relationships)} relationships:")
+        for i, rel in enumerate(all_relationships[:3]):  # Show first 3 relationships
+            print(f"         Rel {i+1}: {rel.get('type')} from_id='{rel.get('from_id')}' to_id='{rel.get('to_id')}'")
+        if len(all_relationships) > 3:
+            print(f"         ... and {len(all_relationships) - 3} more")
+        updated_relationships = self._map_relationships_to_uuids(all_relationships, id_mapping)
+        
+        # Deduplicate relationships within document
+        print(f"      🔄 Deduplicating relationships...")
         seen_relationships = set()
         unique_relationships = []
-        for rel in all_relationships:
-            # Create a tuple for comparison
+        for rel in updated_relationships:
             rel_key = (rel.get("type"), rel.get("from_id"), rel.get("to_id"))
             if rel_key not in seen_relationships:
                 seen_relationships.add(rel_key)
@@ -636,14 +717,14 @@ EXTRACTION REQUIREMENTS:
             # ---------------------------------
             # Group relationships to keep each individual query manageable and to
             # guarantee that parameter names are consistent within a batch.
-            print(f"\\n      📋 DEBUG: Actual node IDs created:")
+            print(f"\n      📋 DEBUG: Actual node IDs created:")
             for node_type, nodes in extracted_data.nodes.items():
                 if nodes:
                     id_prop = self._determine_id_prop(node_type, nodes[0])
                     sample_ids = [node.get(id_prop, 'MISSING') for node in nodes[:3]]  # First 3 IDs
                     print(f"      • {node_type}({id_prop}): {sample_ids}{'...' if len(nodes) > 3 else ''}")
             
-            print(f"\\n      🔗 DEBUG: Relationship IDs being searched for:")
+            print(f"\n      🔗 DEBUG: Relationship IDs being searched for:")
             rel_batches = {}
             for rel in extracted_data.relationships:
                 if not rel.get("from_id") or not rel.get("to_id"):
@@ -747,6 +828,9 @@ EXTRACTION REQUIREMENTS:
                     total_nodes += case_result["nodes_added"]
                     total_rels += case_result["relationships_added"]
 
+                # Update property mappings after successful multi-case import
+                self._update_property_mappings_after_import()
+
                 return {
                     "success": True,
                     "filename": filename,
@@ -780,7 +864,7 @@ EXTRACTION REQUIREMENTS:
             print("📝 Step 6/8: Using AI to extract actual content from document...")
             logger.info("Step 6: Extracting document content...")
             extracted_data = self.extract_document_content(document_text, aligned_nodes, aligned_relationships, test_mode=False)
-            total_nodes = sum(len(nodes) for nodes in extracted_data.nodes.values())
+            total_nodes = sum(len(v) for v in extracted_data.nodes.values())
             print(f"   Extracted {total_nodes} total nodes and {len(extracted_data.relationships)} relationships")
             
             # Step 7: Generate Cypher queries
@@ -809,6 +893,10 @@ EXTRACTION REQUIREMENTS:
             print(f"   • Total relationships extracted: {len(extracted_data.relationships)}")
             print(f"   • Cypher queries executed: {len(queries)}")
             print(f"   • Processing status: {'SUCCESS' if success else 'FAILED'}")
+            
+            # Update property mappings after successful import
+            if success:
+                self._update_property_mappings_after_import()
             
             # Return processing results
             return {
@@ -899,17 +987,430 @@ EXTRACTION REQUIREMENTS:
             queries = self.generate_cypher_queries(extracted_data)
             success = self.execute_individual_queries(queries)
 
-        status = "✅" if success else "❌"
-        print(f"{status} {case_name} case processed and added to Neo4j successfully!  (nodes={node_count}, rels={rel_count})")
-        return {"success": success, "nodes_added": node_count, "relationships_added": rel_count}
+        # Run verification after database insertion
+        verification_report = self._verify_case_upload(case_name, extracted_data)
+        
+        # Determine overall success (both import and verification must pass)
+        overall_success = success and verification_report["success"]
+        
+        # Log results with verification status
+        status = "✅" if overall_success else "❌"
+        print(f"{status} {case_name} case processed (nodes={node_count}, rels={rel_count})")
+        
+        if verification_report["success"]:
+            print(f"      ✅ Verification passed")
+            if verification_report["warnings"]:
+                print(f"      ⚠️  {len(verification_report['warnings'])} warnings:")
+                for warning in verification_report["warnings"]:
+                    print(f"         • {warning}")
+        else:
+            print(f"      ❌ Verification failed:")
+            for error in verification_report["errors"]:
+                print(f"         • {error}")
+        
+        return {
+            "success": overall_success,
+            "nodes_added": node_count,
+            "relationships_added": rel_count,
+            "verification": verification_report
+        }
+
+
+
+    def _assign_uuids_to_nodes(self, all_nodes: Dict[str, List[Dict[str, Any]]]) -> Dict[str, str]:
+        """Assign UUIDs to all nodes using upload_code-based deduplication."""
+        id_mapping = {}
+        
+        for label, nodes in all_nodes.items():
+            id_prop = self._label_id_prop(label, {label: nodes})
+            
+            for node in nodes:
+                # Extract upload_code from document ID fields
+                upload_code = None
+                for key, value in node.items():
+                    if isinstance(value, str) and value.strip():
+                        if key.endswith("_id") or key == "id" or key == "_id":
+                            upload_code = value.strip()
+                            break
+                
+                # Get or create UUID based on upload_code (with deduplication)
+                final_uuid = self._get_or_create_uuid(label, upload_code)
+                
+                # Store specific upload_code property (e.g., case_upload_code, fact_pattern_upload_code)
+                if upload_code:
+                    # Convert CamelCase to snake_case for upload code property
+                    import re
+                    snake_case = re.sub(r'(?<!^)(?=[A-Z])', '_', label).lower()
+                    upload_code_prop = f"{snake_case}_upload_code"
+                    node[upload_code_prop] = upload_code
+                
+                # Build ID mapping for relationship processing
+                if upload_code:
+                    id_mapping[upload_code] = final_uuid
+                
+                # Also map by name/title fields for fallback identification
+                for key, value in node.items():
+                    if isinstance(value, str) and value.strip():
+                        if key in ["name", "title", "citation"] or key.endswith("_name"):
+                            id_mapping[value.strip()] = final_uuid
+                
+                # Remove any existing ID fields that came from the document
+                node.pop("_id", None)
+                node.pop("id", None)
+                
+                # Set the semantic ID property (e.g., case_id, party_id)
+                node[id_prop] = final_uuid
+        
+        return id_mapping
+
+    def _get_or_create_uuid(self, node_type: str, upload_code: str) -> str:
+        """Get existing UUID for upload_code or create a new one. Uses schema-based deduplication."""
+        self._uuid_was_reused = False  # Track for logging
+        
+        if not upload_code:
+            # No upload_code means no deduplication possible
+            return str(uuid.uuid4())
+        
+        try:
+            # Use specific upload code property (e.g., case_upload_code, fact_pattern_upload_code) 
+            import re
+            snake_case = re.sub(r'(?<!^)(?=[A-Z])', '_', node_type).lower()
+            upload_code_prop = f"{snake_case}_upload_code"
+            
+            # Dynamically determine ID property from Neo4j schema
+            id_prop = self._get_id_property_from_schema(node_type)
+            
+            print(f"         🔍 Checking for existing {node_type} with {upload_code_prop}='{upload_code}' -> {id_prop}")
+            
+            query = f"""
+            MATCH (n:{node_type} {{{upload_code_prop}: $upload_code}})
+            RETURN n.{id_prop} as existing_uuid
+            LIMIT 1
+            """
+            
+            result = neo4j_client.execute_query(query, {"upload_code": upload_code})
+            
+            if result and len(result) > 0:
+                existing_uuid = result[0].get("existing_uuid")
+                if existing_uuid:
+                    self._uuid_was_reused = True
+                    self._reused_count += 1
+                    print(f"         ♻️ Found existing {node_type}: {upload_code} -> {existing_uuid}")
+                    return str(existing_uuid)
+            
+            # No existing node found, create new UUID
+            new_uuid = str(uuid.uuid4())
+            self._new_count += 1
+            print(f"         ✨ Creating new {node_type}: {upload_code} -> {new_uuid}")
+            return new_uuid
+            
+        except Exception as e:
+            logger.warning(f"Error checking for existing {node_type} with upload_code {upload_code}: {e}")
+            # On error, create new UUID (fail-safe)
+            return str(uuid.uuid4())
+
+    def _get_id_property_from_schema(self, node_type: str) -> str:
+        """Dynamically determine the ID property for a node type from Neo4j schema."""
+        try:
+            # Query Neo4j for property keys of this node type
+            query = f"""
+            MATCH (n:{node_type})
+            WITH keys(n) as props
+            UNWIND props as prop
+            WITH DISTINCT prop
+            WHERE prop ENDS WITH '_id'
+            RETURN prop
+            ORDER BY 
+                CASE 
+                    WHEN prop = $preferred_prop THEN 1
+                    WHEN prop ENDS WITH '_id' THEN 2
+                    ELSE 3
+                END
+            LIMIT 1
+            """
+            
+            # Convert node type to snake_case for preferred property
+            import re
+            snake_case = re.sub(r'(?<!^)(?=[A-Z])', '_', node_type).lower()
+            preferred_prop = f"{snake_case}_id"
+            
+            result = neo4j_client.execute_query(query, {"preferred_prop": preferred_prop})
+            
+            if result and len(result) > 0:
+                id_prop = result[0].get("prop")
+                if id_prop:
+                    return id_prop
+            
+            # Fallback: use the preferred property name
+            return preferred_prop
+            
+        except Exception as e:
+            logger.warning(f"Error getting ID property for {node_type} from schema: {e}")
+            # Fallback to conventional naming
+            import re
+            snake_case = re.sub(r'(?<!^)(?=[A-Z])', '_', node_type).lower()
+            return f"{snake_case}_id"
+
+    def _deduplicate_nodes_by_properties(self, all_nodes: Dict[str, List[Dict[str, Any]]]) -> Dict[str, List[Dict[str, Any]]]:
+        """Deduplicate nodes by matching on key properties instead of IDs."""
+        deduplicated_nodes = {}
+        
+        for node_type, nodes in all_nodes.items():
+            if not nodes:
+                deduplicated_nodes[node_type] = []
+                continue
+                
+            unique_nodes = []
+            seen_signatures = set()
+            
+            # Determine the ID property name for this node type
+            id_prop = f"{node_type.lower()}_id"
+            
+            for node in nodes:
+                # Create a signature based on key properties (excluding the UUID ID field)
+                signature_props = {k: v for k, v in node.items() if k != id_prop}
+                
+                # Use name-like properties for deduplication if available
+                name_keys = [k for k in signature_props.keys() if 'name' in k.lower() or 'title' in k.lower()]
+                if name_keys:
+                    # Use the first name-like property as primary deduplication key
+                    primary_key = name_keys[0]
+                    signature = (node_type, signature_props.get(primary_key, "").lower().strip())
+                else:
+                    # Fall back to a hash of all non-id properties
+                    signature = (node_type, hash(frozenset(signature_props.items())))
+                
+                if signature not in seen_signatures:
+                    seen_signatures.add(signature)
+                    unique_nodes.append(node)
+                else:
+                    print(f"         🔄 Removing duplicate {node_type}: {signature}")
+            
+            deduplicated_nodes[node_type] = unique_nodes
+            
+        return deduplicated_nodes
+
+    def _map_relationships_to_uuids(self, relationships: List[Dict[str, Any]], id_mapping: Dict[str, str]) -> List[Dict[str, Any]]:
+        """Map relationship from_id and to_id values from identifying properties to generated UUIDs."""
+        updated_relationships = []
+        
+        for rel in relationships:
+            # Create a copy of the relationship
+            updated_rel = rel.copy()
+            
+            # Map from_id to UUID if available
+            from_id = str(rel.get("from_id", ""))
+            if from_id in id_mapping:
+                updated_rel["from_id"] = id_mapping[from_id]
+            else:
+                print(f"         ⚠️ No UUID mapping found for from_id: '{from_id}' - skipping relationship")
+                continue  # Skip relationships with unmapped identifiers
+            
+            # Map to_id to UUID if available
+            to_id = str(rel.get("to_id", ""))
+            if to_id in id_mapping:
+                updated_rel["to_id"] = id_mapping[to_id]
+            else:
+                print(f"         ⚠️ No UUID mapping found for to_id: '{to_id}' - skipping relationship")
+                continue  # Skip relationships with unmapped identifiers
+            
+            updated_relationships.append(updated_rel)
+        
+        print(f"         📊 Mapped {len(updated_relationships)} relationships (from {len(relationships)} original)")
+        return updated_relationships
+
+    def _verify_case_upload(self, case_name: str, extracted_data: ExtractedData) -> Dict[str, Any]:
+        """
+        Verify that case upload was successful and data quality is good.
+        
+        Focuses on reliable checks:
+        1. Database integrity - extracted data actually exists in Neo4j
+        2. Data quality - UUIDs, required fields, relationship integrity
+        
+        Returns verification report with any issues found.
+        """
+        verification_report = {
+            "case_name": case_name,
+            "success": True,
+            "warnings": [],
+            "errors": [],
+            "stats": {
+                "nodes_expected": sum(len(nodes) for nodes in extracted_data.nodes.values()),
+                "relationships_expected": len(extracted_data.relationships),
+                "nodes_verified": 0,
+                "relationships_verified": 0
+            }
+        }
+        
+        # 1. Data Quality Check
+        quality_issues = self._check_data_quality(extracted_data)
+        verification_report["warnings"].extend(quality_issues)
+        
+        # 2. Database Integrity Check
+        integrity_issues, verified_counts = self._check_database_integrity(extracted_data)
+        verification_report["errors"].extend(integrity_issues)
+        verification_report["stats"]["nodes_verified"] = verified_counts["nodes"]
+        verification_report["stats"]["relationships_verified"] = verified_counts["relationships"]
+        
+        # Mark as failed if any errors found
+        if verification_report["errors"]:
+            verification_report["success"] = False
+        
+        return verification_report
+
+    def _check_data_quality(self, extracted_data: ExtractedData) -> List[str]:
+        """Check for data quality issues in extracted data."""
+        warnings = []
+        
+        # Check nodes for quality issues
+        for node_type, nodes in extracted_data.nodes.items():
+            id_prop = f"{node_type.lower()}_id"
+            
+            for i, node in enumerate(nodes):
+                # UUID format validation
+                node_id = node.get(id_prop)
+                if not node_id:
+                    warnings.append(f"{node_type} node {i+1} missing {id_prop}")
+                elif not self._is_valid_uuid(str(node_id)):
+                    warnings.append(f"{node_type} node {i+1} has invalid UUID format: {node_id}")
+                
+                # Check for required fields (name-like properties)
+                name_fields = [k for k in node.keys() if 'name' in k.lower() or 'title' in k.lower()]
+                if not name_fields:
+                    warnings.append(f"{node_type} node {i+1} has no identifying name/title fields")
+                else:
+                    # Check if name fields are empty
+                    for field in name_fields:
+                        if not node.get(field) or str(node.get(field)).strip() == "":
+                            warnings.append(f"{node_type} node {i+1} has empty {field}")
+        
+        # Check relationships for quality issues
+        for i, rel in enumerate(extracted_data.relationships):
+            # Check required relationship fields
+            required_fields = ["type", "from_id", "to_id", "from_type", "to_type"]
+            for field in required_fields:
+                if not rel.get(field):
+                    warnings.append(f"Relationship {i+1} missing required field: {field}")
+            
+            # Validate UUIDs in relationships
+            if rel.get("from_id") and not self._is_valid_uuid(str(rel["from_id"])):
+                warnings.append(f"Relationship {i+1} has invalid from_id UUID: {rel['from_id']}")
+            if rel.get("to_id") and not self._is_valid_uuid(str(rel["to_id"])):
+                warnings.append(f"Relationship {i+1} has invalid to_id UUID: {rel['to_id']}")
+        
+        return warnings
+
+    def _check_database_integrity(self, extracted_data: ExtractedData) -> Tuple[List[str], Dict[str, int]]:
+        """Verify that extracted data was properly stored in Neo4j database."""
+        errors = []
+        verified_counts = {"nodes": 0, "relationships": 0}
+        
+        # Debug: Show what we're verifying
+        print(f"      🔍 Verification Debug - Node types in extracted_data: {list(extracted_data.nodes.keys())}")
+        print(f"      🔍 Verification Debug - Checking {len(extracted_data.relationships)} relationships")
+        
+        # Debug: Check what node types actually exist in database
+        try:
+            db_labels = neo4j_client.execute_query("CALL db.labels() YIELD label RETURN label ORDER BY label")
+            actual_labels = [record["label"] for record in db_labels]
+            print(f"      🔍 Verification Debug - Actual node types in database: {actual_labels}")
+        except:
+            print(f"      🔍 Verification Debug - Could not retrieve database labels")
+        
+        # Verify node insertion
+        for node_type, nodes in extracted_data.nodes.items():
+            id_prop = f"{node_type.lower()}_id"
+            
+            for node in nodes:
+                node_id = node.get(id_prop)
+                if not node_id:
+                    continue  # Skip nodes without IDs (already flagged in quality check)
+                
+                # Check if node exists in database
+                try:
+                    query = f"MATCH (n:{node_type} {{{id_prop}: $node_id}}) RETURN count(n) as count"
+                    result = neo4j_client.execute_query(query, {"node_id": node_id})
+                    
+                    if result and result[0]["count"] > 0:
+                        verified_counts["nodes"] += 1
+                    else:
+                        errors.append(f"Node not found in database: {node_type} {id_prop}={node_id}")
+                        
+                except Exception as e:
+                    errors.append(f"Database error checking {node_type} {node_id}: {str(e)}")
+        
+        # Verify relationship insertion
+        for i, rel in enumerate(extracted_data.relationships):
+            if not all(rel.get(field) for field in ["from_id", "to_id", "from_type", "to_type", "type"]):
+                continue  # Skip incomplete relationships (already flagged in quality check)
+            
+            from_type = rel["from_type"]
+            to_type = rel["to_type"]
+            rel_type = rel["type"]
+            from_id = rel["from_id"]
+            to_id = rel["to_id"]
+            
+            # Use the same logic as creation to determine ID properties
+            from_id_prop = self._label_id_prop(from_type, extracted_data.nodes)
+            to_id_prop = self._label_id_prop(to_type, extracted_data.nodes)
+            
+            # Debug the first few failing relationships
+            if i < 3:
+                print(f"      🔍 Checking rel {i+1}: {from_type}({from_id}) -{rel_type}-> {to_type}({to_id})")
+                print(f"      🔍 Looking for: {from_type}.{from_id_prop} and {to_type}.{to_id_prop}")
+            
+            try:
+                # Check if relationship exists in database
+                query = f"""
+                MATCH (a:{from_type} {{{from_id_prop}: $from_id}})
+                MATCH (b:{to_type} {{{to_id_prop}: $to_id}})
+                MATCH (a)-[r:{rel_type}]->(b)
+                RETURN count(r) as count
+                """
+                
+                result = neo4j_client.execute_query(query, {
+                    "from_id": from_id,
+                    "to_id": to_id
+                })
+                
+                if result and result[0]["count"] > 0:
+                    verified_counts["relationships"] += 1
+                else:
+                    # Debug: Check if the nodes exist separately
+                    node_check_a = neo4j_client.execute_query(f"MATCH (n:{from_type} {{{from_id_prop}: $id}}) RETURN count(n) as count", {"id": from_id})
+                    node_check_b = neo4j_client.execute_query(f"MATCH (n:{to_type} {{{to_id_prop}: $id}}) RETURN count(n) as count", {"id": to_id})
+                    
+                    node_a_exists = node_check_a and node_check_a[0]["count"] > 0
+                    node_b_exists = node_check_b and node_check_b[0]["count"] > 0
+                    
+                    error_msg = f"Relationship not found: {from_type}({from_id}) -{rel_type}-> {to_type}({to_id})"
+                    if not node_a_exists:
+                        error_msg += f" [FROM node {from_type} not found]"
+                    if not node_b_exists:
+                        error_msg += f" [TO node {to_type} not found]"
+                    
+                    errors.append(error_msg)
+                    
+            except Exception as e:
+                errors.append(f"Database error checking relationship {rel_type}: {str(e)}")
+        
+        return errors, verified_counts
+
+    def _is_valid_uuid(self, uuid_string: str) -> bool:
+        """Check if a string is a valid UUID format."""
+        try:
+            uuid.UUID(uuid_string)
+            return True
+        except (ValueError, TypeError):
+            return False
 
     def _determine_id_prop(self, label: str, sample_row: Dict[str, Any]) -> str:
         """Return the property key that uniquely identifies a node.
 
         Preference order:
-        1. <label_lower>_id  (e.g. doctrine_id)
+        1. <label_lower>_id  (e.g. case_id, party_id)
         2. First key ending with '_id'
-        3. First key in the dict (fallback – maintains previous behaviour)
+        3. 'id' as fallback
         """
         preferred = f"{label.lower()}_id"
         if preferred in sample_row:
@@ -917,7 +1418,7 @@ EXTRACTION REQUIREMENTS:
         for k in sample_row.keys():
             if k.endswith("_id"):
                 return k
-        return next(iter(sample_row))
+        return "id"
 
     def _label_id_prop(self, label: str, data_nodes: Dict[str, List[Dict[str, Any]]]) -> str:
         """Return the identifier property for a label using available data or convention."""
@@ -925,6 +1426,193 @@ EXTRACTION REQUIREMENTS:
             return self._determine_id_prop(label, data_nodes[label][0])
         default_prop = f"{label.lower()}_id"
         return default_prop
+
+    def _update_property_mappings_after_import(self):
+        """Update property mappings from Neo4j schema using MCP server after successful import."""
+        try:
+            print("🔄 Updating property mappings from Neo4j schema...")
+            from app.lib.mcp_integration import MCPEnabledAgents, get_mcp_tools
+            import json
+            import os
+            
+            with MCPEnabledAgents() as mcp_context:
+                if not mcp_context.mcp_adapter:
+                    logger.warning("MCP tools not available for schema update")
+                    return
+
+                neo4j_tools = get_mcp_tools()
+                schema_tool = next((t for t in neo4j_tools if 'schema' in t.name.lower()), None)
+
+                if not schema_tool:
+                    logger.warning("Neo4j schema tool not found in MCP tools")
+                    return
+                
+                # Get schema from Neo4j using MCP
+                schema_result = schema_tool.run({})
+                
+                # Parse schema to extract property names
+                property_mappings = self._parse_schema_for_properties(schema_result)
+                
+                # Save to static file
+                static_file_path = os.path.join(os.path.dirname(__file__), "..", "..", "property_mappings.json")
+                os.makedirs(os.path.dirname(static_file_path), exist_ok=True)
+                
+                with open(static_file_path, 'w') as f:
+                    json.dump(property_mappings, f, indent=2)
+                
+                print(f"✅ Updated property mappings: {len(property_mappings.get('id_properties', []))} ID properties, {len(property_mappings.get('name_properties', []))} name properties")
+                logger.info(f"Property mappings updated to {static_file_path}")
+                
+        except Exception as e:
+            logger.warning(f"Could not update property mappings after import: {e}")
+
+    def _parse_schema_for_properties(self, schema_result) -> dict:
+        """Parse Neo4j schema result using AI and categorize properties."""
+        try:
+            print("🤖 Using AI to parse Neo4j schema for property extraction...")
+            print(f"🔍 Schema result type: {type(schema_result)}")
+            
+                         # Prepare prompt for AI
+            prompt = f"""
+TASK: Extract and categorize all Neo4j property names from the following schema result.
+
+SCHEMA RESULT:
+{str(schema_result)}
+
+INSTRUCTIONS:
+1. Find ALL property names mentioned in this Neo4j schema
+2. Categorize them into two groups:
+   - ID Properties: Properties that are identifiers (end with "_id", or are exactly "id" or "citation")
+   - Name Properties: Properties that are name fields - ONLY properties ending with "_name" or exactly "name"
+3. Property names should be valid identifiers (letters, numbers, underscores only)
+4. Return the result as JSON with this exact structure:
+
+{{
+  "id_properties": ["case_id", "party_id", "id"],
+  "name_properties": ["case_name", "party_name"],
+  "all_properties": ["case_id", "party_id", "case_name", "party_name", "description", "year", "court"]
+}}
+
+IMPORTANT: For name_properties, ONLY include properties that end with "_name" or are exactly "name". 
+Do NOT include properties ending with "_description", "_text", "_type", etc.
+
+Be thorough - extract every property name you can find in the schema.
+"""
+
+            # Use AI to extract properties
+            response = self.llm.call([{"role": "user", "content": prompt}])
+            
+            # Parse AI response as JSON
+            try:
+                import json
+                # Clean up response
+                response_text = response.strip()
+                if response_text.startswith('```json'):
+                    response_text = response_text.replace('```json', '').replace('```', '').strip()
+                elif response_text.startswith('```'):
+                    response_text = response_text.replace('```', '').strip()
+                
+                parsed_response = json.loads(response_text)
+                
+                # Extract properties from AI response
+                id_properties = parsed_response.get("id_properties", [])
+                name_properties = parsed_response.get("name_properties", [])
+                all_properties = parsed_response.get("all_properties", [])
+                
+                # Validate and clean property names
+                import re
+                def clean_properties(props):
+                    return [prop.strip() for prop in props 
+                           if isinstance(prop, str) and prop.strip() 
+                           and re.match(r'^[a-zA-Z_][a-zA-Z0-9_]{0,50}$', prop.strip())]
+                
+                id_properties = clean_properties(id_properties)
+                name_properties = clean_properties(name_properties)
+                all_properties = clean_properties(all_properties)
+                
+                # Sort for consistency
+                id_properties.sort()
+                name_properties.sort()
+                
+                print(f"✅ AI extracted {len(all_properties)} total properties")
+                print(f"   📋 ID properties ({len(id_properties)}): {id_properties[:5]}{'...' if len(id_properties) > 5 else ''}")
+                print(f"   📋 Name properties ({len(name_properties)}): {name_properties[:5]}{'...' if len(name_properties) > 5 else ''}")
+                
+                return {
+                    "id_properties": id_properties,
+                    "name_properties": name_properties,
+                    "last_updated": str(int(time.time())),
+                    "total_properties": len(all_properties),
+                    "schema_source": "ai_mcp_neo4j"
+                }
+                
+            except json.JSONDecodeError as e:
+                logger.error(f"AI response was not valid JSON: {e}")
+                print(f"❌ AI response parsing failed. Response: {response[:200]}...")
+                # Fallback to direct query
+                return self._fallback_to_direct_query()
+                
+        except Exception as e:
+            logger.error(f"Error in AI schema parsing: {e}")
+            # Fallback to direct query
+            return self._fallback_to_direct_query()
+
+    def _fallback_to_direct_query(self) -> dict:
+        """Fallback: Get properties using direct Neo4j queries."""
+        try:
+            print("🔄 Falling back to direct Neo4j property query...")
+            query = "CALL db.propertyKeys() YIELD propertyKey RETURN collect(propertyKey) as keys"
+            result = neo4j_client.execute_query(query)
+            
+            if result and len(result) > 0:
+                all_properties = result[0].get('keys', [])
+                
+                # Categorize using simple rules
+                id_properties = []
+                name_properties = []
+                
+                for prop in all_properties:
+                    if isinstance(prop, str):
+                        prop_lower = prop.lower()
+                        if (prop_lower.endswith('_id') or prop_lower == 'id' or prop_lower == 'citation'):
+                            id_properties.append(prop)
+                        elif (prop_lower.endswith('_name') or prop_lower == 'name'):
+                            name_properties.append(prop)
+                
+                id_properties.sort()
+                name_properties.sort()
+                
+                print(f"✅ Direct query found {len(all_properties)} properties")
+                print(f"   📋 ID properties ({len(id_properties)}): {id_properties[:5]}{'...' if len(id_properties) > 5 else ''}")
+                print(f"   📋 Name properties ({len(name_properties)}): {name_properties[:5]}{'...' if len(name_properties) > 5 else ''}")
+                
+                return {
+                    "id_properties": id_properties,
+                    "name_properties": name_properties,
+                    "last_updated": str(int(time.time())),
+                    "total_properties": len(all_properties),
+                    "schema_source": "direct_neo4j_fallback"
+                }
+            else:
+                print("❌ Direct query returned no results")
+                return self._get_default_mappings()
+                
+        except Exception as e:
+            logger.error(f"Direct query fallback failed: {e}")
+            return self._get_default_mappings()
+
+    def _get_default_mappings(self) -> dict:
+        """Return default property mappings when all else fails."""
+        print("🔄 Using default property mappings")
+        return {
+            "id_properties": ["id", "case_id", "party_id", "citation"],
+            "name_properties": ["name", "case_name", "party_name"],
+            "last_updated": str(int(time.time())),
+            "total_properties": 7,
+            "schema_source": "default_fallback"
+        }
+
+# Removed old _extract_properties_from_schema_data - now using AI parsing
 
 # Global instance
 dynamic_processor = DynamicDocumentProcessor() 

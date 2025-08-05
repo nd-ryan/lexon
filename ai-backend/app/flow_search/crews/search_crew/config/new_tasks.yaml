@@ -1,0 +1,86 @@
+new_query_generation_task:
+  description: |
+    Generate a Cypher query that identifies relevant nodes and returns their labels, id fields, and id values for the user query: "{query}"
+    
+    Using the following Neo4j schema information:
+    {schema}
+    
+    Your specific task is to:
+    1. **Analyze the user query** to understand intent and identify which node types contain relevant information.
+    2. **Use the provided schema information** to identify relevant node types and their identifier fields.
+    3. **Generate a Cypher query** that returns results in this exact format using proper Cypher map syntax:
+       ```
+       [
+         {{ label: "Case", id_field: "case_id", id_values: ["C0016", "C0017"] }},
+         {{ label: "Doctrine", id_field: "doctrine_id", id_values: ["D0002"] }},
+         {{ label: "Issue", id_field: "issue_id", id_values: ["I0031", "I0032"] }}
+       ]
+       ```
+       
+       **CRITICAL - Required RETURN Structure:**
+       Your query MUST end with: `RETURN [...your data...] AS result`
+       This ensures a predictable Neo4j result structure for parsing.
+    
+    **Query Generation Guidance:**
+    - **Use fuzzy search** for string matching (e.g., `CONTAINS` or `STARTS WITH`) and ensure all comparisons are **case-insensitive** by using `toLower()`.
+    - If the user searches for a proper noun (e.g., a specific case name or doctrine), consider that it might be stored as an **acronym** in the database.
+    - Your query should return results grouped by node label, with the appropriate id field for each label type and a list of matching id values.
+    - The query must return data that can be parsed into the label/id_field/id_values structure shown above.
+    - Focus on identifying the most relevant nodes rather than trying to return complete data at this stage.
+    - **CRITICAL:** Use unquoted keys in Cypher maps (label: not "label:") and collect IDs with collect(DISTINCT node.id_field).
+    - **CRITICAL:** Always end your query with `AS result` for predictable parsing.
+    
+    **Complete Example Query:**
+    ```cypher
+    MATCH (c:Case)
+    WHERE toLower(c.case_name) CONTAINS 'contract'
+    WITH collect(DISTINCT c.case_id) AS case_ids
+    MATCH (d:Doctrine)  
+    WHERE toLower(d.doctrine_name) CONTAINS 'contract'
+    WITH case_ids, collect(DISTINCT d.doctrine_id) AS doctrine_ids
+    RETURN [
+      {{ label: "Case", id_field: "case_id", id_values: case_ids }},
+      {{ label: "Doctrine", id_field: "doctrine_id", id_values: doctrine_ids }}
+    ] AS result
+    ```
+    
+    **Format your output** as a single JSON object that strictly conforms to the `GeneratedCypherQuery` Pydantic model.
+  expected_output: "A single, valid JSON object with a single key: `generated_query`, containing a Cypher query that returns label/id block data."
+
+batch_enrichment_task:
+  description: |
+    Process the label/id blocks from the initial query and execute batch queries to retrieve enriched node data with full properties and relationships.
+    
+    You will receive label/id blocks in this format: {label_id_blocks}
+    
+    Your specific task is to:
+    1. **Process each label/id block** to understand what nodes need to be enriched.
+    2. **Use the batch query utility** to generate appropriate queries for each node type.
+    3. **Execute the batch queries** against the Neo4j database to retrieve complete node data.
+    4. **Collect and organize** all enriched results for further processing.
+    
+    **Important:** This task focuses on data retrieval only. No analysis or synthesis is required at this stage.
+    The enriched data will include full node properties and relationship information for downstream processing.
+  expected_output: "EnrichedNodeData object containing the complete enriched node data with relationships from all batch queries."
+
+new_insights_synthesis_task:
+  description: |
+    Create a comprehensive summary and analysis based on the enriched node data from batch processing.
+    
+    You will receive enriched node data containing complete properties and relationships: {enriched_data}
+    
+    Your specific task is to:
+    1. **Analyze the enriched node data** to understand the complete picture of relevant legal information.
+    2. **Create a comprehensive summary** that directly answers the user's original question: "{query}".
+    3. **Provide meaningful insights** that include:
+       - A clear, concise summary of the key findings from the enriched data
+       - Detailed analysis of the results and their relationships in relation to the user's query
+       - Relevant context and connections between different node types and their relationships
+       - Direct answers to what the user was looking for, leveraging the complete data set
+    4. **Return a SearchInsights object** with your comprehensive analysis in the summary field.
+    
+    **IMPORTANT:** You have access to complete node data including all properties and relationship information.
+    Use this comprehensive data to provide thorough, well-informed insights that leverage the full richness of the legal knowledge graph.
+    
+    Your summary should be comprehensive enough to stand alone as a complete answer to the user's query.
+  expected_output: "A SearchInsights object containing a comprehensive summary and analysis based on the complete enriched node data." 

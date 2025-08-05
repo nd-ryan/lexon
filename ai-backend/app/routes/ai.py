@@ -45,7 +45,7 @@ async def import_with_direct_processing(file: UploadFile = File(...)):
             import_flow.state.filename = file.filename
             
             print("🚀 Starting import flow...")
-            result = import_flow.kickoff()
+            result = await import_flow.kickoff_async()
             
             # Extract result
             result_text = result if isinstance(result, str) else str(result)
@@ -143,4 +143,90 @@ async def get_search_results(
             pubsub.close()
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@router.post("/debug/update-properties")
+async def debug_update_properties():
+    """Debug endpoint to manually trigger property mapping update with AI parsing."""
+    try:
+        from app.lib.dynamic_document_processor import dynamic_processor
+        
+        print("🔄 Manual property mapping update triggered...")
+        dynamic_processor._update_property_mappings_after_import()
+        
+        # Load and return the updated mappings
+        import json
+        import os
+        mappings_file = os.path.join(os.path.dirname(__file__), "..", "..", "property_mappings.json")
+        
+        if os.path.exists(mappings_file):
+            with open(mappings_file, 'r') as f:
+                mappings = json.load(f)
+            
+            return {
+                "success": True,
+                "message": "Property mappings updated with AI parsing",
+                "mappings": mappings
+            }
+        else:
+            return {
+                "success": False,
+                "message": "Property mappings file not found after update"
+            }
+        
+    except Exception as e:
+        logger.error(f"Failed to update property mappings: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "message": "Failed to update property mappings"
+        }
+
+@router.get("/debug/upload-codes/{node_type}")
+async def debug_upload_codes(node_type: str):
+    """Debug endpoint to check upload_codes for a specific node type."""
+    # Convert node type to snake_case for property names
+    import re
+    snake_case = re.sub(r'(?<!^)(?=[A-Z])', '_', node_type).lower()
+    upload_code_prop = f"{snake_case}_upload_code"
+    
+    try:
+        from app.lib.neo4j_client import neo4j_client
+        
+        # Dynamically determine ID property from schema
+        from app.lib.dynamic_document_processor import dynamic_processor
+        id_prop = dynamic_processor._get_id_property_from_schema(node_type)
+        
+        query = f"""
+        MATCH (n:{node_type})
+        WHERE n.{upload_code_prop} IS NOT NULL
+        RETURN n.{upload_code_prop} as upload_code, n.{id_prop} as node_id
+        ORDER BY n.{upload_code_prop}
+        """
+        
+        result = neo4j_client.execute_query(query)
+        
+        upload_codes = {}
+        for record in result:
+            code = record.get('upload_code')
+            node_id = record.get('node_id')
+            if code:
+                upload_codes[code] = node_id
+        
+        return {
+            "success": True,
+            "node_type": node_type,
+            "upload_code_property": upload_code_prop,
+            "id_property": id_prop,
+            "total_with_upload_codes": len(upload_codes),
+            "upload_codes": upload_codes
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to check upload codes: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "message": f"Failed to check {snake_case}_upload_code for {node_type}"
+        }
 

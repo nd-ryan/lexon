@@ -2,7 +2,7 @@ from crewai import Agent, Crew, Task, Process, LLM
 from crewai.project import CrewBase, agent, task, crew
 from crewai.agents.agent_builder.base_agent import BaseAgent
 from typing import List, Any
-from app.models.search import GeneratedCypherQueries, QueryExecutionResults, SearchInsights, FinalSearchResponse
+from app.models.search import GeneratedCypherQuery, QueryExecutionResults, SearchInsights, FinalSearchResponse
 from app.lib.logging_config import setup_logger
 import json
 
@@ -114,7 +114,7 @@ class SearchCrew:
             config=task_config,
             agent=self.query_generation_agent(),
             # No context needed since schema is provided in description
-            output_pydantic=GeneratedCypherQueries
+            output_pydantic=GeneratedCypherQuery
         )
 
     @task
