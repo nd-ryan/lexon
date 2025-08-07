@@ -216,7 +216,7 @@ INSTRUCTIONS:
             logger.warning("Returning empty relationships due to error")
             return {}
     
-    def align_with_existing_schema(self, nodes: Dict[str, List[str]], relationships: Dict[str, Dict[str, Any]], schema_info: SchemaInfo) -> Tuple[Dict[str, List[str]], Dict[str, Dict[str, Any]]]:
+    def align_with_existing_schema(self, nodes: Dict[str, List[str]], relationships: Dict[str, Dict[str, Any]], schema_info: SchemaInfo, relationship_constraints: Dict[str, List[str]] = None) -> Tuple[Dict[str, List[str]], Dict[str, Dict[str, Any]]]:
         """Step 4: Compare with existing schema and align naming/structure"""
         
         existing_schema_context = ""
@@ -227,14 +227,24 @@ Node Labels: {', '.join(schema_info.node_labels)}
 Relationship Types: {', '.join(schema_info.relationship_types)}
 """
         
+        # Add relationship constraints if available
+        constraints_context = ""
+        if relationship_constraints:
+            constraints_context = "\nRELATIONSHIP CONSTRAINTS (MUST USE THESE WHEN AVAILABLE):\n"
+            for node_pair, rel_types in relationship_constraints.items():
+                constraints_context += f"{node_pair}: {', '.join(rel_types)}\n"
+        
         prompt = f"""
 {existing_schema_context}
+{constraints_context}
 
 DOCUMENT-DERIVED METADATA:
 Nodes: {json.dumps(nodes, indent=2)}
 Relationships: {json.dumps(relationships, indent=2)}
 
 TASK: Align the document metadata with the existing schema while preserving new elements.
+
+CRITICAL: When creating relationships between node types, you MUST check the RELATIONSHIP CONSTRAINTS section above. If a constraint exists for a node type pair (e.g., Case->Party), you MUST use EXACTLY one of the listed relationship types. DO NOT create new relationship names like "RESULT_OF" when "RESULTED_FROM" is already listed. This is MANDATORY - any violation will cause duplicate relationships.
 
 OUTPUT FORMAT (JSON only):
 {{
@@ -260,15 +270,16 @@ OUTPUT FORMAT (JSON only):
 
 ALIGNMENT RULES:
 1. If a document node type is similar to an existing schema node, use the existing name.
-2. If a document relationship is similar to an existing schema relationship, use the existing name.
-3. CRITICAL: When aligning a relationship, check the `Relationship Types` from the existing schema. If the document has a relationship like `(A)-[X]->(B)` and you find a plausible inverse in the schema like `(B)-[Y]->(A)`, you MUST use `Y` as the value for the `inverse` property of `X`. If no existing inverse is found, use the inverse from the document analysis.
-4. Merge property lists - keep existing properties and add new ones from the document.
-5. Preserve any completely new node types or relationships that don't exist in the schema.
-6. Preserve the "inverse" property for all relationships.
-7. Ensure node type names match exactly with the existing schema where applicable.
-8. Ensure relationship type names match exactly with the existing schema where applicable.
-9. Maintain consistency in naming conventions.
-10. Return ONLY the JSON, no other text.
+2. MANDATORY: Check RELATIONSHIP CONSTRAINTS first. If a constraint exists for the node type pair, you MUST use EXACTLY one of the listed relationship types. For example, if Relief->Ruling shows ['RESULTED_FROM'], you MUST use 'RESULTED_FROM', NOT 'RESULT_OF' or any other variant.
+3. If a document relationship is similar to an existing schema relationship, use the existing name.
+4. CRITICAL: When aligning a relationship, check the `Relationship Types` from the existing schema. If the document has a relationship like `(A)-[X]->(B)` and you find a plausible inverse in the schema like `(B)-[Y]->(A)`, you MUST use `Y` as the value for the `inverse` property of `X`. If no existing inverse is found, use the inverse from the document analysis.
+5. Merge property lists - keep existing properties and add new ones from the document.
+6. Preserve any completely new node types or relationships that don't exist in the schema AND are not constrained by the RELATIONSHIP CONSTRAINTS.
+7. Preserve the "inverse" property for all relationships.
+8. Ensure node type names match exactly with the existing schema where applicable.
+9. Ensure relationship type names match exactly with the existing schema where applicable.
+10. Maintain consistency in naming conventions.
+11. Return ONLY the JSON, no other text.
 """
 
         try:
@@ -490,8 +501,24 @@ EXTRACTION REQUIREMENTS:
                 logger.error(f"Error processing chunk {i+1}: {e}")
                 continue
         
+        # Show relationship types before inverse injection
+        rel_types_before = {}
+        for rel in all_relationships:
+            rel_type = rel.get("type", "UNKNOWN")
+            rel_types_before[rel_type] = rel_types_before.get(rel_type, 0) + 1
+        print(f"      📋 Relationship types before inverse: {dict(sorted(rel_types_before.items()))}")
+        
         # Inject inverse relationships
+        print(f"      🔄 Before inverse injection: {len(all_relationships)} relationships")
         all_relationships = self._inject_inverse_relationships(all_relationships, aligned_relationships)
+        print(f"      ➕ After inverse injection: {len(all_relationships)} relationships")
+        
+        # Show relationship types after inverse injection
+        rel_types_after = {}
+        for rel in all_relationships:
+            rel_type = rel.get("type", "UNKNOWN")
+            rel_types_after[rel_type] = rel_types_after.get(rel_type, 0) + 1
+        print(f"      📋 Relationship types after inverse: {dict(sorted(rel_types_after.items()))}")
         
         # First deduplicate within document to avoid duplicate work
         print(f"      🔄 Deduplicating nodes within document...")
@@ -520,15 +547,9 @@ EXTRACTION REQUIREMENTS:
             print(f"         ... and {len(all_relationships) - 3} more")
         updated_relationships = self._map_relationships_to_uuids(all_relationships, id_mapping)
         
-        # Deduplicate relationships within document
+        # Deduplicate relationships within document and against Neo4j
         print(f"      🔄 Deduplicating relationships...")
-        seen_relationships = set()
-        unique_relationships = []
-        for rel in updated_relationships:
-            rel_key = (rel.get("type"), rel.get("from_id"), rel.get("to_id"))
-            if rel_key not in seen_relationships:
-                seen_relationships.add(rel_key)
-                unique_relationships.append(rel)
+        unique_relationships = self._deduplicate_relationships(updated_relationships, deduplicated_nodes)
         
         total_nodes = sum(len(nodes) for nodes in deduplicated_nodes.values())
         print(f"      ✅ Final results: {total_nodes} unique nodes, {len(unique_relationships)} unique relationships")
@@ -852,29 +873,33 @@ EXTRACTION REQUIREMENTS:
             document_relationships = self.identify_document_relationships(document_text, document_nodes)
             print(f"   AI identified {len(document_relationships)} different relationship types")
             
-            # Step 5: Align with existing schema
-            print("⚖️  Step 5/8: Aligning with existing Neo4j schema...")
-            logger.info("Step 5: Aligning with existing Neo4j schema...")
+            # Step 5: Extract relationship constraints from existing data
+            print("🔗 Step 5/8: Extracting relationship constraints from Neo4j...")
+            relationship_constraints = self._extract_relationship_constraints()
+            
+            # Step 6: Align with existing schema using constraints
+            print("⚖️  Step 6/8: Aligning with existing Neo4j schema...")
+            logger.info("Step 6: Aligning with existing Neo4j schema...")
             aligned_nodes, aligned_relationships = self.align_with_existing_schema(
-                document_nodes, document_relationships, schema_info
+                document_nodes, document_relationships, schema_info, relationship_constraints
             )
             print(f"   Schema alignment complete - {len(aligned_nodes)} node types, {len(aligned_relationships)} relationship types")
             
-            # Step 6: Extract actual content using aligned metadata
-            print("📝 Step 6/8: Using AI to extract actual content from document...")
+            # Step 7: Extract actual content using aligned metadata
+            print("📝 Step 7/8: Using AI to extract actual content from document...")
             logger.info("Step 6: Extracting document content...")
             extracted_data = self.extract_document_content(document_text, aligned_nodes, aligned_relationships, test_mode=False)
             total_nodes = sum(len(v) for v in extracted_data.nodes.values())
             print(f"   Extracted {total_nodes} total nodes and {len(extracted_data.relationships)} relationships")
             
             # Step 7: Generate Cypher queries
-            print("🔧 Step 7/8: Generating Cypher queries for Neo4j...")
+            print("🔧 Step 8/9: Generating Cypher queries for Neo4j...")
             logger.info("Step 7: Generating Cypher queries...")
             queries = self.generate_cypher_queries(extracted_data)
             print(f"   Generated {len(queries)} Cypher queries")
             
             # Step 8: Execute queries
-            print("💾 Step 8/8: Executing queries to import into Neo4j...")
+            print("💾 Step 9/9: Executing queries to import into Neo4j...")
             logger.info("Step 8: Executing Cypher queries using batched approach...")
 
             # Prefer the new batched execution path for performance & reliability
@@ -972,8 +997,11 @@ EXTRACTION REQUIREMENTS:
         document_nodes = self.identify_document_nodes(case_body)
         document_relationships = self.identify_document_relationships(case_body, document_nodes)
 
+        # Extract relationship constraints from existing data
+        relationship_constraints = self._extract_relationship_constraints()
+        
         aligned_nodes, aligned_relationships = self.align_with_existing_schema(
-            document_nodes, document_relationships, schema_info
+            document_nodes, document_relationships, schema_info, relationship_constraints
         )
 
         extracted_data = self.extract_document_content(case_body, aligned_nodes, aligned_relationships, test_mode=False)
@@ -1033,8 +1061,11 @@ EXTRACTION REQUIREMENTS:
                             upload_code = value.strip()
                             break
                 
+                print(f"         🔍 Node {label}: upload_code='{upload_code}' from keys={list(node.keys())}")
+                
                 # Get or create UUID based on upload_code (with deduplication)
                 final_uuid = self._get_or_create_uuid(label, upload_code)
+                print(f"         🎯 Final UUID for {label}({upload_code}): {final_uuid}")
                 
                 # Store specific upload_code property (e.g., case_upload_code, fact_pattern_upload_code)
                 if upload_code:
@@ -1047,12 +1078,14 @@ EXTRACTION REQUIREMENTS:
                 # Build ID mapping for relationship processing
                 if upload_code:
                     id_mapping[upload_code] = final_uuid
+                    print(f"         📋 ID Mapping: '{upload_code}' -> {final_uuid}")
                 
                 # Also map by name/title fields for fallback identification
                 for key, value in node.items():
                     if isinstance(value, str) and value.strip():
                         if key in ["name", "title", "citation"] or key.endswith("_name"):
                             id_mapping[value.strip()] = final_uuid
+                            print(f"         📋 Name Mapping: '{value.strip()}' -> {final_uuid}")
                 
                 # Remove any existing ID fields that came from the document
                 node.pop("_id", None)
@@ -1218,6 +1251,106 @@ EXTRACTION REQUIREMENTS:
         
         print(f"         📊 Mapped {len(updated_relationships)} relationships (from {len(relationships)} original)")
         return updated_relationships
+
+    def _deduplicate_relationships(self, relationships: List[Dict[str, Any]], extracted_nodes: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+        """
+        Deduplicates relationships by checking if a connection already exists between
+        any two nodes. If a connection exists, ALL relationships for that pair
+        (both direct and inverse) are skipped. If no connection exists, ALL
+        relationships for that pair are added.
+        """
+        if not relationships:
+            return []
+
+        final_relationships = []
+        
+        # Group relationships by the pair of nodes they connect
+        rels_by_pair = {}
+        for rel in relationships:
+            from_id = rel.get("from_id")
+            to_id = rel.get("to_id")
+            if not from_id or not to_id:
+                continue
+            
+            pair_key = frozenset([from_id, to_id])
+            if pair_key not in rels_by_pair:
+                rels_by_pair[pair_key] = []
+            rels_by_pair[pair_key].append(rel)
+
+        # Check each pair for existing connections in Neo4j
+        for pair_key, pair_relationships in rels_by_pair.items():
+            # Get details from the first relationship in the group to perform the check
+            sample_rel = pair_relationships[0]
+            from_id = sample_rel.get("from_id")
+            to_id = sample_rel.get("to_id")
+            from_type = sample_rel.get("from_type")
+            to_type = sample_rel.get("to_type")
+
+            if not all([from_id, to_id, from_type, to_type]):
+                continue
+
+            from_id_prop = self._label_id_prop(from_type, extracted_nodes)
+            to_id_prop = self._label_id_prop(to_type, extracted_nodes)
+            
+            query = f"""
+            MATCH (a:{from_type} {{{from_id_prop}: $from_id}})
+            MATCH (b:{to_type} {{{to_id_prop}: $to_id}})
+            RETURN EXISTS((a)-[]-(b)) as connection_exists
+            """
+            params = {"from_id": from_id, "to_id": to_id}
+
+            try:
+                result = neo4j_client.execute_query(query, params)
+                connection_exists = result[0]["connection_exists"] if result else False
+
+                if connection_exists:
+                    print(f"         ♻️ Connection already exists in Neo4j between nodes {from_id} and {to_id}. Skipping {len(pair_relationships)} relationships.")
+                    continue
+                else:
+                    # If no connection exists, add all relationships for this pair
+                    print(f"         ➕ Adding {len(pair_relationships)} new relationships for pair {from_id}-{to_id}")
+                    final_relationships.extend(pair_relationships)
+
+            except Exception as e:
+                logger.error(f"Error checking relationship existence for {from_id}-{to_id}: {e}")
+                # Fallback: assume it doesn't exist to avoid dropping data on query failure.
+                final_relationships.extend(pair_relationships)
+
+        print(f"         📊 Deduplication complete: {len(relationships)} → {len(final_relationships)} relationships")
+        return final_relationships
+
+    def _extract_relationship_constraints(self) -> Dict[str, List[str]]:
+        """Extract existing relationship types between specific node type pairs from Neo4j."""
+        try:
+            # Get all relationship types with their from/to node types
+            query = """
+            MATCH (a)-[r]->(b)
+            UNWIND labels(a) as from_type
+            UNWIND labels(b) as to_type
+            WITH from_type, to_type, type(r) as rel_type
+            RETURN from_type, to_type, collect(DISTINCT rel_type) as relationship_types
+            ORDER BY from_type, to_type
+            """
+            
+            result = neo4j_client.execute_query(query)
+            
+            constraints = {}
+            for record in result:
+                from_type = record.get("from_type")
+                to_type = record.get("to_type")
+                rel_types = record.get("relationship_types", [])
+                
+                if from_type and to_type and rel_types:
+                    key = f"{from_type}->{to_type}"
+                    constraints[key] = rel_types
+                    print(f"      📋 Found {len(rel_types)} relationship types: {from_type} -> {to_type}: {rel_types}")
+            
+            print(f"      📊 Extracted constraints for {len(constraints)} node type pairs")
+            return constraints
+            
+        except Exception as e:
+            logger.warning(f"Error extracting relationship constraints: {e}")
+            return {}
 
     def _verify_case_upload(self, case_name: str, extracted_data: ExtractedData) -> Dict[str, Any]:
         """

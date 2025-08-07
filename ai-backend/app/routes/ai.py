@@ -230,3 +230,42 @@ async def debug_upload_codes(node_type: str):
             "message": f"Failed to check {snake_case}_upload_code for {node_type}"
         }
 
+@router.get("/debug/relationships/{from_type}/{to_type}")
+async def debug_relationships(from_type: str, to_type: str):
+    """Debug endpoint to check relationships between two node types."""
+    try:
+        from app.lib.neo4j_client import neo4j_client
+        
+        # Get all relationships between these node types
+        query = f"""
+        MATCH (a:{from_type})-[r]->(b:{to_type})
+        RETURN type(r) as rel_type, count(r) as count
+        ORDER BY rel_type
+        """
+        
+        result = neo4j_client.execute_query(query)
+        
+        relationships = {}
+        total_count = 0
+        for record in result:
+            rel_type = record.get('rel_type')
+            count = record.get('count', 0)
+            relationships[rel_type] = count
+            total_count += count
+        
+        return {
+            "success": True,
+            "from_type": from_type,
+            "to_type": to_type,
+            "total_relationships": total_count,
+            "relationship_types": relationships
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to check relationships: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "message": f"Failed to check relationships between {from_type} and {to_type}"
+        }
+
