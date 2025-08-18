@@ -1,9 +1,9 @@
-'use client'
+"use client"
 
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
-import { Button } from "@/components/ui/button";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import Button from "@/components/ui/button"
+import Card from "@/components/ui/card"
 import { Suspense } from 'react';
 
 function AuthErrorPageContent() {
@@ -27,25 +27,21 @@ function AuthErrorPageContent() {
   const message = error && errorMessages[error] ? errorMessages[error] : errorMessages.Default
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle className="text-center text-3xl font-extrabold">
-            Authentication Error
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded text-center">
-            <p>{message}</p>
-          </div>
-          <Button asChild className="w-full">
+    <section className="py-10">
+      <div className="mx-auto max-w-md px-4">
+        <Card>
+          <div className="p-6">
+            <h2 className="text-center text-xl font-semibold">Authentication Error</h2>
+            <div className="my-3 text-center text-sm text-gray-700">
+              {message}
+            </div>
             <Link href="/auth/signin">
-              Return to Sign In
+              <Button className="w-full">Return to Sign In</Button>
             </Link>
-          </Button>
-        </CardContent>
-      </Card>
-    </div>
+          </div>
+        </Card>
+      </div>
+    </section>
   )
 }
 

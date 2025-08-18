@@ -1,5 +1,6 @@
 import re
 import json
+import textwrap
 import logging
 import time
 import uuid
@@ -149,59 +150,56 @@ INSTRUCTIONS:
             return {}
     
     def identify_document_relationships(self, document_text: str, nodes: Dict[str, List[str]]) -> Dict[str, Dict[str, Any]]:
-        """Step 3: Identify ALL possible relationships in the document"""
-        
+        """Step 3: Identify ALL possible relationships in the document (canonical only)"""
+
         node_types = list(nodes.keys())
-        
-        prompt = f"""
-DOCUMENT TO ANALYZE:
-{document_text}
 
-IDENTIFIED NODE TYPES:
-{', '.join(node_types)}
+        prompt = textwrap.dedent(f"""
+            DOCUMENT TO ANALYZE:
+            {document_text}
 
-TASK: Identify ALL possible relationships that exist between entities in this document.
-For each relationship, you MUST also define its inverse.
+            IDENTIFIED NODE TYPES:
+            {', '.join(node_types)}
 
-OUTPUT FORMAT (JSON only):
-{{
-  "RELATIONSHIP_TYPE1": {{
-    "from_node": "NodeType1",
-    "to_node": "NodeType2",
-    "inverse": "INVERSE_REL_1",
-    "properties": ["prop1", "prop2"]
-  }},
-  "INVERSE_REL_1": {{
-    "from_node": "NodeType2",
-    "to_node": "NodeType1",
-    "inverse": "RELATIONSHIP_TYPE1",
-    "properties": ["prop1", "prop2"]
-  }}
-}}
+            TASK: Identify ALL possible relationships that exist between entities in this document.
+            Return ONLY one canonical relationship direction and type per node-type pair. Do NOT include inverse variants.
 
-INSTRUCTIONS:
-1. Read through the document and identify HOW entities relate to each other
-2. Look for explicit connections, references, associations, and implicit relationships
-3. Use UPPER_CASE_WITH_UNDERSCORES for relationship types (e.g., "HAS_PARTY", "CITES_PROVISION")
-4. For each relationship, specify which node types it connects
-5. CRITICAL: For EVERY relationship, add an "inverse" property and define the reverse relationship. For example, if a `Case` `RAISES` an `Issue`, then an `Issue` is `RAISED_BY` a `Case`.
-6. List any properties that the relationship itself might have (dates, roles, types, etc.)
-7. Be comprehensive - capture ALL relationships, not just obvious ones
-8. Examples might include: HAS_PARTY (inverse: IS_PARTY_IN), CITES_PROVISION (inverse: IS_CITED_IN), FILED_BY (inverse: FILED), etc.
-9. Return ONLY the JSON, no other text
-"""
+            OUTPUT FORMAT (JSON only):
+            {{
+            "RELATIONSHIP_TYPE1": {{
+                "from_node": "NodeType1",
+                "to_node": "NodeType2",
+                "properties": ["prop1", "prop2"]
+            }},
+            "ANOTHER_RELATIONSHIP": {{
+                "from_node": "NodeTypeA",
+                "to_node": "NodeTypeB",
+                "properties": ["propX"]
+            }}
+            }}
+
+            INSTRUCTIONS:
+            1. Read through the document and identify HOW entities relate to each other
+            2. Look for explicit connections, references, associations, and implicit relationships
+            3. Use UPPER_CASE_WITH_UNDERSCORES for relationship types (e.g., "HAS_PARTY", "CITES_PROVISION")
+            4. For each relationship, specify which node types it connects
+            5. Choose a single canonical direction/type per node-type pair. Do NOT include inverse variants (e.g., use ADDRESSES, not ADDRESSED_BY).
+            6. List any properties that the relationship itself might have (dates, roles, types, etc.)
+            7. Be comprehensive - capture ALL relationships, not just obvious ones
+            8. Return ONLY the JSON, no other text
+        """).replace("{", "{{").replace("}", "}}")  # escape braces inside the f-string
 
         try:
             print("      🤖 Calling AI model for relationship identification...")
             logger.info("Calling LLM for relationship identification...")
             response = self.llm.call([{"role": "user", "content": prompt}])
-            
+
             if not response:
                 raise ValueError("Empty response from LLM for relationship identification")
-                
+
             relationships_json = self._strip_json_codeblock(response)
             logger.debug(f"Relationships JSON preview: {relationships_json[:300]}...")
-            
+
             try:
                 result = json.loads(relationships_json)
                 logger.info(f"Successfully identified {len(result)} relationship types")
@@ -209,151 +207,119 @@ INSTRUCTIONS:
             except json.JSONDecodeError as json_err:
                 logger.error(f"JSON parsing failed for relationships. Raw response: {relationships_json}")
                 raise ValueError(f"Invalid JSON response for relationships: {json_err}")
-                
+
         except Exception as e:
             logger.error(f"Error identifying document relationships: {e}")
-            # Return empty dict instead of raising
             logger.warning("Returning empty relationships due to error")
             return {}
     
-    def align_with_existing_schema(self, nodes: Dict[str, List[str]], relationships: Dict[str, Dict[str, Any]], schema_info: SchemaInfo, relationship_constraints: Dict[str, List[str]] = None) -> Tuple[Dict[str, List[str]], Dict[str, Dict[str, Any]]]:
-        """Step 4: Compare with existing schema and align naming/structure"""
-        
+
+    def align_with_existing_schema(
+        self,
+        nodes: Dict[str, List[str]],
+        relationships: Dict[str, Dict[str, Any]],
+        schema_info: "SchemaInfo",
+        relationship_constraints: Dict[str, List[str]] = None
+    ) -> Tuple[Dict[str, List[str]], Dict[str, Dict[str, Any]]]:
+        """Step 4: Compare with existing schema and align naming/structure (canonical only)"""
+
+        # Build optional schema context
         existing_schema_context = ""
-        if schema_info.node_labels:
-            existing_schema_context = f"""
-EXISTING NEO4J SCHEMA:
-Node Labels: {', '.join(schema_info.node_labels)}
-Relationship Types: {', '.join(schema_info.relationship_types)}
-"""
-        
-        # Add relationship constraints if available
+        if getattr(schema_info, "node_labels", None):
+            existing_schema_context = textwrap.dedent(f"""
+                EXISTING NEO4J SCHEMA:
+                Node Labels: {', '.join(schema_info.node_labels)}
+                Relationship Types: {', '.join(schema_info.relationship_types)}
+            """).strip()
+
+        # Build optional relationship constraints context
         constraints_context = ""
         if relationship_constraints:
-            constraints_context = "\nRELATIONSHIP CONSTRAINTS (MUST USE THESE WHEN AVAILABLE):\n"
+            lines = ["RELATIONSHIP CONSTRAINTS (MUST USE THESE WHEN AVAILABLE):"]
             for node_pair, rel_types in relationship_constraints.items():
-                constraints_context += f"{node_pair}: {', '.join(rel_types)}\n"
-        
-        prompt = f"""
-{existing_schema_context}
-{constraints_context}
+                lines.append(f"{node_pair}: {', '.join(rel_types)}")
+            constraints_context = "\n".join(lines)
 
-DOCUMENT-DERIVED METADATA:
-Nodes: {json.dumps(nodes, indent=2)}
-Relationships: {json.dumps(relationships, indent=2)}
+        # Keep the JSON example in a separate plain string to avoid f-string brace escaping
+        output_format_block = """{
+    "aligned_nodes": {
+        "ExistingNodeType": ["prop1", "prop2"],
+        "NewNodeType": ["prop1", "prop2"]
+    },
+    "aligned_relationships": {
+        "EXISTING_RELATIONSHIP": {
+        "from_node": "NodeType1",
+        "to_node": "NodeType2",
+        "properties": ["prop1"]
+        },
+        "NEW_RELATIONSHIP": {
+        "from_node": "NodeType3",
+        "to_node": "NodeType4",
+        "properties": ["prop1"]
+        }
+    }
+    }"""
 
-TASK: Align the document metadata with the existing schema while preserving new elements.
+        prompt = textwrap.dedent(f"""
+            {existing_schema_context}
 
-CRITICAL: When creating relationships between node types, you MUST check the RELATIONSHIP CONSTRAINTS section above. If a constraint exists for a node type pair (e.g., Case->Party), you MUST use EXACTLY one of the listed relationship types. DO NOT create new relationship names like "RESULT_OF" when "RESULTED_FROM" is already listed. This is MANDATORY - any violation will cause duplicate relationships.
+            {constraints_context}
 
-OUTPUT FORMAT (JSON only):
-{{
-  "aligned_nodes": {{
-    "ExistingNodeType": ["prop1", "prop2"],
-    "NewNodeType": ["prop1", "prop2"]
-  }},
-  "aligned_relationships": {{
-    "EXISTING_RELATIONSHIP": {{
-      "from_node": "NodeType1",
-      "to_node": "NodeType2",
-      "properties": ["prop1"],
-      "inverse": "EXISTING_INVERSE"
-    }},
-    "NEW_RELATIONSHIP": {{
-      "from_node": "NodeType3",
-      "to_node": "NodeType4", 
-      "properties": ["prop1"],
-      "inverse": "NEW_INVERSE"
-    }}
-  }}
-}}
+            DOCUMENT-DERIVED METADATA:
+            Nodes: {json.dumps(nodes, indent=2)}
+            Relationships: {json.dumps(relationships, indent=2)}
 
-ALIGNMENT RULES:
-1. If a document node type is similar to an existing schema node, use the existing name.
-2. MANDATORY: Check RELATIONSHIP CONSTRAINTS first. If a constraint exists for the node type pair, you MUST use EXACTLY one of the listed relationship types. For example, if Relief->Ruling shows ['RESULTED_FROM'], you MUST use 'RESULTED_FROM', NOT 'RESULT_OF' or any other variant.
-3. If a document relationship is similar to an existing schema relationship, use the existing name.
-4. CRITICAL: When aligning a relationship, check the `Relationship Types` from the existing schema. If the document has a relationship like `(A)-[X]->(B)` and you find a plausible inverse in the schema like `(B)-[Y]->(A)`, you MUST use `Y` as the value for the `inverse` property of `X`. If no existing inverse is found, use the inverse from the document analysis.
-5. Merge property lists - keep existing properties and add new ones from the document.
-6. Preserve any completely new node types or relationships that don't exist in the schema AND are not constrained by the RELATIONSHIP CONSTRAINTS.
-7. Preserve the "inverse" property for all relationships.
-8. Ensure node type names match exactly with the existing schema where applicable.
-9. Ensure relationship type names match exactly with the existing schema where applicable.
-10. Maintain consistency in naming conventions.
-11. Return ONLY the JSON, no other text.
-"""
+            TASK: Align the document metadata with the existing schema while preserving new elements.
+
+            CRITICAL: When creating relationships between node types, you MUST check the RELATIONSHIP CONSTRAINTS section above. If a constraint exists for the node type pair, you MUST use EXACTLY one of the listed relationship types and choose ONE canonical direction. Do NOT include inverse variants or create alternate names.
+
+            OUTPUT FORMAT (JSON only):
+            {output_format_block}
+
+            ALIGNMENT RULES:
+            1. If a document node type is similar to an existing schema node, use the existing name.
+            2. MANDATORY: Check RELATIONSHIP CONSTRAINTS first. If a constraint exists for the node type pair, you MUST use EXACTLY one of the listed relationship types and a single canonical direction (no inverses).
+            3. If a document relationship is similar to an existing schema relationship, use the existing name.
+            4. Merge property lists - keep existing properties and add new ones from the document.
+            5. Preserve any completely new node types or relationships that don't exist in the schema AND are not constrained by the RELATIONSHIP CONSTRAINTS.
+            6. Ensure node type names match exactly with the existing schema where applicable.
+            7. Ensure relationship type names match exactly with the existing schema where applicable.
+            8. Maintain consistency in naming conventions.
+            9. Return ONLY the JSON, no other text.
+        """).strip()
 
         try:
             print("      🤖 Calling AI model for schema alignment...")
             logger.info("Calling LLM for schema alignment...")
             response = self.llm.call([{"role": "user", "content": prompt}])
-            
+
             if not response:
                 raise ValueError("Empty response from LLM for schema alignment")
-                
+
             aligned_json = self._strip_json_codeblock(response)
             logger.debug(f"Alignment JSON preview: {aligned_json[:300]}...")
-            
+
             try:
                 aligned_dict = json.loads(aligned_json)
                 logger.info("Successfully aligned schema with existing Neo4j structure")
             except json.JSONDecodeError as json_err:
                 logger.error(f"JSON parsing failed for alignment. Raw response: {aligned_json}")
                 raise ValueError(f"Invalid JSON response for alignment: {json_err}")
-            
+
             return (
                 aligned_dict.get("aligned_nodes", {}),
                 aligned_dict.get("aligned_relationships", {})
             )
         except Exception as e:
             logger.error(f"Error aligning with existing schema: {e}")
-            # Return original nodes/relationships instead of raising
             logger.warning("Returning original metadata due to alignment error")
             return (nodes, relationships)
+
     
     def _inject_inverse_relationships(self, relationships: List[Dict[str, Any]], aligned_relationships: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Inject inverse relationships into the extracted data, avoiding duplicates."""
-        
-        inversed_relationships = []
-        
-        # Create a map from a relationship type to its inverse
-        inverse_map = {
-            rel_type: details.get("inverse")
-            for rel_type, details in aligned_relationships.items()
-        }
-        
-        # Create a set of existing relationship tuples to check for duplicates
-        existing_relationships = set()
-        for rel in relationships:
-            rel_tuple = (rel.get("type"), rel.get("from_id"), rel.get("to_id"))
-            existing_relationships.add(rel_tuple)
-        
-        for rel in relationships:
-            # Add the original relationship
-            inversed_relationships.append(rel)
-            
-            rel_type = rel.get("type")
-            inverse_type = inverse_map.get(rel_type)
-            
-            # If an inverse is defined, check if it already exists before creating it
-            if inverse_type:
-                inverse_tuple = (inverse_type, rel.get("to_id"), rel.get("from_id"))
-                
-                # Only create the inverse if it doesn't already exist
-                if inverse_tuple not in existing_relationships:
-                    inverse_rel = {
-                        "type": inverse_type,
-                        "from_id": rel.get("to_id"),
-                        "to_id": rel.get("from_id"),
-                        "from_type": rel.get("to_type"),
-                        "to_type": rel.get("from_type"),
-                        "properties": rel.get("properties", {})
-                    }
-                    inversed_relationships.append(inverse_rel)
-                    # Add to existing set to prevent duplicates within this injection process
-                    existing_relationships.add(inverse_tuple)
-                
-        return inversed_relationships
-        
+        """Deprecated: no longer generate inverse relationships. Return input as-is."""
+        return relationships
+    
     def chunk_document(self, document_text: str, chunk_size: int = 12000, overlap: int = 1000) -> List[str]:
         """Split document into overlapping chunks for processing"""
         if len(document_text) <= chunk_size:
@@ -383,177 +349,177 @@ ALIGNMENT RULES:
                 
         return chunks
 
-    def extract_document_content(self, document_text: str, aligned_nodes: Dict[str, List[str]], aligned_relationships: Dict[str, Dict[str, Any]], test_mode: bool = False) -> ExtractedData:
+    def extract_document_content(
+    self,
+    document_text: str,
+    aligned_nodes: Dict[str, List[str]],
+    aligned_relationships: Dict[str, Dict[str, Any]],
+    test_mode: bool = False
+    ) -> "ExtractedData":
         """Step 6: Extract actual content based on the aligned metadata using document batching"""
-        
-        metadata_context = f"""
-EXTRACTION SCHEMA:
-Nodes to extract: {json.dumps(aligned_nodes, indent=2)}
-Relationships to extract: {json.dumps(aligned_relationships, indent=2)}
-"""
-        
+
+        metadata_context = textwrap.dedent(f"""
+            EXTRACTION SCHEMA:
+            Nodes to extract: {json.dumps(aligned_nodes, indent=2)}
+            Relationships to extract: {json.dumps(aligned_relationships, indent=2)}
+        """).strip()
+
+        # Predefine JSON example blocks to avoid f-string brace issues
+        output_format_block = """{
+    "nodes": {
+        "EntityType1": [
+        {"property1": "value1", "property2": "value2", "property3": "value3"},
+        {"property1": "value1", "property2": "value2"}
+        ],
+        "EntityType2": [
+        {"property1": "value1", "property2": "value2"}
+        ]
+    },
+    "relationships": [
+        {"type": "RELATIONSHIP_TYPE", "from_id": "identifying_value_of_source_entity", "from_type": "EntityType1", "to_id": "identifying_value_of_target_entity", "to_type": "EntityType2", "properties": {"rel_property": "value"}},
+        {"type": "ANOTHER_RELATIONSHIP", "from_id": "another_identifying_value", "from_type": "EntityType1", "to_id": "target_identifying_value", "to_type": "EntityType2", "properties": {}}
+    ]
+    }"""
+
+        example_block = """{
+    "nodes": {
+        "Case": [
+        {"case_name": "Smith v. Jones", "case_citation": "123 F.3d 456", "year": "2020"},
+        {"case_name": "Doe v. Roe", "court": "Supreme Court"}
+        ],
+        "Party": [
+        {"party_name": "Smith", "role": "plaintiff"},
+        {"party_name": "Jones", "role": "defendant"}
+        ]
+    },
+    "relationships": [
+        {"type": "INVOLVES", "from_id": "Smith v. Jones", "from_type": "Case", "to_id": "Smith", "to_type": "Party", "properties": {}},
+        {"type": "INVOLVES", "from_id": "Smith v. Jones", "from_type": "Case", "to_id": "Jones", "to_type": "Party", "properties": {}}
+    ]
+    }"""
+
         # Split document into chunks
         chunks = self.chunk_document(document_text)
-        
+
         # Limit chunks for testing
         if test_mode:
             chunks = chunks[:1]  # Only process first chunk in test mode
             print(f"      🧪 TEST MODE: Processing only the first chunk ({len(chunks[0])} chars)...")
         else:
             print(f"      📄 Processing document in {len(chunks)} chunks...")
-        
+
         # Process each chunk
-        all_nodes = {}
-        all_relationships = []
-        
+        all_nodes: Dict[str, List[Dict[str, Any]]] = {}
+        all_relationships: List[Dict[str, Any]] = []
+
         for i, chunk in enumerate(chunks):
             print(f"      📝 Processing chunk {i+1}/{len(chunks)} ({len(chunk)} chars)...")
-            
-            prompt = f"""
-{metadata_context}
 
-DOCUMENT CHUNK TO EXTRACT FROM (Chunk {i+1}/{len(chunks)}):
-{chunk}
+            prompt = textwrap.dedent(f"""
+                {metadata_context}
 
-TASK: Extract ALL instances of the specified entities and relationships from this document chunk.
+                DOCUMENT CHUNK TO EXTRACT FROM (Chunk {i+1}/{len(chunks)}):
+                {chunk}
 
-OUTPUT FORMAT (JSON only):
-{{
-  "nodes": {{
-    "EntityType1": [
-      {{"property1": "value1", "property2": "value2", "property3": "value3"}},
-      {{"property1": "value1", "property2": "value2"}}
-    ],
-    "EntityType2": [
-      {{"property1": "value1", "property2": "value2"}}
-    ]
-  }},
-  "relationships": [
-    {{"type": "RELATIONSHIP_TYPE", "from_id": "identifying_value_of_source_entity", "from_type": "EntityType1", "to_id": "identifying_value_of_target_entity", "to_type": "EntityType2", "properties": {{"rel_property": "value"}}}},
-    {{"type": "ANOTHER_RELATIONSHIP", "from_id": "another_identifying_value", "from_type": "EntityType1", "to_id": "target_identifying_value", "to_type": "EntityType2", "properties": {{}}}}
-  ]
-}}
+                TASK: Extract ALL instances of the specified entities and relationships from this document chunk.
 
-EXAMPLE (for reference only - use actual document content):
-{{
-  "nodes": {{
-    "Case": [
-      {{"case_name": "Smith v. Jones", "case_citation": "123 F.3d 456", "year": "2020"}},
-      {{"case_name": "Doe v. Roe", "court": "Supreme Court"}}
-    ],
-    "Party": [
-      {{"party_name": "Smith", "role": "plaintiff"}},
-      {{"party_name": "Jones", "role": "defendant"}}
-    ]
-  }},
-  "relationships": [
-    {{"type": "INVOLVES", "from_id": "Smith v. Jones", "from_type": "Case", "to_id": "Smith", "to_type": "Party", "properties": {{}}}},
-    {{"type": "INVOLVES", "from_id": "Smith v. Jones", "from_type": "Case", "to_id": "Jones", "to_type": "Party", "properties": {{}}}}
-  ]
-}}
+                OUTPUT FORMAT (JSON only):
+                {output_format_block}
 
-EXTRACTION REQUIREMENTS:
-1. Extract EVERY instance of each node type from this chunk - don't miss any
-2. DO NOT include any ID fields in the nodes - UUIDs will be generated automatically  
-3. Extract ALL available properties for each node based on document content - property names should match what's actually in the document
-4. For relationships, use identifying values (like names, titles, citations) as from_id and to_id values - these will be automatically mapped to UUIDs later
-5. Create ALL relationships between nodes as specified in the schema
-6. Only create relationships between nodes that exist in THIS chunk
-7. Use exact node type names and relationship types from the schema
-8. If a property value is not available, use null
-9. Ensure relationship from_id/to_id values match actual identifying properties of the referenced nodes
-10. CRITICAL: Output ALL relationships completely - do not truncate or add comments
-11. Return ONLY complete, valid JSON with no comments or truncation
-"""
+                EXAMPLE (for reference only - use actual document content):
+                {example_block}
+
+                EXTRACTION REQUIREMENTS:
+                1. Extract EVERY instance of each node type from this chunk - don't miss any
+                2. Include any document-provided ID/code fields present in the text (e.g., keys ending with "_id" or exactly "id"/"_id"). Do NOT invent IDs; only include IDs that appear in the document content.
+                3. Extract ALL available properties for each node based on document content - property names should match what's actually in the document
+                4. For relationships, use identifying values (like names, titles, citations, or document-provided IDs) as from_id and to_id values - these will be automatically mapped to UUIDs later
+                5. Create ALL relationships between nodes as specified in the schema
+                6. Only create relationships between nodes that exist in THIS chunk
+                7. Use exact node type names and relationship types from the schema (canonical only; do NOT output inverse variants)
+                8. If a property value is not available, use null
+                9. Ensure relationship from_id/to_id values match actual identifying properties of the referenced nodes
+                10. CRITICAL: Output ALL relationships completely - do not truncate or add comments
+                11. Return ONLY complete, valid JSON with no comments or truncation
+            """).strip()
 
             try:
                 print(f"         🤖 Calling AI model for chunk {i+1}...")
                 response = self.llm.call([{"role": "user", "content": prompt}])
-                
+
                 if not response:
                     print(f"         ⚠️ Empty response for chunk {i+1}, skipping...")
                     continue
-                    
+
                 content_json = self._strip_json_codeblock(response)
-                
+
                 try:
                     content_dict = json.loads(content_json)
-                except json.JSONDecodeError as json_err:
+                except json.JSONDecodeError:
                     print(f"         ❌ JSON parsing failed for chunk {i+1}, skipping...")
                     logger.error(f"JSON parsing failed for chunk {i+1}. Raw response: {content_json}")
                     continue
-                
+
                 # Merge nodes from this chunk
                 chunk_nodes = content_dict.get("nodes", {})
-                for node_type, nodes in chunk_nodes.items():
+                for node_type, node_list in chunk_nodes.items():
                     if node_type not in all_nodes:
                         all_nodes[node_type] = []
-                    all_nodes[node_type].extend(nodes)
-                
+                    all_nodes[node_type].extend(node_list)
+
                 # Add relationships from this chunk
                 chunk_relationships = content_dict.get("relationships", [])
                 all_relationships.extend(chunk_relationships)
-                
-                print(f"         ✅ Chunk {i+1}: {sum(len(nodes) for nodes in chunk_nodes.values())} nodes, {len(chunk_relationships)} relationships")
-                
+
+                print(f"         ✅ Chunk {i+1}: {sum(len(v) for v in chunk_nodes.values())} nodes, {len(chunk_relationships)} relationships")
+
             except Exception as e:
                 print(f"         ❌ Error processing chunk {i+1}: {e}")
                 logger.error(f"Error processing chunk {i+1}: {e}")
                 continue
-        
-        # Show relationship types before inverse injection
-        rel_types_before = {}
+
+        # Summarize relationship types detected (canonical only)
+        rel_types_summary: Dict[str, int] = {}
         for rel in all_relationships:
             rel_type = rel.get("type", "UNKNOWN")
-            rel_types_before[rel_type] = rel_types_before.get(rel_type, 0) + 1
-        print(f"      📋 Relationship types before inverse: {dict(sorted(rel_types_before.items()))}")
-        
-        # Inject inverse relationships
-        print(f"      🔄 Before inverse injection: {len(all_relationships)} relationships")
-        all_relationships = self._inject_inverse_relationships(all_relationships, aligned_relationships)
-        print(f"      ➕ After inverse injection: {len(all_relationships)} relationships")
-        
-        # Show relationship types after inverse injection
-        rel_types_after = {}
-        for rel in all_relationships:
-            rel_type = rel.get("type", "UNKNOWN")
-            rel_types_after[rel_type] = rel_types_after.get(rel_type, 0) + 1
-        print(f"      📋 Relationship types after inverse: {dict(sorted(rel_types_after.items()))}")
-        
+            rel_types_summary[rel_type] = rel_types_summary.get(rel_type, 0) + 1
+        print(f"      📋 Relationship types (canonical): {dict(sorted(rel_types_summary.items()))}")
+
         # First deduplicate within document to avoid duplicate work
         print(f"      🔄 Deduplicating nodes within document...")
         deduplicated_nodes = self._deduplicate_nodes_by_properties(all_nodes)
-        
+
         # Assign UUIDs to all nodes with upload_code-based deduplication
         print(f"      🔑 Assigning UUIDs with upload_code deduplication...")
-        
+
         # Track deduplication stats
         self._reused_count = 0
         self._new_count = 0
-        
+
         id_mapping = self._assign_uuids_to_nodes(deduplicated_nodes)
-        
+
         # Count reused vs new UUIDs
-        total_nodes = sum(len(nodes) for nodes in deduplicated_nodes.values())
+        total_nodes = sum(len(v) for v in deduplicated_nodes.values())
         print(f"      📊 UUID Assignment Summary: {total_nodes} nodes processed ({self._reused_count} reused, {self._new_count} new)")
         print(f"      📋 ID Mapping contains {len(id_mapping)} entries for relationship processing")
-        
+
         # Update relationships to use UUID references
         print(f"      🔗 Mapping relationships to use UUID references...")
         print(f"      📋 Processing {len(all_relationships)} relationships:")
-        for i, rel in enumerate(all_relationships[:3]):  # Show first 3 relationships
-            print(f"         Rel {i+1}: {rel.get('type')} from_id='{rel.get('from_id')}' to_id='{rel.get('to_id')}'")
+        for j, rel in enumerate(all_relationships[:3]):  # Show first 3 relationships
+            print(f"         Rel {j+1}: {rel.get('type')} from_id='{rel.get('from_id')}' to_id='{rel.get('to_id')}'")
         if len(all_relationships) > 3:
             print(f"         ... and {len(all_relationships) - 3} more")
+
         updated_relationships = self._map_relationships_to_uuids(all_relationships, id_mapping)
-        
+
         # Deduplicate relationships within document and against Neo4j
         print(f"      🔄 Deduplicating relationships...")
         unique_relationships = self._deduplicate_relationships(updated_relationships, deduplicated_nodes)
-        
-        total_nodes = sum(len(nodes) for nodes in deduplicated_nodes.values())
+
+        total_nodes = sum(len(v) for v in deduplicated_nodes.values())
         print(f"      ✅ Final results: {total_nodes} unique nodes, {len(unique_relationships)} unique relationships")
-        
+
         return ExtractedData(
             nodes=deduplicated_nodes,
             relationships=unique_relationships
@@ -638,6 +604,11 @@ EXTRACTION REQUIREMENTS:
         successful_queries = 0
         failed_queries = 0
         total = len(queries)
+        # Track created relationships when falling back
+        try:
+            self._rel_created_count
+        except AttributeError:
+            self._rel_created_count = 0
 
         print(f"      📝 Executing {total} Cypher queries (individual mode)...")
 
@@ -648,6 +619,9 @@ EXTRACTION REQUIREMENTS:
                 try:
                     neo4j_client.execute_query(query, params)
                     successful_queries += 1
+                    # Heuristic: count relationship merges (dedup ensures new)
+                    if "MERGE (a)-[r:" in query:
+                        self._rel_created_count += 1
                     break
                 except Exception as e:
                     if attempt < max_retries - 1:
@@ -688,6 +662,10 @@ EXTRACTION REQUIREMENTS:
             # ------------------------
             # 1) Batch all node merges
             # ------------------------
+            # Track counts for summary
+            self._node_created_total = 0
+            self._node_matched_total = 0
+            self._rel_created_count = 0
             for node_type, nodes in extracted_data.nodes.items():
                 if not nodes:
                     continue
@@ -705,8 +683,12 @@ EXTRACTION REQUIREMENTS:
                 batch_query = f"""
                 UNWIND $rows AS row
                 MERGE (n:{node_type} {{{id_prop}: row.{id_prop}}})
-                SET   n += row
-                RETURN count(n) as nodes_created
+                ON CREATE SET n += row, n.__created__ = true
+                ON MATCH  SET n += row
+                WITH n, coalesce(n.__created__, false) AS was_created
+                REMOVE n.__created__
+                RETURN sum(CASE WHEN was_created THEN 1 ELSE 0 END) AS created,
+                       sum(CASE WHEN was_created THEN 0 ELSE 1 END) AS matched
                 """
 
                 # Debug: Show sample data being inserted
@@ -716,11 +698,14 @@ EXTRACTION REQUIREMENTS:
                 
                 try:
                     result = neo4j_client.execute_query(batch_query, {"rows": valid_rows})
-                    actual_count = result[0]["nodes_created"] if result else 0
-                    print(f"      ✅ Actually created {actual_count} {node_type} nodes (attempted {len(valid_rows)})")
+                    created = result[0]["created"] if result else 0
+                    matched = result[0]["matched"] if result else 0
+                    self._node_created_total += created
+                    self._node_matched_total += matched
+                    print(f"      ✅ Node MERGE results for {node_type}: created={created}, matched={matched} (attempted {len(valid_rows)})")
                     
                     # Verify a sample node exists
-                    if valid_rows and actual_count > 0:
+                    if valid_rows and created > 0:
                         sample = valid_rows[0]
                         check_query = f"MATCH (n:{node_type} {{{id_prop}: $id_val}}) RETURN count(n) as count"
                         check_result = neo4j_client.execute_query(check_query, {"id_val": sample[id_prop]})
@@ -773,6 +758,8 @@ EXTRACTION REQUIREMENTS:
                     "properties":  rel.get("properties", {})
                 })
 
+            rel_created_total = 0
+            rel_matched_total = 0
             for (rel_type, from_type, to_type, from_id_prop, to_id_prop), rows in rel_batches.items():
                 if not rows:
                     continue
@@ -804,14 +791,24 @@ EXTRACTION REQUIREMENTS:
                 MATCH (a:{from_type} {{{from_id_prop}: row.from_id}})
                 MATCH (b:{to_type}   {{{to_id_prop}:   row.to_id}})
                 MERGE (a)-[r:{rel_type}]->(b)
-                WITH r, row
+                ON CREATE SET r.__created__ = true
+                WITH r, row, coalesce(r.__created__, false) AS was_created
                 FOREACH (k IN keys(row.properties) | SET r[k] = row.properties[k])
-                RETURN count(r) as relationships_created
+                REMOVE r.__created__
+                RETURN sum(CASE WHEN was_created THEN 1 ELSE 0 END) AS created,
+                       sum(CASE WHEN was_created THEN 0 ELSE 1 END) AS matched
                 """
                 
                 result = neo4j_client.execute_query(enhanced_query, {"rows": rows})
-                actual_count = result[0]["relationships_created"] if result else 0
-                print(f"      ✅ Actually created {actual_count} {rel_type} relationships (attempted {len(rows)})")
+                created = result[0]["created"] if result else 0
+                matched = result[0]["matched"] if result else 0
+                print(f"      ✅ Relationship MERGE results for {rel_type}: created={created}, matched={matched} (attempted {len(rows)})")
+                rel_created_total += created
+                rel_matched_total += matched
+
+            # Save for summary reporting
+            self._rel_created_count = rel_created_total
+            self._rel_matched_count = rel_matched_total
 
             return True
 
@@ -821,7 +818,29 @@ EXTRACTION REQUIREMENTS:
 
     def process_document(self, file_content: bytes, filename: str) -> Dict[str, Any]:
         """Main processing pipeline with improved multi-step approach"""
+        # Optional quiet mode to suppress verbose prints and only log summaries
+        quiet = False
         try:
+            import os
+            quiet_env = os.getenv("LEXON_UPLOAD_QUIET", "0")
+            quiet = str(quiet_env).lower() in ("1", "true", "yes", "on")
+        except Exception:
+            quiet = False
+
+        original_print = None
+        try:
+            import builtins  # type: ignore
+            original_print = builtins.print
+            if quiet:
+                # Suppress output entirely when explicitly requested
+                builtins.print = lambda *args, **kwargs: None  # type: ignore
+            else:
+                # Ensure all prints flush immediately for real-time IDE output
+                def _realtime_print(*args, **kwargs):  # type: ignore
+                    kwargs.setdefault("flush", True)
+                    return original_print(*args, **kwargs)
+                builtins.print = _realtime_print  # type: ignore
+
             print(f"\n🚀 Starting AI-powered document processing for: {filename}")
             
             # Step 1: Get existing Neo4j schema
@@ -841,6 +860,7 @@ EXTRACTION REQUIREMENTS:
             if cases:
                 print(f"🏛️  Detected {len(cases)} cases in document, processing one at a time...")
                 total_nodes = total_rels = 0
+                total_reused = total_new = 0
                 for case_name, case_body in cases:
                     # Refresh schema before each case to ensure alignment is always current
                     print(f"\n🔄 Refreshing Neo4j schema before processing '{case_name}'...")
@@ -848,18 +868,29 @@ EXTRACTION REQUIREMENTS:
                     case_result = self._process_single_case(case_body, case_name, current_schema_info)
                     total_nodes += case_result["nodes_added"]
                     total_rels += case_result["relationships_added"]
+                    total_reused += case_result.get("reused_count", 0)
+                    total_new += case_result.get("new_count", 0)
 
                 # Update property mappings after successful multi-case import
                 self._update_property_mappings_after_import()
 
-                return {
+                summary = {
                     "success": True,
                     "filename": filename,
                     "cases_processed": len(cases),
                     "total_nodes_added": total_nodes,
                     "total_relationships_added": total_rels,
+                    "uuid_reused": total_reused,
+                    "uuid_new": total_new,
                     "message": f"Processed {len(cases)} cases successfully"
                 }
+
+                # Log concise summary
+                logger.info(
+                    f"Upload summary: cases={summary['cases_processed']} nodes_added={summary['total_nodes_added']} "
+                    f"rels_added={summary['total_relationships_added']} uuid_reused={summary['uuid_reused']} uuid_new={summary['uuid_new']}"
+                )
+                return summary
             
             # Step 3: Identify ALL possible nodes in document
             print("🔍 Step 3/8: Using AI to identify all possible nodes...")
@@ -884,6 +915,12 @@ EXTRACTION REQUIREMENTS:
                 document_nodes, document_relationships, schema_info, relationship_constraints
             )
             print(f"   Schema alignment complete - {len(aligned_nodes)} node types, {len(aligned_relationships)} relationship types")
+
+            # Persist relationship constraints for future runs
+            try:
+                self._save_relationship_constraints(relationship_constraints)
+            except Exception as e:
+                logger.warning(f"Could not persist relationship constraints: {e}")
             
             # Step 7: Extract actual content using aligned metadata
             print("📝 Step 7/8: Using AI to extract actual content from document...")
@@ -912,16 +949,33 @@ EXTRACTION REQUIREMENTS:
             
             print(f"   {'✅ Successfully' if success else '❌ Failed to'} import data into Neo4j")
             
-            print(f"\n🎉 Document processing complete for {filename}!")
-            print(f"📊 Final Summary:")
-            print(f"   • Total nodes extracted: {total_nodes}")
-            print(f"   • Total relationships extracted: {len(extracted_data.relationships)}")
-            print(f"   • Cypher queries executed: {len(queries)}")
-            print(f"   • Processing status: {'SUCCESS' if success else 'FAILED'}")
+            # Concise summary logging (nodes new vs reused captured from _assign_uuids_to_nodes)
+            logger.info(
+                f"Upload summary: file='{filename}' nodes_total={total_nodes} rels_total={len(extracted_data.relationships)} "
+                f"uuid_reused={getattr(self, '_reused_count', 0)} uuid_new={getattr(self, '_new_count', 0)} "
+                f"nodes_created={getattr(self, '_node_created_total', 0)} nodes_matched={getattr(self, '_node_matched_total', 0)} "
+                f"rels_created={getattr(self, '_rel_created_count', 0)} rels_matched={getattr(self, '_rel_matched_count', 0)} "
+                f"success={success}"
+            )
             
-            # Update property mappings after successful import
+            # Update property mappings and generate embeddings after successful import
             if success:
-                self._update_property_mappings_after_import()
+                try:
+                    # 1) Update property mappings (existing behavior)
+                    self._update_property_mappings_after_import()
+                except Exception as e:
+                    logger.warning(f"Property mappings update failed: {e}")
+
+                try:
+                    # 2) Generate embeddings for selected properties on imported nodes
+                    print("🧠 Generating embeddings for imported nodes...")
+                    from app.lib.embeddings import generate_embeddings_for_nodes
+                    embedding_ok = generate_embeddings_for_nodes(extracted_data.nodes)
+                    print(
+                        f"   • Embeddings generation: {'SUCCESS' if embedding_ok else 'FAILED'}"
+                    )
+                except Exception as e:
+                    logger.warning(f"Embedding generation step failed: {e}")
             
             # Return processing results
             return {
@@ -941,7 +995,9 @@ EXTRACTION REQUIREMENTS:
                     "nodes": {k: len(v) for k, v in extracted_data.nodes.items()},
                     "relationships": len(extracted_data.relationships)
                 },
-                "queries_executed": len(queries)
+                "queries_executed": len(queries),
+                "uuid_reused": getattr(self, "_reused_count", 0),
+                "uuid_new": getattr(self, "_new_count", 0),
             }
             
         except Exception as e:
@@ -951,6 +1007,14 @@ EXTRACTION REQUIREMENTS:
                 "filename": filename,
                 "error": str(e)
             }
+        finally:
+            # Restore printing behavior
+            if original_print is not None:
+                try:
+                    import builtins  # type: ignore
+                    builtins.print = original_print  # type: ignore
+                except Exception:
+                    pass
 
     def _strip_json_codeblock(self, text: str) -> str:
         """Remove markdown ```json ... ``` and ``` ... ``` wrappers if present."""
@@ -1003,6 +1067,11 @@ EXTRACTION REQUIREMENTS:
         aligned_nodes, aligned_relationships = self.align_with_existing_schema(
             document_nodes, document_relationships, schema_info, relationship_constraints
         )
+        # Persist relationship constraints for future runs
+        try:
+            self._save_relationship_constraints(relationship_constraints)
+        except Exception as e:
+            logger.warning(f"Could not persist relationship constraints: {e}")
 
         extracted_data = self.extract_document_content(case_body, aligned_nodes, aligned_relationships, test_mode=False)
         node_count = sum(len(v) for v in extracted_data.nodes.values())
@@ -1014,6 +1083,16 @@ EXTRACTION REQUIREMENTS:
         if not success:
             queries = self.generate_cypher_queries(extracted_data)
             success = self.execute_individual_queries(queries)
+
+        # Post-insert: generate embeddings for selected properties for this case only
+        if success:
+            try:
+                print("      🧠 Generating embeddings for this case's nodes...")
+                from app.lib.embeddings import generate_embeddings_for_nodes
+                embedding_ok = generate_embeddings_for_nodes(extracted_data.nodes)
+                print(f"      • Embeddings generation: {'SUCCESS' if embedding_ok else 'FAILED'}")
+            except Exception as e:
+                logger.warning(f"Embedding generation for case '{case_name}' failed: {e}")
 
         # Run verification after database insertion
         verification_report = self._verify_case_upload(case_name, extracted_data)
@@ -1046,14 +1125,19 @@ EXTRACTION REQUIREMENTS:
 
 
     def _assign_uuids_to_nodes(self, all_nodes: Dict[str, List[Dict[str, Any]]]) -> Dict[str, str]:
-        """Assign UUIDs to all nodes using upload_code-based deduplication."""
+        """Assign UUIDs to all nodes using document-provided IDs as upload_code when available.
+
+        If a document-provided ID (endswith("_id")/"id"/"_id") is present, reuse the
+        existing node UUID in Neo4j if found; otherwise create a new one. This ensures
+        stable node identity across re-uploads.
+        """
         id_mapping = {}
         
         for label, nodes in all_nodes.items():
             id_prop = self._label_id_prop(label, {label: nodes})
             
             for node in nodes:
-                # Extract upload_code from document ID fields
+                # Extract upload_code from document ID fields (verbatim from document)
                 upload_code = None
                 for key, value in node.items():
                     if isinstance(value, str) and value.strip():
@@ -1075,7 +1159,7 @@ EXTRACTION REQUIREMENTS:
                     upload_code_prop = f"{snake_case}_upload_code"
                     node[upload_code_prop] = upload_code
                 
-                # Build ID mapping for relationship processing
+                # Build ID mapping for relationship processing (map document IDs and names)
                 if upload_code:
                     id_mapping[upload_code] = final_uuid
                     print(f"         📋 ID Mapping: '{upload_code}' -> {final_uuid}")
@@ -1320,9 +1404,33 @@ EXTRACTION REQUIREMENTS:
         return final_relationships
 
     def _extract_relationship_constraints(self) -> Dict[str, List[str]]:
-        """Extract existing relationship types between specific node type pairs from Neo4j."""
+        """Extract relationship types between node type pairs.
+
+        Strategy:
+        1) Load cached mappings from static file if present (best-effort).
+        2) Query Neo4j live constraints and merge with cached (live takes precedence).
+        3) Return merged constraints.
+        """
+        merged: Dict[str, List[str]] = {}
+
+        # 1) Load cached file if present
         try:
-            # Get all relationship types with their from/to node types
+            import os, json
+            static_path = os.path.join(os.path.dirname(__file__), "..", "..", "relationship_mappings.json")
+            static_path = os.path.abspath(static_path)
+            if os.path.exists(static_path):
+                with open(static_path, "r") as f:
+                    cached = json.load(f)
+                    if isinstance(cached, dict):
+                        for k, v in cached.items():
+                            if isinstance(v, list):
+                                merged[k] = list(sorted(set(v)))
+                print(f"      💾 Loaded cached relationship mappings from {static_path} ({len(merged)} pairs)")
+        except Exception as e:
+            logger.warning(f"Could not load cached relationship mappings: {e}")
+
+        # 2) Query Neo4j live constraints
+        try:
             query = """
             MATCH (a)-[r]->(b)
             UNWIND labels(a) as from_type
@@ -1331,26 +1439,41 @@ EXTRACTION REQUIREMENTS:
             RETURN from_type, to_type, collect(DISTINCT rel_type) as relationship_types
             ORDER BY from_type, to_type
             """
-            
             result = neo4j_client.execute_query(query)
-            
-            constraints = {}
+            live = {}
             for record in result:
                 from_type = record.get("from_type")
                 to_type = record.get("to_type")
                 rel_types = record.get("relationship_types", [])
-                
                 if from_type and to_type and rel_types:
                     key = f"{from_type}->{to_type}"
-                    constraints[key] = rel_types
+                    live[key] = rel_types
                     print(f"      📋 Found {len(rel_types)} relationship types: {from_type} -> {to_type}: {rel_types}")
-            
-            print(f"      📊 Extracted constraints for {len(constraints)} node type pairs")
-            return constraints
-            
+
+            # Merge, preferring live
+            for k, v in live.items():
+                merged[k] = list(sorted(set(v)))
+
+            print(f"      📊 Extracted merged constraints for {len(merged)} node type pairs")
+            return merged
         except Exception as e:
             logger.warning(f"Error extracting relationship constraints: {e}")
-            return {}
+            return merged
+
+    def _save_relationship_constraints(self, constraints: Dict[str, List[str]]) -> None:
+        """Persist relationship type mappings to a static file for future runs."""
+        try:
+            import os, json
+            static_path = os.path.join(os.path.dirname(__file__), "..", "..", "relationship_mappings.json")
+            static_path = os.path.abspath(static_path)
+            os.makedirs(os.path.dirname(static_path), exist_ok=True)
+            # Normalize and sort for stability
+            normalized = {k: list(sorted(set(v))) for k, v in constraints.items()}
+            with open(static_path, "w") as f:
+                json.dump(normalized, f, indent=2)
+            print(f"      💾 Saved relationship mappings to {static_path} ({len(normalized)} pairs)")
+        except Exception as e:
+            logger.warning(f"Could not save relationship mappings: {e}")
 
     def _verify_case_upload(self, case_name: str, extracted_data: ExtractedData) -> Dict[str, Any]:
         """

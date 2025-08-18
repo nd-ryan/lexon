@@ -21,16 +21,60 @@ new_query_generation_task:
        Your query MUST end with: `RETURN [...your data...] AS result`
        This ensures a predictable Neo4j result structure for parsing.
     
+    **ABSOLUTE SYNTAX RULES (CRITICAL):**
+    - Do NOT include comments of any form in the generated Cypher. Avoid both line comments `// ...` and block comments `/* ... */`.
+    - Do NOT include any explanatory text, prose, or code fences. Only output pure Cypher in the `generated_query` field.
+    - Produce a single valid Cypher statement. Do not add comments, multiple statements, or terminators like `;`.
+    - Every `WITH` must be followed by a valid clause and the query must conclude with `RETURN [...] AS result`.
+    
+    **Schema Interpretation Rules (CRITICAL):**
+    - Treat the provided schema as authoritative. Do NOT assume edges that aren't present in it.
+    - The schema lists, for each label, a map of relationship types to connected labels. Use ONLY these relationship types when matching paths.
+    - Respect directionality. If a label shows `REL_A: TargetLabel`, that indicates an outgoing relationship of type `REL_A`. If the inverse appears in another label (e.g., `INVERSE_A: SourceLabel`), you may also traverse that inverse direction explicitly.
+    - When connecting two labels that have no direct edge in the schema, infer a multi-hop path by chaining only allowed relationship types and directions from the schema.
+    - Prefer the shortest valid path that is consistent with the schema.
+    - Explicitly specify relationship types in patterns. Do NOT use anonymous `[]` relationships when traversing the graph.
+    
     **Query Generation Guidance:**
     - **Use fuzzy search** for string matching (e.g., `CONTAINS` or `STARTS WITH`) and ensure all comparisons are **case-insensitive** by using `toLower()`.
     - If the user searches for a proper noun (e.g., a specific case name or doctrine), consider that it might be stored as an **acronym** in the database.
     - Your query should return results grouped by node label, with the appropriate id field for each label type and a list of matching id values.
     - The query must return data that can be parsed into the label/id_field/id_values structure shown above.
     - Focus on identifying the most relevant nodes rather than trying to return complete data at this stage.
-    - **CRITICAL:** Use unquoted keys in Cypher maps (label: not "label:") and collect IDs with collect(DISTINCT node.id_field).
+    - **CRITICAL:** Use unquoted keys in Cypher maps (label: not "label:") and collect IDs with `collect(DISTINCT node.id_field)`.
     - **CRITICAL:** Always end your query with `AS result` for predictable parsing.
+
+    **Best-Practice Guardrails (apply in your generated Cypher):**
+    - **Single combined result row:** If you UNWIND or expand multiple entities, re-aggregate before `RETURN` so the final `RETURN [...] AS result` is a single row.
+    - **NULL safety after OPTIONAL MATCH:** When collecting IDs from optional patterns, filter out nulls, e.g. `[x IN collect(DISTINCT n.id) WHERE x IS NOT NULL]`.
+    - **Drive optional expansions from bound vars:** Use `UNWIND` of previously collected nodes to introduce variables, then `OPTIONAL MATCH` from those variables. Avoid dangling variables gated only by `WHERE`.
+    - **Avoid Cartesian products:** Keep a single driving MATCH/UNWIND chain; don’t introduce parallel MATCHes that aren’t tied to existing variables.
+    - **Case-name variants:** When matching case names that may appear as “v.” vs “vs”, prefer a tolerant regex (e.g., `=~ '(?i).*abrams\\s+v[\\.]?s?\\.?\\s+united\\s+states.*'`) rather than a single literal token that could miss results.
+    - **Parameterize literals when practical:** Where possible, structure string filters so they could be parameterized (even if this generator inlines them).
+    - **Index awareness:** `toLower(prop)` can limit index use; if precision allows, consider `=~ '(?i)...'`. (Still acceptable to use `toLower()` per this task.)
     
-    **Complete Example Query:**
+    **Multi-word search terms:**
+    - Split the query string into lower-cased tokens. Each token must be matched independently using toLower(property) CONTAINS 'token' combined with AND.
+    - For legal case names, where tokens may include "v.", allow tolerant regexes (e.g. `=~ '(?i).*abrams\\s+v[\\.]?s?\\.?\\s+united\\s+states.*'`) so both “v.” and “vs” match. Do not attempt to fuzzy-match the whole phrase as a single string unless you are explicitly using regex.
+
+    **Multi-hop Traversal Example (Illustrative Only):**
+    If the schema indicates that `Case` connects to `Issue` via `RAISES`, `Issue` connects to `Argument` via `ADDRESSED_BY` (inverse of `ADDRESSES`), and `Argument` connects to `Doctrine` via `RELATES_TO_DOCTRINE`, then to retrieve doctrine IDs related to a case you should traverse explicitly via these edges, e.g.:
+    ```cypher
+    MATCH (c:Case)
+    WHERE toLower(c.case_name) CONTAINS toLower('abrams')
+    WITH collect(DISTINCT c.case_id) AS case_ids, collect(DISTINCT c) AS case_nodes
+    UNWIND case_nodes AS target_case
+    OPTIONAL MATCH (target_case)-[:RAISES]->(i:Issue)
+    OPTIONAL MATCH (i)<-[:ADDRESSED_BY]-(:Argument)-[:RELATES_TO_DOCTRINE]->(d:Doctrine)
+    WITH case_ids, collect(DISTINCT d.doctrine_id) AS doctrine_ids
+    RETURN [
+      {{ label: "Case", id_field: "case_id", id_values: case_ids }},
+      {{ label: "Doctrine", id_field: "doctrine_id", id_values: doctrine_ids }}
+    ] AS result
+    ```
+    Do NOT hardcode these paths; derive them from the provided schema for the current database. The example is purely illustrative of the style: use only schema-permitted relationship types and directions, add inverses when present, and avoid assuming direct edges that the schema does not show.
+    
+    **Complete Single-Hop Example (Also Illustrative):**
     ```cypher
     MATCH (c:Case)
     WHERE toLower(c.case_name) CONTAINS 'contract'
@@ -46,6 +90,86 @@ new_query_generation_task:
     
     **Format your output** as a single JSON object that strictly conforms to the `GeneratedCypherQuery` Pydantic model.
   expected_output: "A single, valid JSON object with a single key: `generated_query`, containing a Cypher query that returns label/id block data."
+
+# new_query_generation_task:
+#   description: |
+#     Generate a Cypher query that identifies relevant nodes and returns their labels, id fields, and id values for the user query: "{query}"
+    
+#     Using the following Neo4j schema information:
+#     {schema}
+    
+#     Your specific task is to:
+#     1. **Analyze the user query** to understand intent and identify which node types contain relevant information.
+#     2. **Use the provided schema information** to identify relevant node types and their identifier fields.
+#     3. **Generate a Cypher query** that returns results in this exact format using proper Cypher map syntax:
+#        ```
+#        [
+#          {{ label: "Case", id_field: "case_id", id_values: ["C0016", "C0017"] }},
+#          {{ label: "Doctrine", id_field: "doctrine_id", id_values: ["D0002"] }},
+#          {{ label: "Issue", id_field: "issue_id", id_values: ["I0031", "I0032"] }}
+#        ]
+#        ```
+       
+#        **CRITICAL - Required RETURN Structure:**
+#        Your query MUST end with: `RETURN [...your data...] AS result`
+#        This ensures a predictable Neo4j result structure for parsing.
+    
+#     **ABSOLUTE SYNTAX RULES (CRITICAL):**
+#     - Do NOT include comments of any form in the generated Cypher. Avoid both line comments `// ...` and block comments `/* ... */`.
+#     - Do NOT include any explanatory text, prose, or code fences. Only output pure Cypher in the `generated_query` field.
+#     - Produce a single valid Cypher statement. Do not add comments, multiple statements, or terminators like `;`.
+#     - Every `WITH` must be followed by a valid clause and the query must conclude with `RETURN [...] AS result`.
+    
+#     **Schema Interpretation Rules (CRITICAL):**
+#     - Treat the provided schema as authoritative. Do NOT assume edges that aren't present in it.
+#     - The schema lists, for each label, a map of relationship types to connected labels. Use ONLY these relationship types when matching paths.
+#     - Respect directionality. If a label shows `REL_A: TargetLabel`, that indicates an outgoing relationship of type `REL_A`. If the inverse appears in another label (e.g., `INVERSE_A: SourceLabel`), you may also traverse that inverse direction explicitly.
+#     - When connecting two labels that have no direct edge in the schema, infer a multi-hop path by chaining only allowed relationship types and directions from the schema.
+#     - Prefer the shortest valid path that is consistent with the schema.
+#     - Explicitly specify relationship types in patterns. Do NOT use anonymous `[]` relationships when traversing the graph.
+    
+#     **Query Generation Guidance:**
+#     - **Use fuzzy search** for string matching (e.g., `CONTAINS` or `STARTS WITH`) and ensure all comparisons are **case-insensitive** by using `toLower()`.
+#     - If the user searches for a proper noun (e.g., a specific case name or doctrine), consider that it might be stored as an **acronym** in the database.
+#     - Your query should return results grouped by node label, with the appropriate id field for each label type and a list of matching id values.
+#     - The query must return data that can be parsed into the label/id_field/id_values structure shown above.
+#     - Focus on identifying the most relevant nodes rather than trying to return complete data at this stage.
+#     - **CRITICAL:** Use unquoted keys in Cypher maps (label: not "label:") and collect IDs with `collect(DISTINCT node.id_field)`.
+#     - **CRITICAL:** Always end your query with `AS result` for predictable parsing.
+    
+#     **Multi-hop Traversal Example (Illustrative Only):**
+#     If the schema indicates that `Case` connects to `Issue` via `RAISES`, `Issue` connects to `Argument` via `ADDRESSED_BY` (inverse of `ADDRESSES`), and `Argument` connects to `Doctrine` via `RELATES_TO_DOCTRINE`, then to retrieve doctrine IDs related to a case you should traverse explicitly via these edges, e.g.:
+#     ```cypher
+#     MATCH (c:Case)
+#     WHERE toLower(c.case_name) CONTAINS toLower('abrams')
+#     WITH collect(DISTINCT c.case_id) AS case_ids, collect(DISTINCT c) AS case_nodes
+#     UNWIND case_nodes AS target_case
+#     OPTIONAL MATCH (target_case)-[:RAISES]->(i:Issue)
+#     OPTIONAL MATCH (i)<-[:ADDRESSED_BY]-(:Argument)-[:RELATES_TO_DOCTRINE]->(d:Doctrine)
+#     WITH case_ids, collect(DISTINCT d.doctrine_id) AS doctrine_ids
+#     RETURN [
+#       {{ label: "Case", id_field: "case_id", id_values: case_ids }},
+#       {{ label: "Doctrine", id_field: "doctrine_id", id_values: doctrine_ids }}
+#     ] AS result
+#     ```
+#     Do NOT hardcode these paths; derive them from the provided schema for the current database. The example is purely illustrative of the style: use only schema-permitted relationship types and directions, add inverses when present, and avoid assuming direct edges that the schema does not show.
+    
+#     **Complete Single-Hop Example (Also Illustrative):**
+#     ```cypher
+#     MATCH (c:Case)
+#     WHERE toLower(c.case_name) CONTAINS 'contract'
+#     WITH collect(DISTINCT c.case_id) AS case_ids
+#     MATCH (d:Doctrine)  
+#     WHERE toLower(d.doctrine_name) CONTAINS 'contract'
+#     WITH case_ids, collect(DISTINCT d.doctrine_id) AS doctrine_ids
+#     RETURN [
+#       {{ label: "Case", id_field: "case_id", id_values: case_ids }},
+#       {{ label: "Doctrine", id_field: "doctrine_id", id_values: doctrine_ids }}
+#     ] AS result
+#     ```
+    
+#     **Format your output** as a single JSON object that strictly conforms to the `GeneratedCypherQuery` Pydantic model.
+#   expected_output: "A single, valid JSON object with a single key: `generated_query`, containing a Cypher query that returns label/id block data."
 
 batch_enrichment_task:
   description: |
@@ -83,4 +207,7 @@ new_insights_synthesis_task:
     Use this comprehensive data to provide thorough, well-informed insights that leverage the full richness of the legal knowledge graph.
     
     Your summary should be comprehensive enough to stand alone as a complete answer to the user's query.
+
+    Your summary should be written without reference to technical details of the graph or 'the data' etc.
+
   expected_output: "A SearchInsights object containing a comprehensive summary and analysis based on the complete enriched node data." 

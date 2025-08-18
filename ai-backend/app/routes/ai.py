@@ -5,6 +5,7 @@ from app.flow_import import ImportFlow
 from app.lib.security import get_api_key
 import logging
 import json
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 router = APIRouter(dependencies=[Depends(get_api_key)])
@@ -14,6 +15,54 @@ streaming_router = APIRouter()  # No API key dependency for streaming endpoints
 from app.models.search import (
     QueryRequest
 )
+
+
+@router.get("/property-mappings")
+async def get_property_mappings():
+    """Return current property mappings loaded from the static file.
+
+    The mappings are continuously updated by the backend after imports.
+    Returns a JSON structure with at least `id_properties` and `name_properties`.
+    """
+    try:
+        from app.lib.batch_query_utils import load_property_mappings
+        mappings = load_property_mappings()
+        return {"success": True, "mappings": mappings}
+    except Exception as e:
+        logger.error(f"Failed to load property mappings: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load property mappings")
+
+@router.get("/node/enriched")
+async def get_enriched_node(label: str, id_value: str):
+    """Fetch a single enriched node by label and id_value.
+
+    Tries all configured id properties to match id_value and returns the enriched node map
+    with relationships, consistent with batch enrichment shape.
+    """
+    try:
+        from app.lib.neo4j_client import neo4j_client
+        from app.lib.batch_query_utils import build_single_node_enrichment_query
+
+        if not label or not id_value:
+            raise HTTPException(status_code=400, detail="Missing required parameters: label and id_value")
+
+        cypher = build_single_node_enrichment_query(label, id_value)
+        result = neo4j_client.execute_query(cypher)
+
+        nodes = []
+        for record in result:
+            if isinstance(record, dict):
+                if 'n' in record:
+                    nodes.append(record['n'])
+                else:
+                    nodes.append(record)
+
+        return {"success": True, "nodes": nodes}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to fetch enriched node: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch enriched node")
 
 @router.post("/import-kg/advanced")
 async def import_with_direct_processing(file: UploadFile = File(...)):

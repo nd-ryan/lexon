@@ -1,8 +1,7 @@
-'use client';
+"use client";
 
 import { useState, useEffect } from 'react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import Button from '@/components/ui/button';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 
@@ -107,12 +106,13 @@ export default function ImportPage() {
             <label htmlFor="file-upload" className="sr-only">
               Choose file
             </label>
-            <Input
+            <input
               id="file-upload"
               name="file-upload"
               type="file"
               onChange={handleFileChange}
               accept=".docx"
+              className="block w-full text-sm text-gray-900 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
             />
           </div>
 

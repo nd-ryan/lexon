@@ -1,10 +1,11 @@
-'use client'
+"use client"
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import Button from "@/components/ui/button"
+import Card from "@/components/ui/card"
+import Input from "@/components/ui/input"
 import { useSession } from 'next-auth/react'
 
 export default function SignUpPage() {
@@ -72,80 +73,63 @@ export default function SignUpPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
-      <div className="max-w-md w-full space-y-8">
-        <div>
-          <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
-            Create your account
-          </h2>
-        </div>
-        <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
-          {error && (
-            <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
-              {error}
-            </div>
-          )}
-          <div>
-            <label htmlFor="name" className="sr-only">
-              Name
-            </label>
-            <Input
-              id="name"
-              name="name"
-              type="text"
-              autoComplete="name"
-              required
-              placeholder="Name"
-              value={formData.name}
-              onChange={handleChange}
-            />
+    <section className="py-10">
+      <div className="mx-auto max-w-md px-4">
+        <Card>
+          <div className="p-6">
+            <h2 className="text-center text-xl font-semibold mb-3">Create your account</h2>
+            <form onSubmit={handleSubmit} className="space-y-3">
+              {error && (
+                <div className="rounded-md border border-red-200 bg-red-50 text-red-700 px-4 py-2 text-sm">
+                  {error}
+                </div>
+              )}
+              <div>
+                <Input
+                  id="name"
+                  name="name"
+                  type="text"
+                  placeholder="Name"
+                  autoComplete="name"
+                  required
+                  value={formData.name}
+                  onChange={handleChange}
+                />
+              </div>
+              <div>
+                <Input
+                  id="email"
+                  name="email"
+                  type="email"
+                  placeholder="Email address"
+                  autoComplete="email"
+                  required
+                  value={formData.email}
+                  onChange={handleChange}
+                />
+              </div>
+              <div>
+                <Input
+                  id="password"
+                  name="password"
+                  type="password"
+                  placeholder="Password (min. 6 characters)"
+                  autoComplete="new-password"
+                  required
+                  value={formData.password}
+                  onChange={handleChange}
+                />
+              </div>
+              <Button type="submit" disabled={loading} className="w-full">
+                {loading ? 'Signing up...' : 'Sign up'}
+              </Button>
+              <div className="mt-3 text-center">
+                <Link href="/auth/signin" className="text-sm text-indigo-700 hover:underline">Already have an account? Sign in</Link>
+              </div>
+            </form>
           </div>
-          <div>
-            <label htmlFor="email" className="sr-only">
-              Email address
-            </label>
-            <Input
-              id="email"
-              name="email"
-              type="email"
-              autoComplete="email"
-              required
-              placeholder="Email address"
-              value={formData.email}
-              onChange={handleChange}
-            />
-          </div>
-          <div>
-            <label htmlFor="password" className="sr-only">
-              Password
-            </label>
-            <Input
-              id="password"
-              name="password"
-              type="password"
-              autoComplete="new-password"
-              required
-              placeholder="Password (min. 6 characters)"
-              value={formData.password}
-              onChange={handleChange}
-            />
-          </div>
-          <div>
-            <Button
-              type="submit"
-              disabled={loading}
-              className="w-full"
-            >
-              {loading ? 'Signing up...' : 'Sign up'}
-            </Button>
-          </div>
-          <div className="text-center">
-            <Link href="/auth/signin" className="text-indigo-600 hover:text-indigo-500">
-              Already have an account? Sign in
-            </Link>
-          </div>
-        </form>
+        </Card>
       </div>
-    </div>
+    </section>
   )
 } 

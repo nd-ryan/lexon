@@ -5,23 +5,9 @@ class GeneratedCypherQuery(BaseModel):
     """A model to hold the generated Cypher query."""
     generated_query: str = Field(..., description="A broader query including related concepts.")
 
-class QueryExecutionResults(BaseModel):
-    """Simple model for raw query execution results."""
-    raw_results: List[Dict[str, Any]] = Field(..., description="The raw JSON results from the executed Cypher queries.")
-    success: bool = Field(True, description="Whether the query execution was successful")
-
 class SearchInsights(BaseModel):
     """Final synthesis model with summary only."""
     summary: str = Field(..., description="A clear, concise summary of the search results in relation to the user's query.")
-
-class FinalSearchResponse(BaseModel):
-    """Combined model that includes both execution results and insights for the final task."""
-    success: bool = Field(True, description="Whether the search was successful")
-    explanation: str = Field(..., description="A clear, concise summary of the search results in relation to the user's query.")
-    raw_results: List[Dict[str, Any]] = Field(..., description="The raw JSON results from the executed Cypher queries.")
-    cypher_queries: List[str] = Field(..., description="Cypher queries that were executed.")
-    query: str = Field(..., description="Original user query")
-    execution_time: Optional[float] = Field(None, description="Time taken to execute the search")
 
 # Structured Output Models for Search Results
 class StructuredSearchResponse(BaseModel):
@@ -34,9 +20,6 @@ class StructuredSearchResponse(BaseModel):
     execution_time: Optional[float] = Field(None, description="Time taken to execute the search")
 
 # Request Models
-
-
-
 
 class QueryRequest(BaseModel):
     query: str

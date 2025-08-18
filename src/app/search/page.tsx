@@ -1,37 +1,13 @@
-'use client';
+"use client";
 
 import { useState, useEffect } from 'react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import Button from "@/components/ui/button";
+import Card from "@/components/ui/card";
+import Input from "@/components/ui/input";
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
-
-// Types for structured search response - Updated to match backend StructuredSearchResponse
-interface StructuredSearchResponse {
-  success: boolean;
-  explanation: string;
-  raw_results: any[]; // Changed from SearchResult[] to any[] to match backend
-  cypher_queries: string[];
-  query: string;
-  execution_time?: number;
-}
-
-// Search result structure from Neo4j raw results
-interface SearchResult {
-  [key: string]: unknown; // Neo4j results can have any structure
-}
-
-// Remove the old SearchAnalysis interface as it's not used by backend
-// interface SearchAnalysis {
-//   query_interpretation: string;
-//   methodology: string[];
-//   key_insights: string[];
-//   patterns_identified: string[];
-//   limitations: string[];
-//   formatted_results: string[];
-//   raw_query_results: unknown[];
-// }
+import StructuredResults, { StructuredSearchResponse } from '@/components/search/StructuredResults.client';
+ 
 
 // Search history types
 interface SearchHistoryItem {
@@ -45,266 +21,7 @@ interface SearchHistoryItem {
   updatedAt: string;
 }
 
-// Helper functions for dynamic result formatting
-const getCardStyle = (key: string, index: number) => {
-  const colors = [
-    { border: 'border-blue-200', header: 'bg-blue-50', text: 'text-blue-900', icon: '🧠' },
-    { border: 'border-green-200', header: 'bg-green-50', text: 'text-green-900', icon: '⚡' },
-    { border: 'border-yellow-200', header: 'bg-yellow-50', text: 'text-yellow-900', icon: '💡' },
-    { border: 'border-emerald-200', header: 'bg-emerald-50', text: 'text-emerald-900', icon: '📋' },
-    { border: 'border-purple-200', header: 'bg-purple-50', text: 'text-purple-900', icon: '📊' },
-    { border: 'border-indigo-200', header: 'bg-indigo-50', text: 'text-indigo-900', icon: '🔍' },
-    { border: 'border-pink-200', header: 'bg-pink-50', text: 'text-pink-900', icon: '🎯' },
-    { border: 'border-cyan-200', header: 'bg-cyan-50', text: 'text-cyan-900', icon: '🔧' },
-    { border: 'border-orange-200', header: 'bg-orange-50', text: 'text-orange-900', icon: '📈' },
-    { border: 'border-teal-200', header: 'bg-teal-50', text: 'text-teal-900', icon: '🎨' }
-  ];
-  
-  // Use specific icons for known keys (updated for backend fields)
-  const keyIcons: Record<string, string> = {
-    query: '❓',
-    success: '✅',
-    explanation: '📝',
-    raw_results: '📊',
-    cypher_queries: '🔧',
-    execution_time: '⏱️'
-  };
-  
-  const color = colors[index % colors.length];
-  const icon = keyIcons[key] || color.icon;
-  
-  return { ...color, icon };
-};
-
-const formatTitle = (key: string) => {
-  return key
-    .split('_')
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ');
-};
-
-const renderValue = (value: unknown, key: string): React.ReactNode => {
-  if (value === null || value === undefined) {
-    return (
-      <div className="flex items-center justify-center py-4 text-muted-foreground">
-        <span className="text-sm italic">No data available</span>
-      </div>
-    );
-  }
-
-  if (typeof value === 'boolean') {
-    return (
-      <div className="flex justify-start px-2">
-        <span className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
-          value 
-            ? 'bg-green-50 text-green-700 border border-green-200' 
-            : 'bg-red-50 text-red-700 border border-red-200'
-        }`}>
-          <span className="text-xs">{value ? '✅' : '❌'}</span>
-          {value ? 'True' : 'False'}
-        </span>
-      </div>
-    );
-  }
-
-  if (typeof value === 'number') {
-    const displayValue = key.includes('time') ? `${value.toFixed(2)}s` : value.toString();
-    return (
-      <div className="flex justify-start">
-        <span className="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-full text-sm font-mono">
-          {key.includes('time') && <span className="text-xs">⏱️</span>}
-          {displayValue}
-        </span>
-      </div>
-    );
-  }
-
-  if (typeof value === 'string') {
-    if (value.length > 500) {
-      return (
-        <div className="relative">
-          <div className="bg-muted/50 rounded-lg border p-6 max-h-64 overflow-y-auto scrollbar-thin scrollbar-track-gray-100 scrollbar-thumb-gray-300">
-            <pre className="text-sm text-foreground whitespace-pre-wrap leading-relaxed font-mono">
-              {value}
-            </pre>
-          </div>
-          <div className="absolute top-3 right-3 bg-background/90 backdrop-blur-sm px-3 py-1.5 rounded-md text-xs text-muted-foreground font-medium">
-            {value.length} chars
-          </div>
-        </div>
-      );
-    }
-    return (
-      <div className="prose prose-sm max-w-none">
-        <p className="text-foreground leading-relaxed m-0 px-2 text-sm py-1">{value}</p>
-      </div>
-    );
-  }
-
-  if (Array.isArray(value)) {
-    if (value.length === 0) {
-      return (
-        <div className="flex items-center justify-center py-8 text-muted-foreground border-2 border-dashed rounded-lg">
-          <span className="text-sm italic">Empty list</span>
-        </div>
-      );
-    }
-
-    // Handle array of strings/simple values
-    if (value.every(item => typeof item === 'string' || typeof item === 'number')) {
-      return (
-        <div className="space-y-3">
-          {value.map((item, index) => (
-            <div key={index} className="flex items-start gap-4 p-3 rounded-lg hover:bg-muted/50 transition-colors border border-transparent hover:border-border/30">
-              <div className="flex-shrink-0 w-2 h-2 bg-primary/60 rounded-full mt-2.5"></div>
-              <span className="text-foreground leading-relaxed flex-1 break-words text-sm">{String(item)}</span>
-            </div>
-          ))}
-        </div>
-      );
-    }
-
-    // Handle array of objects (like search results)
-    if (key === 'raw_results' && value.every(item => typeof item === 'object' && item !== null)) {
-      return (
-        <div className="space-y-6">
-          {value.map((result: Record<string, unknown>, index: number) => (
-            <Card key={index} className="transition-all hover:shadow-md border-l-4 border-l-primary/20">
-              <CardContent className="space-y-4 p-6">
-                {Object.entries(result).map(([resultKey, resultValue]) => (
-                  <div key={resultKey} className="group">
-                    <div className="flex items-center gap-2 mb-3">
-                      <span className="text-sm font-medium text-muted-foreground bg-muted px-3 py-1.5 rounded-md">
-                        {formatTitle(resultKey)}
-                      </span>
-                    </div>
-                    <div className="ml-0 pl-4 border-l-2 border-border/20">
-                      {typeof resultValue === 'object' && resultValue !== null ? (
-                        <div className="bg-muted/30 rounded-lg border p-4 max-h-48 overflow-y-auto">
-                          <pre className="text-xs text-foreground whitespace-pre-wrap font-mono leading-relaxed">
-                            {JSON.stringify(resultValue, null, 2)}
-                          </pre>
-                        </div>
-                      ) : (
-                        <div className="text-foreground break-words text-sm leading-relaxed">{String(resultValue)}</div>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      );
-    }
-
-    // Handle other complex arrays
-    return (
-      <div className="relative">
-        <div className="bg-muted/30 rounded-lg border p-6 max-h-96 overflow-y-auto scrollbar-thin scrollbar-track-gray-100 scrollbar-thumb-gray-300">
-          <pre className="text-sm text-foreground whitespace-pre-wrap font-mono leading-relaxed">
-            {JSON.stringify(value, null, 2)}
-          </pre>
-        </div>
-        <div className="absolute top-3 right-3 bg-background/90 backdrop-blur-sm px-3 py-1.5 rounded-md text-xs text-muted-foreground font-medium">
-          {value.length} items
-        </div>
-      </div>
-    );
-  }
-
-  if (typeof value === 'object' && value !== null) {
-    // Handle nested objects
-    return (
-      <div className="space-y-6">
-        {Object.entries(value).map(([nestedKey, nestedValue]) => (
-          <div key={nestedKey} className="relative">
-            <div className="border-l-2 border-primary/30 pl-6 pb-4">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="w-2.5 h-2.5 bg-primary/60 rounded-full"></div>
-                <span className="font-medium text-foreground text-sm">
-                  {formatTitle(nestedKey)}
-                </span>
-              </div>
-              <div className="ml-2 pl-4">
-                {renderValue(nestedValue, nestedKey)}
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  return (
-    <div className="text-foreground break-words">
-      {String(value)}
-    </div>
-  );
-};
-
-// Helper function to format structured search results dynamically
-const formatStructuredResults = (data: StructuredSearchResponse) => {
-  // Check if data is null or undefined
-  if (!data) {
-    return <div className="p-4 bg-red-50 rounded">No valid data to display</div>;
-  }
-  
-  // Get all keys from the data object
-  const dataKeys = Object.keys(data) as Array<keyof StructuredSearchResponse>;
-  
-  return (
-    <div className="space-y-12">
-      {dataKeys.map((key, index) => {
-        const value = data[key];
-        const style = getCardStyle(key, index);
-        
-        // Skip null/undefined values
-        if (value === null || value === undefined) {
-          return null;
-        }
-        
-        // Calculate count for arrays
-        let countBadge = null;
-        if (Array.isArray(value)) {
-          countBadge = (
-            <span className="inline-flex items-center px-3 py-1.5 bg-primary/10 text-primary text-xs font-medium rounded-full">
-              {value.length} items
-            </span>
-          );
-        } else if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-          const objKeys = Object.keys(value);
-          if (objKeys.length > 0) {
-            countBadge = (
-              <span className="inline-flex items-center px-3 py-1.5 bg-primary/10 text-primary text-xs font-medium rounded-full">
-                {objKeys.length} properties
-              </span>
-            );
-          }
-        }
-
-        return (
-          <Card key={key} className={`${style.border} shadow-sm hover:shadow-md transition-all duration-200 overflow-hidden`}>
-            <CardHeader className={`${style.header} border-b border-border/50 py-6`}>
-              <div className="flex items-center justify-between w-full">
-                <CardTitle className={`${style.text} flex items-center gap-4`}>
-                  <span className="text-xl">{style.icon}</span>
-                  <span className="font-semibold tracking-tight text-lg">{formatTitle(key)}</span>
-                </CardTitle>
-                {countBadge}
-              </div>
-            </CardHeader>
-            <CardContent className="p-8">
-              <div className="max-w-none">
-                {renderValue(value, key)}
-              </div>
-            </CardContent>
-          </Card>
-        );
-      })}
-    </div>
-  );
-};
+// Results formatting moved to `StructuredResults` component
 
 const SearchPage = () => {
   const [query, setQuery] = useState('');
@@ -313,10 +30,14 @@ const SearchPage = () => {
   const [error, setError] = useState('');
   const [searchResult, setSearchResult] = useState<StructuredSearchResponse | null>(null);
   const [searchHistory, setSearchHistory] = useState<SearchHistoryItem[]>([]);
-  const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
+  // const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
   const [streamingStatus, setStreamingStatus] = useState<string>('');
   const [streamingProgress, setStreamingProgress] = useState<string[]>([]);
   const [eventSource, setEventSource] = useState<EventSource | null>(null);
+  const [activeSearchResult, setActiveSearchResult] = useState<StructuredSearchResponse | null>(null);
+  // Note: flag not used by UI anymore; keeping to preserve minimal behavior but avoid lints
+  const [, setIsViewingHistory] = useState<boolean>(false);
+  const [selectedHistoryId, setSelectedHistoryId] = useState<string>('');
   const { status } = useSession();
   const router = useRouter();
 
@@ -386,6 +107,8 @@ const SearchPage = () => {
     setLoading(true);
     setError('');
     setSearchResult(null);
+    setIsViewingHistory(false);
+    setSelectedHistoryId('');
     setStreamingStatus('Enqueueing search job...');
     setStreamingProgress([]);
 
@@ -468,6 +191,8 @@ const SearchPage = () => {
                   };
                   
                   setSearchResult(structuredResult);
+                  setActiveSearchResult(structuredResult);
+                  setIsViewingHistory(false);
                   if (structuredResult.success) {
                     saveSearchToHistory(structuredResult);
                   }
@@ -520,231 +245,109 @@ const SearchPage = () => {
     }
   };
 
-  const renderSearchHistory = () => {
-    if (loading) {
-      return (
-        <Card className="shadow-sm">
-          <CardHeader className="border-b border-border/50">
-            <CardTitle className="flex items-center gap-2">
-              <span>📜</span>
-              Recent Searches
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="p-6">
-            <div className="flex items-center justify-center py-8">
-              <div className="flex flex-col items-center gap-3">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-                <p className="text-muted-foreground text-sm">Loading search history...</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      );
-    }
-
-    if (searchHistory.length === 0) {
-      return (
-        <Card className="shadow-sm">
-          <CardHeader className="border-b border-border/50">
-            <CardTitle className="flex items-center gap-2">
-              <span>📜</span>
-              Recent Searches
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="p-6">
-            <div className="flex flex-col items-center justify-center py-8 text-center">
-              <div className="text-4xl mb-3">🔍</div>
-              <p className="text-muted-foreground text-sm">No search history yet.</p>
-              <p className="text-muted-foreground text-sm">Try searching for something!</p>
-            </div>
-          </CardContent>
-        </Card>
-      );
-    }
-
-    return (
-      <Card className="shadow-sm">
-        <CardHeader className="border-b border-border/50">
-          <CardTitle className="flex items-center justify-between">
-            <span className="flex items-center gap-2">
-              <span>📜</span>
-              Recent Searches
-            </span>
-            <span className="text-sm font-normal text-muted-foreground">
-              {searchHistory.length} searches
-            </span>
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="p-4">
-          <div className="space-y-3 max-h-[70vh] overflow-y-auto scrollbar-thin scrollbar-track-transparent scrollbar-thumb-border">
-            {searchHistory.map((historyItem) => (
-              <div key={historyItem.id} className="border rounded-lg hover:bg-muted/50 transition-colors">
-                <div 
-                  className="cursor-pointer p-4"
-                  onClick={() => setExpandedHistoryId(
-                    expandedHistoryId === historyItem.id ? null : historyItem.id
-                  )}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium text-foreground text-sm truncate mb-2">{historyItem.query}</p>
-                      <div className="flex items-center gap-2 text-xs flex-wrap">
-                        <span className={`inline-flex items-center px-2 py-1 rounded-full font-medium ${
-                          historyItem.success 
-                            ? 'bg-green-100 text-green-700 border border-green-200' 
-                            : 'bg-red-100 text-red-700 border border-red-200'
-                        }`}>
-                          {historyItem.success ? '✅' : '❌'}
-                        </span>
-                        <span className="text-muted-foreground">
-                          {(() => {
-                            const result = historyItem.searchResult;
-                            // Use the correct backend field names
-                            if (result && result.raw_results && Array.isArray(result.raw_results)) return `${result.raw_results.length} results`;
-                            if (typeof result === 'object' && result !== null) {
-                              // Count all array properties as fallback
-                              const arrays = Object.values(result).filter(v => Array.isArray(v));
-                              const totalItems = arrays.reduce((sum, arr) => sum + arr.length, 0);
-                              return totalItems > 0 ? `${totalItems} items` : 'No count';
-                            }
-                            return 'Unknown';
-                          })()}
-                        </span>
-                        <span className="text-muted-foreground">{new Date(historyItem.createdAt).toLocaleDateString()}</span>
-                      </div>
-                    </div>
-                    <Button variant="ghost" size="sm" className="flex-shrink-0 h-8 w-8 p-0">
-                      <span className="text-xs">
-                        {expandedHistoryId === historyItem.id ? '▼' : '▶'}
-                      </span>
-                    </Button>
-                  </div>
-                </div>
-
-                {expandedHistoryId === historyItem.id && (
-                  <div className="border-t border-border/50 p-4 bg-muted/20">
-                    <div className="space-y-4 max-h-96 overflow-y-auto scrollbar-thin scrollbar-track-transparent scrollbar-thumb-border">
-                      {formatStructuredResults(historyItem.searchResult)}
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
-    );
-  };
+  // Replace list UI with a top-right dropdown toggle
+  // const renderSearchHistory = () => null;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-background to-muted/20 p-4 sm:p-6 lg:p-8">
-      <div className="max-w-7xl mx-auto">
-        <div className="mb-8">
-          <h1 className="text-4xl font-bold text-foreground mb-2 tracking-tight">Lexon Search</h1>
+    <section className="py-6">
+      <div className="mx-auto max-w-5xl px-4">
+        <div className="flex items-center justify-end mb-6 gap-3">
+            {activeSearchResult && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setSearchResult(activeSearchResult);
+                  setIsViewingHistory(false);
+                  setSelectedHistoryId('');
+                }}
+              >
+                Back to current search
+              </Button>
+            )}
+            <div>
+              <label htmlFor="history" className="sr-only">Recent searches</label>
+              <select
+                id="history"
+                className="h-9 rounded-md border border-gray-300 bg-white px-2 text-sm"
+                value={selectedHistoryId || ""}
+                onChange={(e) => {
+                  const id = e.target.value
+                  setSelectedHistoryId(id)
+                  const item = searchHistory.find((s) => s.id === id)
+                  if (item) {
+                    setSearchResult(item.searchResult)
+                    setIsViewingHistory(true)
+                  }
+                }}
+              >
+                <option value="" disabled>
+                  Recent searches
+                </option>
+                {searchHistory.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {new Date(s.createdAt).toLocaleString()} — {s.query}
+                  </option>
+                ))}
+              </select>
+            </div>
         </div>
-        
-        <div className="max-w-4xl mx-auto space-y-8">
-          <Card className="shadow-sm">
-            <CardContent className="p-6">
-              <form onSubmit={handleSubmit} className="space-y-6">
+
+        <div className="flex flex-col gap-5">
+          <Card>
+            <div className="p-4">
+              <form onSubmit={handleSubmit}>
                 <div className="flex items-center gap-3">
-                  <Input
-                    type="text"
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    placeholder="Ask a question about your knowledge graph..."
-                    className="flex-grow text-base"
-                  />
-                  <Button type="submit" disabled={loading} className="px-6">
+                  <div className="flex-1">
+                    <Input
+                      value={query}
+                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => setQuery(e.target.value)}
+                      placeholder="Ask a question about your knowledge graph..."
+                      aria-label="Search query"
+                    />
+                  </div>
+                  <Button type="submit" disabled={loading}>
                     {loading ? 'Searching...' : 'Search'}
                   </Button>
                 </div>
-                
-
-                <div className="bg-muted/30 rounded-lg p-4 border">
-                  <p className="font-medium text-foreground mb-3">Notes:</p>
-                  <div className="flex flex-col gap-2">
-                    <p className="text-sm text-muted-foreground leading-relaxed">
-                      Embedding search is not supported yet.
-                    </p>
-                    <p className="text-sm text-muted-foreground leading-relaxed">
-                      Current results includes data that will not be shown to the eventual end user, such as the raw query and technical details.
-                    </p>
-                    <p className="text-sm text-muted-foreground leading-relaxed"></p>
-                  </div>
-                </div>
               </form>
-            </CardContent>
+            </div>
           </Card>
 
           {error && (
-            <Card className="border-destructive/50 bg-destructive/5">
-              <CardContent className="p-6">
-                <div className="flex items-start gap-3">
-                  <span className="text-destructive text-lg">⚠️</span>
-                  <div>
-                    <p className="font-semibold text-destructive mb-1">Error</p>
-                    <p className="text-destructive/80">{error}</p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+            <div className="rounded-md border border-red-200 bg-red-50 text-red-700 px-4 py-3">
+              {error}
+            </div>
           )}
 
           {loading && (
-            <Card className="border-blue-200 bg-blue-50/50">
-              <CardContent className="p-6">
-                <div className="flex items-start gap-4">
-                  <div className="flex-shrink-0">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-3">
-                      <span className="text-blue-600 text-lg">🤖</span>
-                      <p className="font-semibold text-blue-900">AI Search in Progress</p>
-                    </div>
-                    
+            <Card>
+              <div className="p-4">
+                <div className="flex items-start gap-3">
+                  <div className="h-5 w-5 animate-spin rounded-full border-2 border-gray-300 border-t-gray-700 mt-0.5" />
+                  <div className="flex flex-col gap-2 w-full">
+                    <p className="font-medium">AI Search in Progress</p>
                     {streamingStatus && (
-                      <div className="mb-4">
-                        <p className="text-blue-800 font-medium mb-2">Current Status:</p>
-                        <div className="bg-blue-100 border border-blue-200 rounded-lg p-3">
-                          <p className="text-blue-900 text-sm">{streamingStatus}</p>
-                        </div>
-                      </div>
+                      <p className="text-sm text-gray-700">{streamingStatus}</p>
                     )}
-
                     {streamingProgress.length > 0 && (
-                      <div>
-                        <p className="text-blue-800 font-medium mb-2">Progress Log:</p>
-                        <div className="bg-white border border-blue-200 rounded-lg p-3 max-h-32 overflow-y-auto">
-                          <div className="space-y-1">
-                            {streamingProgress.map((step, index) => (
-                              <div key={index} className="flex items-start gap-2 text-sm">
-                                <span className="text-blue-500 text-xs mt-1">•</span>
-                                <span className="text-blue-900 flex-1">{step}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
+                      <div className="max-h-40 overflow-y-auto">
+                        {streamingProgress.map((step, index) => (
+                          <div key={index} className="text-sm">• {step}</div>
+                        ))}
                       </div>
                     )}
                   </div>
                 </div>
-              </CardContent>
+              </div>
             </Card>
           )}
 
-                      {searchResult && (
-              <div className="space-y-12">
-                {formatStructuredResults(searchResult)}
-              </div>
-            )}
-
-          {/* Search history moved below main content */}
-          {renderSearchHistory()}
+          {searchResult && (
+            <StructuredResults data={searchResult} />
+          )}
         </div>
       </div>
-    </div>
+    </section>
   );
 };
 

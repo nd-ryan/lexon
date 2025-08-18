@@ -55,39 +55,29 @@ def build_batch_query(label: str, id_field: str, id_values: list) -> str:
     # Convert id_values to a properly formatted Cypher list
     values_str = "[" + ", ".join([f"'{val}'" for val in id_values]) + "]"
     
-    # Build coalesce expressions dynamically from static property lists
+    # Build coalesce expressions dynamically from static property lists for neighbor node `m`
     if id_properties:
-        id_coalesce = "coalesce(" + ", ".join([f"m1.{prop}" for prop in id_properties]) + ")"
-        id_coalesce_incoming = "coalesce(" + ", ".join([f"m2.{prop}" for prop in id_properties]) + ")"
+        id_coalesce_m = "coalesce(" + ", ".join([f"m.{prop}" for prop in id_properties]) + ")"
     else:
-        id_coalesce = "m1.id"
-        id_coalesce_incoming = "m2.id"
-    
+        id_coalesce_m = "m.id"
+
     if name_properties:
-        name_coalesce = "coalesce(" + ", ".join([f"m1.{prop}" for prop in name_properties]) + ")"
-        name_coalesce_incoming = "coalesce(" + ", ".join([f"m2.{prop}" for prop in name_properties]) + ")"
+        name_coalesce_m = "coalesce(" + ", ".join([f"m.{prop}" for prop in name_properties]) + ")"
     else:
-        name_coalesce = "m1.name"
-        name_coalesce_incoming = "m2.name"
-    
+        name_coalesce_m = "m.name"
+
     return f"""
     MATCH (n:{label})
     WHERE n.{id_field} IN {values_str}
-    OPTIONAL MATCH (n)-[r1]->(m1)
-    WITH n, collect({{
-      type: type(r1),
-      target_label: labels(m1)[0],
-      target_id: {id_coalesce},
-      target_name: {name_coalesce}
-    }}) AS outgoing
-    OPTIONAL MATCH (m2)-[r2]->(n)
-    WITH n, outgoing, collect({{
-      type: type(r2),
-      target_label: labels(m2)[0],
-      target_id: {id_coalesce_incoming},
-      target_name: {name_coalesce_incoming}
-    }}) AS incoming
-    RETURN n {{ .*, relationships: outgoing + incoming }}
+    WITH n,
+         [(n)-[r]-(m) | {{
+           type: type(r),
+           direction: CASE WHEN startNode(r) = n THEN 'out' ELSE 'in' END,
+           target_label: head(labels(m)),
+           target_id: {id_coalesce_m},
+           target_name: {name_coalesce_m}
+         }}] AS rels
+    RETURN n {{ .*, node_label: head(labels(n)), relationships: rels }}
     """
 
 def get_property_mappings_info() -> Dict[str, any]:
@@ -102,3 +92,43 @@ def get_property_mappings_info() -> Dict[str, any]:
         "file_exists": os.path.exists(PROPERTY_MAPPINGS_FILE),
         "file_path": PROPERTY_MAPPINGS_FILE
     } 
+
+def build_single_node_enrichment_query(label: str, id_value: str) -> str:
+    """
+    Build a query to retrieve a single node by trying the configured id properties
+    against the provided id_value, and return enriched data with relationships.
+    """
+    mappings = load_property_mappings()
+    id_properties = mappings.get("id_properties", [])
+    name_properties = mappings.get("name_properties", [])
+
+    safe_value = str(id_value).replace("'", "\\'")
+
+    if id_properties:
+        where_clause = " OR ".join([f"n.{prop} = '{safe_value}'" for prop in id_properties])
+    else:
+        where_clause = f"n.id = '{safe_value}'"
+
+    if id_properties:
+        id_coalesce_m = "coalesce(" + ", ".join([f"m.{prop}" for prop in id_properties]) + ")"
+    else:
+        id_coalesce_m = "m.id"
+
+    if name_properties:
+        name_coalesce_m = "coalesce(" + ", ".join([f"m.{prop}" for prop in name_properties]) + ")"
+    else:
+        name_coalesce_m = "m.name"
+
+    return f"""
+    MATCH (n:{label})
+    WHERE {where_clause}
+    WITH n,
+         [(n)-[r]-(m) | {{
+           type: type(r),
+           direction: CASE WHEN startNode(r) = n THEN 'out' ELSE 'in' END,
+           target_label: head(labels(m)),
+           target_id: {id_coalesce_m},
+           target_name: {name_coalesce_m}
+         }}] AS rels
+    RETURN n {{ .*, node_label: head(labels(n)), relationships: rels }}
+    """

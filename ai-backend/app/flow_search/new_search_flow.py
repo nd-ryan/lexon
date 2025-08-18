@@ -17,9 +17,36 @@ from pydantic import BaseModel
 import time
 import yaml
 import json
+import re
 
 # Use our custom logger setup
 logger = setup_logger("new-search-flow")
+
+
+def _remove_embedding_fields(data: Any) -> Any:
+    """Recursively remove any keys that end with '_embedding' or '_upload_code' from dict-like structures."""
+    if isinstance(data, dict):
+        return {
+            key: _remove_embedding_fields(value)
+            for key, value in data.items()
+            if not (str(key).endswith("_embedding") or str(key).endswith("_upload_code"))
+        }
+    if isinstance(data, list):
+        return [_remove_embedding_fields(item) for item in data]
+    return data
+
+
+def _strip_cypher_comments(query: str) -> str:
+    """Remove line (//...) and block (/*...*/) comments from a Cypher query safely."""
+    if not isinstance(query, str):
+        return query
+    # Remove block comments first (non-greedy across newlines)
+    no_block = re.sub(r"/\*[\s\S]*?\*/", " ", query)
+    # Remove line comments, but preserve URLs like http:// by requiring // not preceded by :
+    no_line = re.sub(r"(?<!:)//.*", " ", no_block)
+    # Collapse excessive whitespace
+    cleaned = re.sub(r"\s+", " ", no_line).strip()
+    return cleaned
 
 
 class NewSearchState(BaseModel):
@@ -122,9 +149,11 @@ class NewSearchFlow(Flow[NewSearchState]):
         logger.info(f"🔍 Agent result.raw: {getattr(result, 'raw', 'NO RAW ATTR')}")
         
         if result.pydantic:
-            self.state.generated_query = result.pydantic
+            # Sanitize generated query to avoid comment-related syntax issues
+            sanitized = _strip_cypher_comments(result.pydantic.generated_query)
+            self.state.generated_query = GeneratedCypherQuery(generated_query=sanitized)
             logger.info(f"🧠 Generated label/id query:")
-            logger.info(f"   {result.pydantic.generated_query}")
+            logger.info(f"   {self.state.generated_query.generated_query}")
         else:
             # Try to extract from raw result if available
             if hasattr(result, 'raw') and result.raw:
@@ -137,7 +166,8 @@ class NewSearchFlow(Flow[NewSearchState]):
                         raw_data = result.raw
                     
                     if isinstance(raw_data, dict) and 'generated_query' in raw_data:
-                        self.state.generated_query = GeneratedCypherQuery(**raw_data)
+                        sanitized = _strip_cypher_comments(raw_data['generated_query'])
+                        self.state.generated_query = GeneratedCypherQuery(generated_query=sanitized)
                         logger.info(f"🧠 Generated label/id query from raw:")
                         logger.info(f"   {self.state.generated_query.generated_query}")
                     else:
@@ -184,7 +214,8 @@ class NewSearchFlow(Flow[NewSearchState]):
                 
                 # Execute the current query
                 try:
-                    cypher_query = current_query.generated_query
+                    # Ensure we strip any comments that may have slipped into regenerated queries
+                    cypher_query = _strip_cypher_comments(current_query.generated_query)
                     logger.info(f"🔍 Executing query (attempt {current_attempt}):")
                     logger.info(f"   {cypher_query}")
                     
@@ -334,7 +365,9 @@ class NewSearchFlow(Flow[NewSearchState]):
         if result.pydantic:
             logger.info(f"🔄 Generated alternative label/id query (attempt {attempt_number}):")
             logger.info(f"   {result.pydantic.generated_query}")
-            return result.pydantic
+            # Sanitize alternative as well
+            sanitized = _strip_cypher_comments(result.pydantic.generated_query)
+            return GeneratedCypherQuery(generated_query=sanitized)
         else:
             raise ValueError(f"Alternative label/id query generation attempt {attempt_number} failed")
 
@@ -372,7 +405,9 @@ class NewSearchFlow(Flow[NewSearchState]):
                 
                 # Build the batch query for this label/id_field combination
                 query = build_batch_query(block.label, block.id_field, block.id_values)
+                # Track and log the query used for this block
                 executed_queries.append(query)
+                logger.info(f"🔎 Executing batch query for {block.label} ({len(block.id_values)} IDs)")
                 
                 try:
                     # Execute the batch query
@@ -392,18 +427,22 @@ class NewSearchFlow(Flow[NewSearchState]):
                     if isinstance(parsed_result, list):
                         for record in parsed_result:
                             if isinstance(record, dict) and 'n' in record:
-                                enriched_results.append(record['n'])
+                                # Strip any *_embedding properties before storing
+                                enriched_results.append(_remove_embedding_fields(record['n']))
                         logger.info(f"✅ Retrieved {len(parsed_result)} enriched {block.label} nodes")
                     
                 except Exception as e:
                     logger.error(f"❌ Failed to execute batch query for {block.label}: {e}")
                     continue
             
+            # Remove duplicate queries while preserving order (if any)
+            executed_queries_unique = list(dict.fromkeys(executed_queries))
+
             # Store the enriched data
             self.state.enriched_data = EnrichedNodeData(
                 success=len(enriched_results) > 0,
                 enriched_results=enriched_results,
-                cypher_queries=executed_queries
+                cypher_queries=executed_queries_unique
             )
             
             self.state.batch_enrichment_time = time.time() - batch_start_time
