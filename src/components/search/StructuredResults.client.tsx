@@ -106,7 +106,7 @@ const badgeAccent = "bg-indigo-50 text-indigo-700 border-indigo-200";
 const badgeAccentSubtle = "bg-indigo-100 text-indigo-700 border-indigo-200";
 const badgeGray = "bg-gray-100 text-gray-700 border-gray-200";
 
-const NodeResultsGrid = ({ nodes, titleProps, idProps }: { nodes: Array<Record<string, unknown>>; titleProps: string[]; idProps: string[] }) => {
+const NodeResultsGrid = ({ nodes, titleProps, idProps, displayOverrides }: { nodes: Array<Record<string, unknown>>; titleProps: string[]; idProps: string[]; displayOverrides?: any }) => {
   const [appendedNodes, setAppendedNodes] = useState<Array<Record<string, unknown>>>([]);
 
   const handleOpenRelated = async (label?: string, idValue?: string) => {
@@ -133,12 +133,28 @@ const NodeResultsGrid = ({ nodes, titleProps, idProps }: { nodes: Array<Record<s
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 gap-6 md:gap-8">
       {[...nodes, ...appendedNodes].map((node: Record<string, unknown>, index: number) => {
         const { propsOnly, relationships, nodeLabel } = extractNodeParts(node);
+
+        // Determine allowed props and relationships per label from overrides config
+        const allowedProps: string[] | null = nodeLabel && displayOverrides?.node_card?.[nodeLabel]?.properties
+          ? (displayOverrides.node_card[nodeLabel].properties as string[])
+          : null;
+        const allowedRels: string[] | null = nodeLabel && displayOverrides?.node_card?.[nodeLabel]?.relationships
+          ? (displayOverrides.node_card[nodeLabel].relationships as string[])
+          : null;
+
+        // Title selection should come from the node itself regardless of what we display in the grid
         const titleKey = pickFirstPropKey(propsOnly, titleProps);
         const title = (titleKey ? String((propsOnly as any)[titleKey]) : pickFirstProp(propsOnly, titleProps)) || "";
+        // Build filtered props to render in the grid
+        const filteredPropsOnly = allowedProps
+          ? Object.fromEntries(Object.entries(propsOnly).filter(([k]) => allowedProps.includes(String(k))))
+          : propsOnly;
+        const filteredRelationships = allowedRels
+          ? relationships.filter((rel: any) => allowedRels.includes(String((rel as any)?.type)))
+          : relationships;
         // Do not render a subtitle with IDs
         const subtitle = "";
-        const compactProps = getCompactProps(propsOnly, 1000)
-          .filter(([k]) => !idProps.includes(String(k)))
+        const compactProps = getCompactProps(filteredPropsOnly, 1000)
           .filter(([k]) => (titleKey ? String(k) !== titleKey : true));
 
         const isAppended = index >= nodes.length;
@@ -212,13 +228,13 @@ const NodeResultsGrid = ({ nodes, titleProps, idProps }: { nodes: Array<Record<s
               <div className="p-3">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs text-gray-600 font-medium">Relationships</span>
-                  <span className={`${pillBase} ${badgeAccent}`}>{relationships.length}</span>
+                  <span className={`${pillBase} ${badgeAccent}`}>{filteredRelationships.length}</span>
                 </div>
                 <div className="max-h-28 overflow-y-auto pr-1 space-y-1">
-                  {relationships.length === 0 ? (
+                  {filteredRelationships.length === 0 ? (
                     <span className="text-xs text-gray-500 italic">None</span>
                   ) : (
-                    relationships.map((rel, i) => {
+                    filteredRelationships.map((rel, i) => {
                       const isIncoming = (rel as any)?.direction === 'in';
                       const otherText = String((rel as any)?.target_name ?? (rel as any)?.target_id ?? "");
                       const otherLabel = (rel as any)?.target_label as string | undefined;
@@ -413,11 +429,13 @@ const renderValue = (value: unknown, key: string, titleProps: string[], idProps:
 export function StructuredResults({ data }: { data: StructuredSearchResponse }) {
   const [titleProps, setTitleProps] = useState<string[]>([]);
   const [idProps, setIdProps] = useState<string[]>([]);
+  const [displayOverrides, setDisplayOverrides] = useState<any>(null);
 
   useEffect(() => {
     let isMounted = true;
     (async () => {
       try {
+        // property mappings
         const res = await fetch('/api/property-mappings', { cache: 'no-store' });
         if (!res.ok) return;
         const data = await res.json();
@@ -425,6 +443,19 @@ export function StructuredResults({ data }: { data: StructuredSearchResponse }) 
         if (!mappings) return;
         const nameProps = Array.isArray(mappings.name_properties) ? mappings.name_properties : [];
         const idPropsList = Array.isArray(mappings.id_properties) ? mappings.id_properties : [];
+        // display overrides (node_card config for filtering)
+        try {
+          const res2 = await fetch('/api/display-overrides', { cache: 'no-store' });
+          if (res2.ok) {
+            const data2 = await res2.json();
+            // backend returns { success, overrides }
+            const overrides = data2?.overrides || data2;
+            if (overrides) {
+              setDisplayOverrides(overrides);
+            }
+          }
+        } catch {}
+
         if (isMounted) {
           setTitleProps(Array.isArray(nameProps) ? nameProps : []);
           setIdProps(Array.isArray(idPropsList) ? idPropsList : []);
@@ -461,7 +492,11 @@ export function StructuredResults({ data }: { data: StructuredSearchResponse }) 
               return (
                 <Card key={String(key)} className="overflow-hidden">
                   <div className="p-4">
-                    {renderValue(value, String(key), titleProps, idProps)}
+                    {key === 'raw_results' ? (
+                      <NodeResultsGrid nodes={value as any[]} titleProps={titleProps} idProps={idProps} displayOverrides={displayOverrides} />
+                    ) : (
+                      renderValue(value, String(key), titleProps, idProps)
+                    )}
                   </div>
                 </Card>
               );

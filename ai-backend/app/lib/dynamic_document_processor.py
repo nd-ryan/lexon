@@ -118,7 +118,7 @@ INSTRUCTIONS:
 2. Identify EVERY distinct type of entity/object mentioned
 3. For each entity type, list ALL properties/attributes that are mentioned for that type
 4. Use PascalCase for node type names (e.g., "LegalCase", "Party", "LegalProvision")
-5. Include identifying properties for each node type, but don't worry about IDs as they will be generated automatically
+5. Include identifying properties for each node type
 6. Be comprehensive - don't miss any entity types, even if they seem minor
 7. Examples of entity types might include: Cases, Parties, Provisions, Doctrines, Arguments, Allegations, Rulings, Relief, Evidence, Courts, Judges, Dates, Citations, etc.
 8. Return ONLY the JSON, no other text
@@ -349,6 +349,52 @@ INSTRUCTIONS:
                 
         return chunks
 
+    def _normalize_node_properties(self, node_type: str, node: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize node property keys by removing the node-type prefix.
+
+        Rules:
+        - If a property starts with "<label>_" (label in snake_case), strip the prefix.
+        - EXCEPT if the suffix is exactly "id" or "upload_code"; keep the prefixed form
+          (e.g., keep "case_id", "case_upload_code").
+        - If the unprefixed key already exists, prefer the unprefixed key and drop the prefixed one.
+        """
+        try:
+            import re
+            # Convert label (e.g., "Case") to snake_case ("case") to compute the prefix
+            snake_label = re.sub(r'(?<!^)(?=[A-Z])', '_', node_type).lower()
+            prefix = f"{snake_label}_"
+
+            # Work on a copy to avoid mutating while iterating
+            updated_node: Dict[str, Any] = dict(node)
+
+            for key, value in list(node.items()):
+                if not isinstance(key, str):
+                    continue
+                if not key.startswith(prefix):
+                    continue
+
+                suffix = key[len(prefix):]
+                # Preserve ids and upload_code with prefix
+                if suffix in ("id", "upload_code"):
+                    continue
+
+                # Compute unprefixed key
+                unprefixed_key = suffix
+
+                # If unprefixed key already present, drop the prefixed duplicate
+                if unprefixed_key in updated_node:
+                    updated_node.pop(key, None)
+                    continue
+
+                # Move value to unprefixed key and drop prefixed key
+                updated_node[unprefixed_key] = value
+                updated_node.pop(key, None)
+
+            return updated_node
+        except Exception:
+            # On any error, return original node unchanged
+            return node
+
     def extract_document_content(
     self,
     document_text: str,
@@ -460,12 +506,14 @@ INSTRUCTIONS:
                     logger.error(f"JSON parsing failed for chunk {i+1}. Raw response: {content_json}")
                     continue
 
-                # Merge nodes from this chunk
+                # Merge nodes from this chunk (normalizing property keys)
                 chunk_nodes = content_dict.get("nodes", {})
                 for node_type, node_list in chunk_nodes.items():
                     if node_type not in all_nodes:
                         all_nodes[node_type] = []
-                    all_nodes[node_type].extend(node_list)
+                    for node in node_list:
+                        normalized_node = self._normalize_node_properties(node_type, node)
+                        all_nodes[node_type].append(normalized_node)
 
                 # Add relationships from this chunk
                 chunk_relationships = content_dict.get("relationships", [])
@@ -1283,6 +1331,26 @@ INSTRUCTIONS:
             # Determine the ID property name for this node type
             id_prop = f"{node_type.lower()}_id"
             
+            # Helper to canonicalize arbitrary values to hashable, deterministic forms
+            def _canon(value: Any) -> Any:
+                try:
+                    if isinstance(value, dict):
+                        # Sort by key to be deterministic
+                        return tuple((k, _canon(v)) for k, v in sorted(value.items(), key=lambda kv: kv[0]))
+                    if isinstance(value, list):
+                        return tuple(_canon(v) for v in value)
+                    if isinstance(value, set):
+                        return tuple(sorted(_canon(v) for v in value))
+                    # Primitives/others
+                    hash(value)  # type: ignore[arg-type]
+                    return value
+                except Exception:
+                    # Fallback to string representation
+                    try:
+                        return str(value)
+                    except Exception:
+                        return "<unserializable>"
+            
             for node in nodes:
                 # Create a signature based on key properties (excluding the UUID ID field)
                 signature_props = {k: v for k, v in node.items() if k != id_prop}
@@ -1292,10 +1360,14 @@ INSTRUCTIONS:
                 if name_keys:
                     # Use the first name-like property as primary deduplication key
                     primary_key = name_keys[0]
-                    signature = (node_type, signature_props.get(primary_key, "").lower().strip())
+                    primary_val = signature_props.get(primary_key, "")
+                    if not isinstance(primary_val, str):
+                        primary_val = str(primary_val)
+                    signature = (node_type, primary_val.lower().strip())
                 else:
                     # Fall back to a hash of all non-id properties
-                    signature = (node_type, hash(frozenset(signature_props.items())))
+                    canonical_items = tuple(sorted(((k, _canon(v)) for k, v in signature_props.items()), key=lambda kv: kv[0]))
+                    signature = (node_type, canonical_items)
                 
                 if signature not in seen_signatures:
                     seen_signatures.add(signature)

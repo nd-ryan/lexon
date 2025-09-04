@@ -1,7 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routes.ai import router as ai_router, streaming_router
+from app.routes.cases import router as cases_router
 from app.lib.logging_config import configure_root_logging, setup_logger, setup_clean_file_logging
+from app.lib.db import engine
+from app.lib.schema import ensure_cases_table
 import os
 from dotenv import load_dotenv
 import warnings
@@ -36,6 +39,7 @@ app.add_middleware(
 # Include routers
 app.include_router(ai_router, prefix="/api/ai", tags=["AI"])
 app.include_router(streaming_router, prefix="/api/ai", tags=["Streaming"])
+app.include_router(cases_router, prefix="/api/ai", tags=["Cases"])
 
 @app.on_event("startup")
 async def startup_event():
@@ -43,6 +47,11 @@ async def startup_event():
     logger.info("🚀 FastAPI CrewAI Backend server starting up")
     logger.info("✅ Logging configured for real-time output")
     logger.info("📁 Clean logs saved to logs/app.log")
+    try:
+        ensure_cases_table(engine)
+        logger.info("🗄️  Verified cases table in Postgres")
+    except Exception as e:
+        logger.error(f"Failed ensuring cases table: {e}")
 
 @app.get("/")
 async def root():

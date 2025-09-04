@@ -1,0 +1,26 @@
+extract_task:
+  description: |
+    Use tools to gather inputs, then populate the CaseGraph model.
+
+    Required tools (in any order):
+    - read_document_tool(file_path="{FILEPATH}", filename="{FILENAME}")
+    - get_neo4j_schema_tool()
+
+    Steps:
+    1) Call both tools. Verify responses contain ok:true. If a tool returns ok:false,
+       include the tool's error in your reasoning and proceed sensibly with available data.
+    2) Use "text" from read_document_tool and "schema" from get_neo4j_schema_tool as context.
+    3) Extract entities and relations and populate the CaseGraph fields:
+       - case_name: derive from the document (fallback to filename if absent)
+       - nodes: array of { temp_id, label, properties }
+       - edges: array of { from, to, label, properties }
+
+    Constraints:
+    - temp_id values must be unique within this payload (e.g., n1, n2, …).
+    - Use canonical node labels and relationship types consistent with the schema when possible.
+    - Keep properties flat and prefer values actually present in the text.
+    - edges.from and edges.to must reference existing node temp_ids.
+    - Be conservative; avoid inventing facts not supported by the text.
+  expected_output: "A CaseGraph object constructed from the document and schema."
+
+

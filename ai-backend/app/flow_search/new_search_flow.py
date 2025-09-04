@@ -427,8 +427,8 @@ class NewSearchFlow(Flow[NewSearchState]):
                     if isinstance(parsed_result, list):
                         for record in parsed_result:
                             if isinstance(record, dict) and 'n' in record:
-                                # Strip any *_embedding properties before storing
-                                enriched_results.append(_remove_embedding_fields(record['n']))
+                                # Include all properties; filtering is handled on the frontend via display_overrides
+                                enriched_results.append(record['n'])
                         logger.info(f"✅ Retrieved {len(parsed_result)} enriched {block.label} nodes")
                     
                 except Exception as e:

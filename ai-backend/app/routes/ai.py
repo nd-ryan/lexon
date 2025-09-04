@@ -6,6 +6,7 @@ from app.lib.security import get_api_key
 import logging
 import json
 from typing import Optional
+import os
 
 logger = logging.getLogger(__name__)
 router = APIRouter(dependencies=[Depends(get_api_key)])
