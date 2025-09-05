@@ -1,11 +1,28 @@
 "use client";
-import useSWR from 'swr'
-import Link from 'next/link'
-
-const fetcher = (url: string) => fetch(url).then(r => r.json())
+import { useState, useEffect } from 'react';
+import Link from 'next/link';
 
 export default function CasesListPage() {
-  const { data, error, isLoading } = useSWR('/api/cases', fetcher)
+  const [data, setData] = useState<any>(null);
+  const [error, setError] = useState<any>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  
+  useEffect(() => {
+    const fetchCases = async () => {
+      try {
+        const response = await fetch('/api/cases');
+        const result = await response.json();
+        setData(result);
+        setIsLoading(false);
+      } catch (err) {
+        setError(err);
+        setIsLoading(false);
+      }
+    };
+    
+    fetchCases();
+  }, []);
+  
   if (isLoading) return <div className="p-8">Loading...</div>
   if (error) return <div className="p-8 text-red-600">Error</div>
   const items = data?.items || []
@@ -26,5 +43,4 @@ export default function CasesListPage() {
     </div>
   )
 }
-
 
