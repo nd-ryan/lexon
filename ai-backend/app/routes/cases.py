@@ -69,3 +69,12 @@ def update_case(case_id: str, payload: dict, db: Session = Depends(get_db)):
     return {"success": True, "case": updated}
 
 
+@router.delete("/{case_id}")
+def delete_case(case_id: str, db: Session = Depends(get_db)):
+    ok = case_repo.delete_case(db.connection(), case_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Not found")
+    db.commit()
+    return {"success": True}
+
+

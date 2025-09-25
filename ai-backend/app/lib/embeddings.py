@@ -10,80 +10,18 @@ logger = logging.getLogger(__name__)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
-# Properties to embed per label. Vectors are stored on the node under
-# "<property_name>_embedding" to support multiple embeddings per node.
-EMBEDDING_CONFIG: Dict[str, List[str]] = {
-    "Case": ["name", "summary"],
-    "Issue": ["text"],
-    "Doctrine": ["name", "description"],
-    "Argument": ["text"],
-    "Fact": ["description"],
-    "FactPattern": ["name"],
-    # Common variants for provisions/laws/documents across imports
-    "Provision": ["name", "text"],
-    "Law": ["name", "text"],
-    "LegalProvision": ["name", "text"],
-    "Evidence": ["description"],
-    "Document": ["description", "text", "title"],
-    "Relief": ["description"],
-    "Forum": ["name"],
-    "Court": ["name", "name"],
-    "Ruling": ["ratio", "text"],
-    "Statute": ["name", "text"],
-    "Rule": ["name", "text"],
-    "Equity": ["name", "text"],
-    "LegalProposition": ["text"],
-    "Policy": ["name", "description"],
-    "Expertise": ["summary", "testimony"],
-    "Witness": ["text"],
-    "Judicial Notice": ["description"],
-}
+def _load_embedding_config() -> Dict[str, List[str]]:
+    """Derive embedding targets from schema.json.
 
-# EMBEDDING_CONFIG: Dict[str, List[str]] = {
-#     "Case": ["case_name", "summary"],
-#     "Issue": ["issue_text"],
-#     "Doctrine": ["doctrine_name", "doctrine_description"],
-#     "Argument": ["argument_text"],
-#     "Fact": ["fact_description"],
-#     "FactPattern": ["fact_pattern_name"],
-#     # Common variants for provisions/laws/documents across imports
-#     "Provision": ["law_name", "law_text"],
-#     "Law": ["law_name", "law_text"],
-#     "LegalProvision": ["law_name", "law_text"],
-#     "Evidence": ["description"],
-#     "Document": ["description", "text", "title"],
-#     "Relief": ["relief_description"],
-#     "Forum": ["forum_name"],
-#     "Court": ["forum_name", "name"],
-#     "Ruling": ["ruling_ratio", "ruling_text"],
-#     "Statute": ["statute_name", "statute_text"],
-#     "Rule": ["rule_name", "rule_text"],
-#     "Equity": ["equity_name", "equity_text"],
-#     "LegalProposition": ["proposition_text"],
-#     "Policy": ["policy_name", "policy_description"],
-#     "Expertise": ["report_summary", "testimony_summary"],
-#     "Witness": ["testimony_text"],
-#     "Judicial Notice": ["notice_description"],
-# }
-
-# Per-property fallback names when the exact configured property is absent on a node
-PROPERTY_FALLBACKS: Dict[str, List[str]] = {
-    "case_name": ["name", "title"],
-    "summary": ["case_summary", "description", "text"],
-    "issue_text": ["text", "description"],
-    "doctrine_name": ["name", "title"],
-    "doctrine_description": ["description", "text"],
-    "argument_text": ["text", "content", "description"],
-    "fact_description": ["description", "text"],
-    "fact_pattern_name": ["name", "title"],
-    "law_name": ["name", "title"],
-    "law_text": ["text", "content", "description"],
-    "description": ["text", "content"],
-    "relief_description": ["description", "text"],
-    "forum_name": ["name", "title"],
-    "ruling_ratio": ["holding", "ratio", "reasoning", "rationale", "summary"],
-    "ruling_text": ["holding", "ruling", "text", "content", "description"],
-}
+    For each label, include STRING properties that have a corresponding
+    `<property>_embedding` field declared in schema.json.
+    """
+    try:
+        from app.lib.schema_runtime import derive_embedding_config_from_schema
+        return derive_embedding_config_from_schema()
+    except Exception as e:
+        logger.warning(f"Embedding config: failed to derive from schema.json: {e}")
+        return {}
 
 def _determine_id_prop(label: str, sample_row: Dict[str, Any]) -> str:
     """Return the property key that uniquely identifies a node.
@@ -121,7 +59,7 @@ def generate_embeddings_for_nodes(
             logger.info("No nodes provided for embedding generation; skipping")
             return True
 
-        cfg = config or EMBEDDING_CONFIG
+        cfg = config or _load_embedding_config()
         total_requests = 0
         total_updated = 0
 
@@ -148,10 +86,8 @@ def generate_embeddings_for_nodes(
                     continue
 
                 for prop_name in target_props:
-                    # Try exact property first, then fallbacks
-                    candidate_keys = [prop_name] + PROPERTY_FALLBACKS.get(prop_name, [])
-                    found_key = next((k for k in candidate_keys if isinstance(node.get(k), str) and node.get(k).strip()), None)
-                    raw_value = node.get(found_key) if found_key else None
+                    # Only use exact property from schema-derived config
+                    raw_value = node.get(prop_name)
                     if not isinstance(raw_value, str):
                         continue
                     text = raw_value.strip()
@@ -249,7 +185,7 @@ async def generate_embeddings_for_cases(case_ids: List[str]) -> bool:
                 # Store embedding in Neo4j
                 update_query = """
                 MATCH (c:Case {case_id: $case_id})
-                SET c.embedding = $embedding
+                SET c.summary_embedding = $embedding
                 """
                 
                 neo4j_client.execute_query(update_query, {

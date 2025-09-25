@@ -136,3 +136,24 @@ class MCPEnabledAgents:
             logger.info("No MCP adapter to cleanup")
         _mcp_tools = None
         logger.info("Global MCP tools reset to None") 
+
+
+def fetch_neo4j_schema_via_mcp():
+    """Fetch the Neo4j schema using the official Neo4j MCP server.
+
+    Returns the raw payload returned by the MCP schema tool.
+    Raises RuntimeError if tools are unavailable or the schema tool is not found.
+    """
+    with MCPEnabledAgents() as mcp_context:
+        if not mcp_context.mcp_adapter:
+            raise RuntimeError("Failed to initialize MCP tools")
+
+        tools = get_mcp_tools()
+        if not tools:
+            raise RuntimeError("MCP tools are not available")
+
+        schema_tool = next((t for t in tools if 'schema' in t.name.lower()), None)
+        if not schema_tool:
+            raise RuntimeError("Neo4j schema tool not found")
+
+        return schema_tool.run({})

@@ -1,5 +1,5 @@
 from typing import Any, Dict, List, Optional
-from sqlalchemy import Table, Column, String, Text, DateTime, func, select, insert, update
+from sqlalchemy import Table, Column, String, Text, DateTime, func, select, insert, update, delete
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.schema import MetaData
 from sqlalchemy.engine import Connection
@@ -63,6 +63,17 @@ class CaseRepo:
         updated = self.get_case(conn, case_id)
         assert updated is not None
         return updated
+
+    def delete_case(self, conn: Connection, case_id: str) -> bool:
+        result = conn.execute(
+            delete(cases).where(cases.c.id == uuid.UUID(case_id))
+        )
+        # Rowcount can be -1 depending on backend; treat >0 as deleted
+        try:
+            affected = result.rowcount or 0
+        except Exception:
+            affected = 0
+        return affected > 0
 
 
 case_repo = CaseRepo()

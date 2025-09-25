@@ -13,12 +13,14 @@ class CaseCrew:
     agents_config = 'config/agents.yaml'
     tasks_config = 'config/tasks.yaml'
 
-    def __init__(self, file_path: str, filename: str, case_id: str, tools: list):
+    def __init__(self, file_path: str, filename: str, case_id: str, tools: list, schema_spec_text: str = "", extra_instructions: str = ""):
         super().__init__()
         self.file_path = file_path
         self.filename = filename
         self.case_id = case_id
         self.tools = tools
+        self.schema_spec_text = schema_spec_text
+        self.extra_instructions = extra_instructions
 
     @agent
     def extract_agent(self) -> Agent:
@@ -36,7 +38,7 @@ class CaseCrew:
             cfg['description']
             .replace('{FILENAME}', self.filename)
             .replace('{FILEPATH}', self.file_path)
-        )
+        ) + ("\n\nSCHEMA SPEC:\n" + (self.schema_spec_text or "")) + ("\n\n" + self.extra_instructions if self.extra_instructions else "")
         return Task(
             config=cfg,
             agent=self.extract_agent(),

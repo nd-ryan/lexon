@@ -18,20 +18,59 @@ from app.models.search import (
 )
 
 
-@router.get("/property-mappings")
-async def get_property_mappings():
-    """Return current property mappings loaded from the static file.
+@router.get("/schema")
+async def get_schema():
+    """Return schema from static file if present; fall back to MCP.
 
-    The mappings are continuously updated by the backend after imports.
-    Returns a JSON structure with at least `id_properties` and `name_properties`.
+    Returns a JSON payload: { success: bool, schema?: Any, error?: str }
     """
     try:
-        from app.lib.batch_query_utils import load_property_mappings
-        mappings = load_property_mappings()
-        return {"success": True, "mappings": mappings}
+        # Try static schema first
+        import os, json
+        base_dir = os.path.join(os.path.dirname(__file__), "..", "..")
+        path = os.path.abspath(os.path.join(base_dir, "schema.json"))
+        if os.path.exists(path):
+            with open(path, "r") as f:
+                data = json.load(f)
+            return {"success": True, "schema": data, "source": "static"}
+
+        # Fallback to MCP
+        from app.lib.mcp_integration import fetch_neo4j_schema_via_mcp
+        schema = fetch_neo4j_schema_via_mcp()
+        return {"success": True, "schema": schema, "source": "mcp"}
     except Exception as e:
-        logger.error(f"Failed to load property mappings: {e}")
-        raise HTTPException(status_code=500, detail="Failed to load property mappings")
+        logger.error(f"Failed to fetch schema: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/ui-config")
+async def get_ui_config():
+    """Deprecated: UI config is embedded in schema.properties now."""
+    raise HTTPException(status_code=410, detail="ui-config endpoint removed; use /api/ai/schema")
+
+
+@router.get("/display-overrides")
+async def get_display_overrides():
+    """Return display overrides derived from schema.json."""
+    try:
+        from app.lib.schema_runtime import derive_display_overrides_from_schema
+        overrides = derive_display_overrides_from_schema()
+        return {"success": True, "overrides": overrides, "source": "schema.json"}
+    except Exception as e:
+        logger.error(f"Failed to derive display overrides: {e}")
+        raise HTTPException(status_code=500, detail="Failed to derive display overrides")
+
+
+@router.get("/property-mappings")
+async def get_property_mappings():
+    """Return minimal property mappings derived from schema.json."""
+    try:
+        from app.lib.schema_runtime import derive_simple_mappings_from_schema
+        mappings = derive_simple_mappings_from_schema()
+        return {"success": True, "mappings": mappings, "source": "schema.json"}
+    except Exception as e:
+        logger.error(f"Failed to derive property mappings: {e}")
+        raise HTTPException(status_code=500, detail="Failed to derive property mappings")
 
 @router.get("/node/enriched")
 async def get_enriched_node(label: str, id_value: str):

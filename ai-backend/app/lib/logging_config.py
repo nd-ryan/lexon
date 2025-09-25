@@ -79,11 +79,13 @@ def setup_logger(name: str = "crew") -> logging.Logger:
     logger.addHandler(console_handler)
     
     # Add file handler for clean file logging (no third-party noise)
-    log_dir = "logs"
+    # Resolve logs directory relative to the ai-backend project root to avoid CWD issues
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    log_dir = os.path.join(base_dir, "logs")
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
-    
-    file_handler = logging.FileHandler(f"{log_dir}/app.log")
+
+    file_handler = logging.FileHandler(os.path.join(log_dir, "app.log"))
     file_handler.setLevel(logging.DEBUG)
     
     # Clean file formatter with full timestamp
@@ -108,8 +110,9 @@ def setup_clean_file_logging():
     os.environ.setdefault("CREWAI_VERBOSE", "false")
     os.environ.setdefault("CREWAI_LOGS", "false")
     
-    # Create logs directory if it doesn't exist
-    log_dir = "logs"
+    # Create logs directory relative to the ai-backend project root
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    log_dir = os.path.join(base_dir, "logs")
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
     
@@ -136,7 +139,13 @@ def setup_file_logging(logger: logging.Logger, filename: str = "crew_flow.log"):
         logger: Logger instance to add file handler to
         filename: Log file name (defaults to "crew_flow.log")
     """
-    file_handler = logging.FileHandler(filename)
+    # Ensure file path is under the ai-backend logs directory if a bare filename is provided
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    logs_dir = os.path.join(base_dir, "logs")
+    if not os.path.exists(logs_dir):
+        os.makedirs(logs_dir)
+    file_path = filename if os.path.isabs(filename) else os.path.join(logs_dir, filename)
+    file_handler = logging.FileHandler(file_path)
     file_handler.setLevel(logging.DEBUG)
     
     formatter = logging.Formatter(

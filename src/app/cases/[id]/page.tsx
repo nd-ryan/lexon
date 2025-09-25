@@ -1,15 +1,40 @@
 "use client";
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useLayoutEffect, useRef } from 'react'
 import { useParams } from 'next/navigation'
 import Button from '@/components/ui/button'
+import { Pencil, Trash2 } from 'lucide-react'
+import { useAppStore } from '@/lib/store/appStore'
+import AddNodeModal from '@/components/cases/AddNodeModal.client'
 
 export default function CaseEditorPage() {
   const params = useParams()
   const id = params?.id as string
+  const schema = useAppStore(s => s.schema)
   const [data, setData] = useState<any>(null)
   const [formData, setFormData] = useState<any>({})
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [editingEdgeIdx, setEditingEdgeIdx] = useState<number | null>(null)
+  const [editToValue, setEditToValue] = useState<string>('')
+  const [confirmDeleteIdx, setConfirmDeleteIdx] = useState<number | null>(null)
+  const [scrollHistory, setScrollHistory] = useState<number[]>([])
+  const [addModalOpen, setAddModalOpen] = useState(false)
+  const [addModalType, setAddModalType] = useState<string>('')
+  // Local edit widgets commit on blur to avoid full re-render per keystroke
+  const [activeInputPath, setActiveInputPath] = useState<string | null>(null)
+  const selectionRef = useRef<{ start: number | null; end: number | null }>({ start: null, end: null })
+
+  useEffect(() => {
+    // Debug: track when edit modal state changes
+    // eslint-disable-next-line no-console
+    console.debug('editingEdgeIdx changed:', editingEdgeIdx)
+  }, [editingEdgeIdx])
+
+  useEffect(() => {
+    // Debug: track when delete modal state changes
+    // eslint-disable-next-line no-console
+    console.debug('confirmDeleteIdx changed:', confirmDeleteIdx)
+  }, [confirmDeleteIdx])
 
   // Track expanded/collapsed paths for objects/arrays
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set(['']))
@@ -78,6 +103,105 @@ export default function CaseEditorPage() {
     nodeOptions.forEach(o => { map[o.id] = o.display })
     return map
   }, [nodeOptions])
+
+  // Extract node types from schema (defensive against varying shapes)
+  const extractNodeTypesFromSchema = (schemaPayload: any): string[] => {
+    const labels = new Set<string>()
+    const push = (val: any) => {
+      if (typeof val === 'string' && val.trim()) labels.add(val.trim())
+    }
+    if (!schemaPayload) return []
+
+    // Normalize string payloads
+    let normalized: any = schemaPayload
+    if (typeof normalized === 'string') {
+      try {
+        normalized = JSON.parse(normalized)
+      } catch {
+        // eslint-disable-next-line no-console
+        console.warn('Schema was a string but could not be parsed as JSON')
+        return []
+      }
+    }
+
+    // Common shapes: array of { label, attributes, relationships }
+    if (Array.isArray(normalized)) {
+      for (const item of normalized) {
+        if (!item) continue
+        if (typeof item === 'string') push(item)
+        else if (typeof item === 'object') push(item.label || item.name || item.type)
+      }
+    }
+
+    // Alternative shapes: object with arrays of labels
+    const candidates = [
+      normalized?.nodeLabels,
+      normalized?.labels,
+      normalized?.node_types,
+      normalized?.nodeTypes,
+      normalized?.nodes,
+    ].filter(Boolean)
+    for (const arr of candidates) {
+      if (Array.isArray(arr)) {
+        for (const item of arr) {
+          if (typeof item === 'string') push(item)
+          else if (item && typeof item === 'object') push(item.label || item.name || item.type)
+        }
+      } else if (arr && typeof arr === 'object') {
+        // Sometimes nodes can be an object map of label -> definition
+        for (const key of Object.keys(arr)) push(key)
+      }
+    }
+
+    return Array.from(labels).sort((a, b) => a.localeCompare(b))
+  }
+
+  const schemaNodeTypes = useMemo(() => extractNodeTypesFromSchema(schema), [schema])
+
+  const groupedNodesByType = useMemo(() => {
+    const groups: Record<string, any[]> = {}
+    ;(nodesArray || []).forEach((node: any) => {
+      const typeLabel = String(node?.label || 'Unknown')
+      if (!groups[typeLabel]) groups[typeLabel] = []
+      groups[typeLabel].push(node)
+    })
+    return groups
+  }, [nodesArray])
+
+  const allNodeTypes = useMemo(() => {
+    const set = new Set<string>([...schemaNodeTypes, ...Object.keys(groupedNodesByType)])
+    return Array.from(set).sort((a, b) => a.localeCompare(b))
+  }, [schemaNodeTypes, groupedNodesByType])
+
+  const formatNodeTypeHeading = (type: string) => `${formatLabel(type)} Nodes`
+
+  useEffect(() => {
+    // eslint-disable-next-line no-console
+    console.log('Case editor schema:', schema)
+    // eslint-disable-next-line no-console
+    console.log('Extracted schema node types:', schemaNodeTypes)
+    // eslint-disable-next-line no-console
+    console.log('Grouped node types (from case data):', Object.keys(groupedNodesByType))
+    // eslint-disable-next-line no-console
+    console.log('All node types to render:', allNodeTypes)
+  }, [schema, schemaNodeTypes, groupedNodesByType, allNodeTypes])
+
+  const addNodeOfType = (type: string) => {
+    setAddModalType(type)
+    setAddModalOpen(true)
+  }
+
+  const scrollToNode = (targetId?: string) => {
+    if (!targetId) return
+    // Save current scroll position so we can return
+    if (typeof window !== 'undefined') {
+      setScrollHistory(prev => [...prev, window.scrollY])
+    }
+    const el = document.getElementById(`node-${targetId}`)
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  }
 
   const setValueAtPath = (path: (string|number)[], value: any) => {
     setFormData((prev: any) => {
@@ -183,25 +307,36 @@ export default function CaseEditorPage() {
     if (value === null || typeof value === 'string' || typeof value === 'number') {
       const inputType = typeof value === 'number' ? 'number' : 'text'
       const isLongText = typeof value === 'string' && (value.length > 120 || value.includes('\n'))
+      const [local, setLocal] = useState<string>(value === null ? '' : String(value))
+      useEffect(() => {
+        setLocal(value === null ? '' : String(value))
+      }, [value])
+      const commit = () => {
+        if (inputType === 'number') {
+          const parsed = local === '' ? '' : Number(local)
+          setValueAtPath(path, parsed)
+        } else {
+          setValueAtPath(path, local)
+        }
+      }
       return (
         <div className="" style={indentStyle}>
           <label className="block text-xs font-medium text-gray-700 mt-2 mb-0.5">{formatLabel(label)}</label>
           {isLongText ? (
             <textarea
               className="w-full rounded-md border border-gray-300 bg-white px-2 py-1 text-xs shadow-sm focus:border-gray-400 focus:outline-none"
-              rows={Math.min(12, Math.max(3, Math.ceil((value?.length || 0) / 80)))}
-              value={value ?? ''}
-              onChange={e => setValueAtPath(path, e.target.value)}
+              rows={Math.min(12, Math.max(3, Math.ceil((local?.length || 0) / 80)))}
+              value={local}
+              onChange={e => setLocal(e.target.value)}
+              onBlur={commit}
             />
           ) : (
             <input
               className="w-full rounded-md border border-gray-300 bg-white px-2 py-1 text-xs shadow-sm focus:border-gray-400 focus:outline-none"
               type={inputType}
-              value={value === null ? '' : String(value)}
-              onChange={e => {
-                const v = inputType === 'number' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value
-                setValueAtPath(path, v === '' ? '' : v)
-              }}
+              value={local}
+              onChange={e => setLocal(e.target.value)}
+              onBlur={commit}
             />
           )}
         </div>
@@ -237,13 +372,9 @@ export default function CaseEditorPage() {
     }
 
     if (typeof value === 'object') {
-      const entries = Object.entries(value as Record<string, any>)
-      if (entries.length === 0) return null
       return (
         <div className="space-y-2" style={indentStyle}>
-          {entries.map(([k, v]) => (
-            <Field key={k} label={k} value={v} path={[...path, k]} depth={depth} />
-          ))}
+          <ObjectFields obj={value as Record<string, any>} path={path} depth={depth} />
         </div>
       )
     }
@@ -266,7 +397,7 @@ export default function CaseEditorPage() {
       // Hide empty nested objects like properties: {}
       if (v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0) return false
       return true
-    })
+    }).sort(([a], [b]) => String(a).localeCompare(String(b)))
     if (entries.length === 0) return null
     return (
       <div className="space-y-2">
@@ -288,63 +419,102 @@ export default function CaseEditorPage() {
           <div className="rounded-md border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-700">{error}</div>
         )}
 
-        {/* Nodes with inline relationships */}
-        {data && 'nodes' in (formData || {}) ? (
-          <div className="space-y-2">
+        {/* Nodes grouped by type with headings including schema-defined types */}
+        {(allNodeTypes.length > 0 || Array.isArray(formData?.nodes)) && (
+          <div className="space-y-4">
             <div className="text-xs font-semibold text-gray-900">Nodes</div>
-            {Array.isArray(formData?.nodes) && formData.nodes.length > 0 ? (
-              <div className="space-y-3">
-                {formData.nodes.map((node: any, idx: number) => {
-                  const nodeLabel = node?.label
-                  const { label: _ignored, ...rest } = node || {}
-                  const outgoingEdges = Array.isArray(formData?.edges)
-                    ? (formData.edges as any[])
-                        .map((e: any, eIdx: number) => ({ e, eIdx }))
-                        .filter(({ e }) => e && e.from === node?.temp_id)
-                    : []
-                  return (
-                    <div key={idx} className="rounded-md border bg-white p-3">
-                      <div className="mb-2 text-xs font-semibold text-gray-700">{nodeLabel || `Node ${idx + 1}`}</div>
-                      <ObjectFields obj={rest} path={['nodes', idx]} />
-                      {outgoingEdges.length > 0 && (
-                        <div className="mt-3 flex flex-col gap-2">
-                          <div className="text-[11px] font-semibold text-gray-600">Relationships</div>
-                          {outgoingEdges.map(({ e, eIdx }: any) => {
-                            const toValueId = e?.to == null ? '' : String(e.to)
-                            return (
-                              <div key={eIdx} className="flex flex-row items-center gap-2 md:gap-3 flex-wrap">
-                                <div className="text-xs text-gray-700 shrink-0">
-                                  [{nodeLabel || 'Node'}] -- [{e?.label || 'RELATION'}] →
-                                </div>
-                                <div className="w-full sm:w-auto md:w-80">
-                                  <select
-                                    className="w-full rounded-md border border-gray-300 bg-white px-2 py-1 text-xs shadow-sm focus:border-gray-400 focus:outline-none"
-                                    value={toValueId}
-                                    onChange={ev => setValueAtPath(['edges', eIdx, 'to'], ev.target.value)}
-                                  >
-                                    <option value="">Select node</option>
-                                    {nodeOptions.map(opt => (
-                                      <option key={opt.id} value={opt.id}>{opt.display}</option>
-                                    ))}
-                                    {!nodeIdToDisplay[toValueId] && toValueId !== '' && (
-                                      <option value={toValueId}>{toValueId}</option>
-                                    )}
-                                  </select>
-                                </div>
+            {allNodeTypes.map((type) => {
+              const nodesForType = groupedNodesByType[type] || []
+              return (
+                <div key={type} className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="text-base font-semibold text-gray-900">{formatNodeTypeHeading(type)}</div>
+                    <Button variant="outline" onClick={() => addNodeOfType(type)}>
+                      {`Add ${formatLabel(type)} Node`}
+                    </Button>
+                  </div>
+                  <div className="border-b" />
+                  {nodesForType.length === 0 ? (
+                    <div className="text-xs text-gray-500 ml-6 pl-3 border-l border-gray-200">No case data for this node type</div>
+                  ) : (
+                    <div className="space-y-3 ml-6 pl-3 border-l border-gray-200">
+                      {nodesForType.map((node: any, localIdx: number) => {
+                        const idx = (nodesArray || []).indexOf(node)
+                        const nodeLabel = node?.label
+                        const { label: _ignored, ...rest } = node || {}
+                        const outgoingEdges = Array.isArray(formData?.edges)
+                          ? (formData.edges as any[])
+                              .map((e: any, eIdx: number) => ({ e, eIdx }))
+                              .filter(({ e }) => e && e.from === node?.temp_id)
+                          : []
+                        return (
+                          <div key={localIdx} id={`node-${node?.temp_id ?? idx}`} className="rounded-md border bg-white p-3">
+                            <div className="mb-2 text-xs font-semibold text-gray-700">{nodeLabel || `Node ${idx + 1}`}</div>
+                            <ObjectFields obj={rest} path={['nodes', idx]} />
+                            {outgoingEdges.length > 0 && (
+                              <div className="mt-3 flex flex-col gap-2">
+                                <div className="text-[11px] font-semibold text-gray-600">Relationships</div>
+                                {outgoingEdges.map(({ e, eIdx }: any) => {
+                                  const toValueId = e?.to == null ? '' : String(e.to)
+                                  const toDisplay = nodeIdToDisplay[toValueId] || toValueId || 'Unknown'
+                                  return (
+                                    <div key={eIdx} className="flex flex-row items-center gap-2 md:gap-3 flex-wrap">
+                                      <div className="text-xs text-gray-700 shrink-0">
+                                        [{nodeLabel || 'Node'}] -- [{e?.label || 'RELATION'}] →
+                                      </div>
+                                      <button
+                                        type="button"
+                                        className="text-xs text-blue-600 hover:underline cursor-pointer"
+                                        onClick={() => scrollToNode(toValueId)}
+                                      >
+                                        {toDisplay}
+                                      </button>
+                                      <div className="flex items-center gap-1 ml-1">
+                                        <button
+                                          type="button"
+                                          aria-label="Edit relationship"
+                                          className="inline-flex items-center justify-center p-1 rounded text-gray-600 hover:text-gray-800 hover:bg-gray-100 cursor-pointer"
+                                          onClick={(ev) => {
+                                            ev.preventDefault();
+                                            ev.stopPropagation();
+                                            // eslint-disable-next-line no-console
+                                            console.debug('Edit click for edge index:', eIdx)
+                                            setEditingEdgeIdx(eIdx);
+                                            setEditToValue(toValueId)
+                                          }}
+                                        >
+                                          <Pencil className="h-4 w-4" />
+                                        </button>
+                                        <button
+                                          type="button"
+                                          aria-label="Delete relationship"
+                                          className="inline-flex items-center justify-center p-1 rounded text-gray-600 hover:text-red-600 hover:bg-gray-100 cursor-pointer"
+                                          onClick={(ev) => {
+                                            ev.preventDefault();
+                                            ev.stopPropagation();
+                                            // eslint-disable-next-line no-console
+                                            console.debug('Delete click for edge index:', eIdx)
+                                            setConfirmDeleteIdx(eIdx)
+                                          }}
+                                        >
+                                          <Trash2 className="h-4 w-4" />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )
+                                })}
                               </div>
-                            )
-                          })}
-                        </div>
-                      )}
+                            )}
+                          </div>
+                        )
+                      })}
                     </div>
-                  )
-                })}
-              </div>
-            ) : (
-              <div className="text-xs text-gray-500">No nodes</div>
-            )}
+                  )}
+                </div>
+              )
+            })}
           </div>
-        ) : null}
+        )}
 
         {/* Fallback for unknown structures */}
         {!('nodes' in (formData || {})) && !('edges' in (formData || {})) && (
@@ -355,10 +525,130 @@ export default function CaseEditorPage() {
       </div>
 
       <div className="sticky bottom-0 z-10 border-t bg-white/80 backdrop-blur">
-        <div className="mx-auto max-w-6xl px-6 py-3 flex items-center justify-end gap-2">
-          <Button onClick={onSave} disabled={saving}>{saving ? 'Saving...' : 'Save'}</Button>
+        <div className="mx-auto max-w-6xl px-6 py-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              {scrollHistory.length > 0 && (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    if (typeof window === 'undefined') return
+                    setScrollHistory(prev => {
+                      const next = [...prev]
+                      const last = next.pop()
+                      if (typeof last === 'number') {
+                        window.scrollTo({ top: last, behavior: 'smooth' })
+                      }
+                      return next
+                    })
+                  }}
+                >
+                  Back
+                </Button>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <Button onClick={onSave} disabled={saving}>{saving ? 'Saving...' : 'Save'}</Button>
+            </div>
+          </div>
         </div>
       </div>
+
+
+      {/* Edit relationship modal */}
+      {editingEdgeIdx !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ position: 'fixed', inset: 0, zIndex: 9999 }}>
+          <div className="absolute inset-0 bg-black/50" onClick={() => setEditingEdgeIdx(null)} />
+          <div className="relative z-50 w-full max-w-md mx-4 rounded-lg border bg-white p-4 text-xs shadow-xl">
+            <div className="font-semibold mb-2">Edit relationship destination</div>
+            <select
+              className="w-full rounded-md border border-gray-300 bg-white px-2 py-1 text-xs shadow-sm focus:border-gray-400 focus:outline-none"
+              value={editToValue}
+              onChange={e => setEditToValue(e.target.value)}
+            >
+              <option value="">Select node</option>
+              {nodeOptions.map(opt => (
+                <option key={opt.id} value={opt.id}>{opt.display}</option>
+              ))}
+            </select>
+            <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                className="rounded border px-3 py-1 min-w-[84px]"
+                onClick={() => setEditingEdgeIdx(null)}
+              >
+                Cancel
+              </button>
+              <div
+                className="rounded bg-blue-600 text-white text-center px-3 py-1 min-w-[84px] transition-colors hover:brightness-95"
+                onClick={() => {
+                  if (editingEdgeIdx !== null) {
+                    setValueAtPath(['edges', editingEdgeIdx, 'to'], editToValue)
+                  }
+                  setEditingEdgeIdx(null)
+                }}
+              >
+                Save
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete relationship confirmation */}
+      {confirmDeleteIdx !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ position: 'fixed', inset: 0, zIndex: 9999 }}>
+          <div className="absolute inset-0 bg-black/50" onClick={() => setConfirmDeleteIdx(null)} />
+          <div className="relative z-50 w-full max-w-md mx-4 rounded-lg border bg-white p-4 text-xs shadow-xl">
+            <div className="font-semibold mb-2">Delete relationship?</div>
+            <div className="text-xs text-gray-600">This action cannot be undone.</div>
+            <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                className="rounded border px-3 py-1 min-w-[84px]"
+                onClick={() => setConfirmDeleteIdx(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="rounded !bg-red-600 text-white px-3 py-1 min-w-[84px] transition-colors hover:brightness-95"
+                onClick={() => {
+                  const idx = confirmDeleteIdx
+                  setFormData((prev: any) => {
+                    const next = Array.isArray(prev?.edges) ? { ...prev, edges: prev.edges.filter((_: any, i: number) => i !== idx) } : prev
+                    return next
+                  })
+                  setConfirmDeleteIdx(null)
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Add node modal */}
+      <AddNodeModal
+        open={addModalOpen}
+        nodeType={addModalType}
+        schema={schema}
+        existingNodes={nodesArray}
+        onCancel={() => setAddModalOpen(false)}
+        onSubmit={({ node, edges }) => {
+          setFormData((prev: any) => {
+            const next = prev ? { ...prev } : {}
+            const nodes = Array.isArray(next.nodes) ? [...next.nodes] : []
+            nodes.push(node)
+            const nextEdges = Array.isArray(next.edges) ? [...next.edges] : []
+            edges.forEach((e: any) => nextEdges.push(e))
+            next.nodes = nodes
+            if (nextEdges.length > 0) next.edges = nextEdges
+            return next
+          })
+          setAddModalOpen(false)
+        }}
+      />
     </div>
   )
 }

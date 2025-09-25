@@ -964,11 +964,11 @@ INSTRUCTIONS:
             )
             print(f"   Schema alignment complete - {len(aligned_nodes)} node types, {len(aligned_relationships)} relationship types")
 
-            # Persist relationship constraints for future runs
+            # Persist relationship constraints (disabled; derived from schema.json at runtime)
             try:
                 self._save_relationship_constraints(relationship_constraints)
-            except Exception as e:
-                logger.warning(f"Could not persist relationship constraints: {e}")
+            except Exception:
+                pass
             
             # Step 7: Extract actual content using aligned metadata
             print("📝 Step 7/8: Using AI to extract actual content from document...")
@@ -1115,11 +1115,11 @@ INSTRUCTIONS:
         aligned_nodes, aligned_relationships = self.align_with_existing_schema(
             document_nodes, document_relationships, schema_info, relationship_constraints
         )
-        # Persist relationship constraints for future runs
+        # Persist relationship constraints (disabled; derived from schema.json at runtime)
         try:
             self._save_relationship_constraints(relationship_constraints)
-        except Exception as e:
-            logger.warning(f"Could not persist relationship constraints: {e}")
+        except Exception:
+            pass
 
         extracted_data = self.extract_document_content(case_body, aligned_nodes, aligned_relationships, test_mode=False)
         node_count = sum(len(v) for v in extracted_data.nodes.values())
@@ -1476,76 +1476,25 @@ INSTRUCTIONS:
         return final_relationships
 
     def _extract_relationship_constraints(self) -> Dict[str, List[str]]:
-        """Extract relationship types between node type pairs.
+        """Derive allowed relationship types between labels from schema.json.
 
-        Strategy:
-        1) Load cached mappings from static file if present (best-effort).
-        2) Query Neo4j live constraints and merge with cached (live takes precedence).
-        3) Return merged constraints.
+        Returns a dict keyed by "SourceLabel->TargetLabel" with a list of relationship types.
         """
-        merged: Dict[str, List[str]] = {}
-
-        # 1) Load cached file if present
         try:
-            import os, json
-            static_path = os.path.join(os.path.dirname(__file__), "..", "..", "relationship_mappings.json")
-            static_path = os.path.abspath(static_path)
-            if os.path.exists(static_path):
-                with open(static_path, "r") as f:
-                    cached = json.load(f)
-                    if isinstance(cached, dict):
-                        for k, v in cached.items():
-                            if isinstance(v, list):
-                                merged[k] = list(sorted(set(v)))
-                print(f"      💾 Loaded cached relationship mappings from {static_path} ({len(merged)} pairs)")
+            from app.lib.schema_runtime import derive_relationship_constraints_from_schema
+            constraints = derive_relationship_constraints_from_schema()
+            print(f"      📊 Derived constraints from schema.json for {len(constraints)} node type pairs")
+            return constraints
         except Exception as e:
-            logger.warning(f"Could not load cached relationship mappings: {e}")
-
-        # 2) Query Neo4j live constraints
-        try:
-            query = """
-            MATCH (a)-[r]->(b)
-            UNWIND labels(a) as from_type
-            UNWIND labels(b) as to_type
-            WITH from_type, to_type, type(r) as rel_type
-            RETURN from_type, to_type, collect(DISTINCT rel_type) as relationship_types
-            ORDER BY from_type, to_type
-            """
-            result = neo4j_client.execute_query(query)
-            live = {}
-            for record in result:
-                from_type = record.get("from_type")
-                to_type = record.get("to_type")
-                rel_types = record.get("relationship_types", [])
-                if from_type and to_type and rel_types:
-                    key = f"{from_type}->{to_type}"
-                    live[key] = rel_types
-                    print(f"      📋 Found {len(rel_types)} relationship types: {from_type} -> {to_type}: {rel_types}")
-
-            # Merge, preferring live
-            for k, v in live.items():
-                merged[k] = list(sorted(set(v)))
-
-            print(f"      📊 Extracted merged constraints for {len(merged)} node type pairs")
-            return merged
-        except Exception as e:
-            logger.warning(f"Error extracting relationship constraints: {e}")
-            return merged
+            logger.warning(f"Error deriving relationship constraints from schema: {e}")
+            return {}
 
     def _save_relationship_constraints(self, constraints: Dict[str, List[str]]) -> None:
-        """Persist relationship type mappings to a static file for future runs."""
+        """No-op: constraints come from schema.json at runtime."""
         try:
-            import os, json
-            static_path = os.path.join(os.path.dirname(__file__), "..", "..", "relationship_mappings.json")
-            static_path = os.path.abspath(static_path)
-            os.makedirs(os.path.dirname(static_path), exist_ok=True)
-            # Normalize and sort for stability
-            normalized = {k: list(sorted(set(v))) for k, v in constraints.items()}
-            with open(static_path, "w") as f:
-                json.dump(normalized, f, indent=2)
-            print(f"      💾 Saved relationship mappings to {static_path} ({len(normalized)} pairs)")
-        except Exception as e:
-            logger.warning(f"Could not save relationship mappings: {e}")
+            print("      ℹ️ Skipping save of relationship mappings; derived from schema.json.")
+        except Exception:
+            pass
 
     def _verify_case_upload(self, case_name: str, extracted_data: ExtractedData) -> Dict[str, Any]:
         """
@@ -1756,43 +1705,11 @@ INSTRUCTIONS:
         return default_prop
 
     def _update_property_mappings_after_import(self):
-        """Update property mappings from Neo4j schema using MCP server after successful import."""
+        """No-op: property mappings now derived directly from schema.json."""
         try:
-            print("🔄 Updating property mappings from Neo4j schema...")
-            from app.lib.mcp_integration import MCPEnabledAgents, get_mcp_tools
-            import json
-            import os
-            
-            with MCPEnabledAgents() as mcp_context:
-                if not mcp_context.mcp_adapter:
-                    logger.warning("MCP tools not available for schema update")
-                    return
-
-                neo4j_tools = get_mcp_tools()
-                schema_tool = next((t for t in neo4j_tools if 'schema' in t.name.lower()), None)
-
-                if not schema_tool:
-                    logger.warning("Neo4j schema tool not found in MCP tools")
-                    return
-                
-                # Get schema from Neo4j using MCP
-                schema_result = schema_tool.run({})
-                
-                # Parse schema to extract property names
-                property_mappings = self._parse_schema_for_properties(schema_result)
-                
-                # Save to static file
-                static_file_path = os.path.join(os.path.dirname(__file__), "..", "..", "property_mappings.json")
-                os.makedirs(os.path.dirname(static_file_path), exist_ok=True)
-                
-                with open(static_file_path, 'w') as f:
-                    json.dump(property_mappings, f, indent=2)
-                
-                print(f"✅ Updated property mappings: {len(property_mappings.get('id_properties', []))} ID properties, {len(property_mappings.get('name_properties', []))} name properties")
-                logger.info(f"Property mappings updated to {static_file_path}")
-                
-        except Exception as e:
-            logger.warning(f"Could not update property mappings after import: {e}")
+            print("ℹ️ Skipping property mappings update; derived from schema.json at runtime.")
+        except Exception:
+            pass
 
     def _parse_schema_for_properties(self, schema_result) -> dict:
         """Parse Neo4j schema result using AI and categorize properties."""

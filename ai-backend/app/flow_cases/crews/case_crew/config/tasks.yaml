@@ -10,7 +10,10 @@ extract_task:
     1) Call both tools. Verify responses contain ok:true. If a tool returns ok:false,
        include the tool's error in your reasoning and proceed sensibly with available data.
     2) Use "text" from read_document_tool and "schema" from get_neo4j_schema_tool as context.
-    3) Extract entities and relations and populate the CaseGraph fields:
+    3) Follow any PHASE and label restrictions provided in extra instructions.
+       - In PHASE 1 and 2, do not output relationships.
+       - Never output labels or properties marked ai_ignore in the schema.
+    4) Extract and populate the CaseGraph fields as directed:
        - case_name: derive from the document (fallback to filename if absent)
        - nodes: array of { temp_id, label, properties }
        - edges: array of { from, to, label, properties }

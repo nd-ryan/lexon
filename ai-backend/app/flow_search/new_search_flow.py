@@ -9,7 +9,7 @@ from app.models.search import (
     StructuredSearchResponse
 )
 from crewai.flow.flow import Flow, listen, start
-from app.lib.mcp_integration import MCPEnabledAgents, get_mcp_tools
+from app.lib.mcp_integration import MCPEnabledAgents, get_mcp_tools, fetch_neo4j_schema_via_mcp
 from app.lib.batch_query_utils import build_batch_query
 from app.lib.logging_config import setup_logger
 from typing import Dict, Any, Optional, List
@@ -103,27 +103,17 @@ class NewSearchFlow(Flow[NewSearchState]):
         """
         Retrieve the Neo4j schema using MCP tools.
         """
-        with MCPEnabledAgents() as mcp_context:
-            if not mcp_context.mcp_adapter:
-                raise RuntimeError("Failed to initialize MCP tools")
-
-            neo4j_tools = get_mcp_tools()
-            schema_tool = next((t for t in neo4j_tools if 'schema' in t.name.lower()), None)
-
-            if not schema_tool:
-                raise RuntimeError("Neo4j schema tool not found")
-            
-            logger.info("📊 Retrieving Neo4j schema...")
-            schema_start_time = time.time()
-            try:
-                schema_result = schema_tool.run({})
-                self.state.neo4j_schema = schema_result
-                self.state.schema_time = time.time() - schema_start_time
-                logger.info(f"✅ Schema retrieved successfully in {self.state.schema_time:.2f}s")
-                logger.info(f"📊 Schema content: {schema_result}")
-            except Exception as e:
-                logger.error(f"❌ Error retrieving schema: {e}")
-                raise
+        logger.info("📊 Retrieving Neo4j schema...")
+        schema_start_time = time.time()
+        try:
+            schema_result = fetch_neo4j_schema_via_mcp()
+            self.state.neo4j_schema = schema_result
+            self.state.schema_time = time.time() - schema_start_time
+            logger.info(f"✅ Schema retrieved successfully in {self.state.schema_time:.2f}s")
+            logger.info(f"📊 Schema content: {schema_result}")
+        except Exception as e:
+            logger.error(f"❌ Error retrieving schema: {e}")
+            raise
 
     @listen(retrieve_schema)
     async def generate_label_id_query(self) -> None:
