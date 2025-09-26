@@ -1,0 +1,361 @@
+
+UNWIND [
+  {code:'D01', name:'Rule of Reason', description:'Evaluates whether a practice unreasonably restrains trade based on purpose, effects, and context.'},
+  {code:'D02', name:'Per Se Illegality', description:'Certain categories of restraints (e.g., price fixing, market division) are presumed unlawful.'},
+  {code:'D03', name:'Quick Look Rule of Reason', description:'A truncated analysis used when anticompetitive effects are obvious but not per se illegal.'},
+  {code:'D04', name:'Hub and Spoke Conspiracy', description:'A central actor coordinates agreements among independent parties through vertical relationships.'},
+  {code:'D05', name:'Concerted Action Doctrine', description:'Focuses on minimal conduct required for Section 1 Sherman Act liability, especially in joint behavior.'},
+  {code:'D06', name:'Plus Factors in Antitrust', description:'Inference of collusion from circumstantial evidence (e.g., parallel conduct, signaling).'},
+  {code:'D07', name:'Raising Rivals’ Costs Doctrine', description:'Exclusionary conduct designed to increase competitors’ operational burdens.'},
+  {code:'D08', name:'Essential Facilities Doctrine', description:'Denial of access to a critical facility necessary for market competition.'},
+  {code:'D09', name:'Refusal to Deal Doctrine', description:'A firm’s withdrawal from commercial dealings may constitute exclusion, even without monopoly power.'},
+  {code:'D10', name:'Tying and Bundling Doctrine', description:'Requires purchase of a secondary product as a condition for the primary one; may leverage dominance.'},
+  {code:'D11', name:'Predatory Pricing Doctrine', description:'Selling below cost to eliminate competitors and later raising prices.'},
+  {code:'D12', name:'No-Poach Agreements Doctrine', description:'Firms agree not to hire each other\'s workers, suppressing labor competition.'},
+  {code:'D13', name:'Platform Gatekeeping Doctrine', description:'Focuses on digital platforms limiting access, interoperability, or engaging in self-preferencing.'},
+  {code:'D14', name:'Acqui-Hire Anticompetitive Theory', description:'Acquisitions driven by talent capture with intent to remove rivals.'}
+] AS row
+CREATE (:Doctrine {
+  doctrine_upload_code:   row.code,
+  doctrine_id:            randomUUID(),
+  name:                   row.name,
+  name_embedding:         [],
+  description:            row.description,
+  description_embedding:  [],
+  category:               'antitrust'
+});
+
+UNWIND [
+  {code:'D0001', name:'Content-Neutrality', description:'Government regulation must be neutral toward content unless strict scrutiny is met.'},
+  {code:'D0002', name:'Strict Scrutiny', description:'Applied when a regulation is content-based or burdens a fundamental right. Must serve a compelling state interest and be narrowly tailored.'},
+  {code:'D0003', name:'Intermediate Scrutiny', description:'Applied to content-neutral restrictions affecting speech. Must further an important government interest and be narrowly tailored.'},
+  {code:'D0004', name:'Prior Restraint', description:'Censorship before speech occurs is presumptively unconstitutional.'},
+  {code:'D0005', name:'Overbreadth Doctrine', description:'A law is invalid if it punishes a substantial amount of protected speech, judged in relation to the statute’s plainly legitimate sweep.'},
+  {code:'D0006', name:'Vagueness Doctrine', description:'Laws restricting speech must be clear enough that persons of common intelligence can understand what is prohibited.'},
+  {code:'D0007', name:'Time, Place, and Manner Restrictions', description:'Permissible content-neutral restrictions on speech in public forums. Must be narrowly tailored and leave open ample alternative channels.'},
+  {code:'D0008', name:'Forum Analysis', description:'Determines the level of speech protection based on the type of government property.'},
+  {code:'D0009', name:'Viewpoint Discrimination', description:'A subset of content discrimination where the government favors one viewpoint over another. Presumptively unconstitutional.'},
+  {code:'D0010', name:'Symbolic Speech Doctrine', description:'Conduct intended to convey a message is protected if the audience is likely to understand it as expressive.'},
+  {code:'D0011', name:'Clear and Present Danger', description:'Speech can be restricted if it poses an immediate, serious threat. Modified by Brandenburg to the Incitement test.'},
+  {code:'D0012', name:'Incitement to Imminent Lawless Action', description:'Speech may be prohibited if it is intended and likely to incite imminent illegal conduct (Brandenburg v. Ohio).'},
+  {code:'D0013', name:'Fighting Words Doctrine', description:'Speech likely to provoke immediate violence is not protected. Narrowly construed.'},
+  {code:'D0014', name:'True Threats Doctrine', description:'Speech that communicates a serious intent to commit unlawful violence is unprotected.'},
+  {code:'D0015', name:'Obscenity Doctrine', description:'Material meeting the Miller test (prurient interest, patently offensive, lacking value) is unprotected.'},
+  {code:'D0016', name:'Commercial Speech Doctrine', description:'Commercial speech is protected but subject to intermediate scrutiny under the Central Hudson test.'},
+  {code:'D0017', name:'Compelled Speech Doctrine', description:'The government cannot force individuals to express messages against their will.'},
+  {code:'D0018', name:'Government Speech Doctrine', description:'When the government is the speaker, it is not constrained by the Free Speech Clause.'},
+  {code:'D0019', name:'Public Employee Speech Doctrine', description:'Public employees’ speech is protected if on matters of public concern and does not disrupt governmental function.'},
+  {code:'D0020', name:'Student Speech Doctrine', description:'Student speech is protected but may be restricted if it materially disrupts school activities.'},
+  {code:'D0021', name:'Captive Audience Doctrine', description:'The government may restrict speech to protect unwilling listeners in certain contexts.'},
+  {code:'D0022', name:'Hostile Audience Doctrine', description:'The government has a duty to protect speakers even if the audience is hostile; heckler’s veto generally not allowed.'},
+  {code:'D0023', name:'Indecency in Broadcasting', description:'The government may restrict indecent but not obscene speech on broadcast media based on time, audience, and medium characteristics.'},
+  {code:'D0024', name:'O’Brien Test', description:'A law is constitutional if it is within government power, furthers important interest, unrelated to speech suppression, and narrowly tailored.'},
+  {code:'D0025', name:'Duty to Provide Evidence (“Everyman’s Evidence”)', description:'Absent a valid constitutional, statutory, or common-law privilege, every person owes testimony and documents to a grand jury; the First Amendment does not create a special reporter’s privilege to refuse such evidence (subject to limited safeguards against bad-faith or harassing inquiries).'},
+  {code:'D0026', name:'Reporter’s Privilege (Qualified)', description:'A limited, context-dependent protection for journalists against compelled disclosure of sources or unpublished newsgathering materials, recognized by some courts or statutes but not as a categorical First Amendment privilege in grand-jury proceedings.'}
+] AS row
+CREATE (:Doctrine {
+  doctrine_upload_code:   row.code,
+  doctrine_id:            randomUUID(),
+  name:                   row.name,
+  name_embedding:         [],
+  description:            row.description,
+  description_embedding:  [],
+  category:               'constitutional'
+});
+
+
+UNWIND [
+  {code:'FP01', name:'Price Fixing', description:'Firms agree on the prices of goods or services.'},
+  {code:'FP02', name:'Output Restriction', description:'Firms agree to limit the quantity of output.'},
+  {code:'FP03', name:'Collaboration', description:'Firms form a joint venture that limits competition.'},
+  {code:'FP04', name:'Market Allocation', description:'Firms divide geographic markets to avoid competition.'},
+  {code:'FP05', name:'Monopsony', description:'A dominant buyer suppresses input prices or labor conditions.'},
+  {code:'FP06', name:'Monopoly', description:'A firm uses its monopoly power to restrict rivals.'},
+  {code:'FP07', name:'Oligopoly', description:'Few firms coordinate behavior in a concentrated market.'},
+  {code:'FP08', name:'Algorithmic Collusion', description:'Pricing algorithms facilitate collusion or manipulation.'},
+  {code:'FP09', name:'Labor Coordination', description:'Firms enter no-poach or non-solicitation agreements.'},
+  {code:'FP10', name:'Coordinated Information Exchange', description:'Firms share competitively sensitive information.'},
+  {code:'FP11', name:'Refusal to Deal', description:'Dominant firm refuses to transact with rivals.'},
+  {code:'FP12', name:'Tacit Collusion', description:'Firms exhibit parallel conduct with plus factors.'},
+  {code:'FP13', name:'Predatory Pricing', description:'Firm prices below cost to drive out competitors.'},
+  {code:'FP14', name:'Exclusive Dealing', description:'Dominant firm imposes exclusivity arrangements.'},
+  {code:'FP15', name:'Tying and Bundling', description:'Firm ties products together, limiting market access.'},
+  {code:'FP16', name:'Merger Control', description:'Mergers increase market concentration and limit rivalry.'}
+] AS row
+CREATE (:FactPattern {
+  fact_pattern_upload_code: row.code,
+  fact_pattern_id:          randomUUID(),
+  name:                     row.name,
+  name_embedding:           [],
+  description:              row.description,
+  description_embedding:    []
+});
+
+UNWIND [
+  {code:'FP0001', name:'Protest on Government Property', description:'Demonstrations, sit-ins, or marches in parks, sidewalks, or other public forums.'},
+  {code:'FP0002', name:'Student Speech in Schools', description:'Students expressing views through clothing, speeches, social media, or school newspapers.'},
+  {code:'FP0003', name:'Government Employee Speech', description:'Employees speaking on public concern issues inside or outside of work.'},
+  {code:'FP0004', name:'Speech Near Abortion Clinics', description:'Speech restrictions around sensitive medical facilities.'},
+  {code:'FP0005', name:'Symbolic Expression (e.g., Flag Burning)', description:'Actions intended to convey a political message.'},
+  {code:'FP0006', name:'Offensive or Hate Speech', description:'Speech that offends, insults, or targets specific groups.'},
+  {code:'FP0007', name:'Internet or Social Media Speech', description:'Speech restrictions by or against individuals on digital platforms.'},
+  {code:'FP0008', name:'Political Campaign Speech', description:'Candidate ads, campaign finance, and election-related statements.'},
+  {code:'FP0009', name:'Commercial Speech', description:'Advertising and marketing subject to regulation.'},
+  {code:'FP0010', name:'Speech in Schools by Teachers', description:'Academic freedom and speech by public school educators.'},
+  {code:'FP0011', name:'Speech on Military Bases or Prisons', description:'Expression limitations in highly regulated government spaces.'},
+  {code:'FP0012', name:'Obscene or Sexually Explicit Materials', description:'Distribution of adult content and obscenity prosecution.'},
+  {code:'FP0013', name:'Speech at Public Universities', description:'Campus speakers, student organizations, and controversial events.'},
+  {code:'FP0014', name:'Compelled Speech (e.g., Pledges, Labels)', description:'Government forcing individuals to affirm beliefs or messages.'},
+  {code:'FP0015', name:'Speech by Elected Officials', description:'When government representatives speak in official or personal capacities.'},
+  {code:'FP0016', name:'Broadcast and Media Regulation', description:'FCC restrictions and content moderation on radio/TV.'},
+  {code:'FP0017', name:'Religious Speech in Public Space', description:'Religious proselytizing or displays in government spaces.'},
+  {code:'FP0018', name:'Leafleting and Handbilling', description:'Distribution of pamphlets in public or semi-public areas.'},
+  {code:'FP0019', name:'Public Employee Union Speech', description:'Speech tied to collective bargaining or workplace rights.'},
+  {code:'FP0020', name:'Speech in Residential Areas', description:'Restrictions on door-to-door canvassing or yard signs.'},
+  {code:'FP0021', name:'True Threats and Threatening Language', description:'Allegations of incitement or threats of violence.'},
+  {code:'FP0022', name:'Artistic Expression', description:'Government response to controversial or politically charged art.'},
+  {code:'FP0023', name:'Speech During Emergencies or Wartime', description:'Limits imposed during national security crises or disasters.'},
+  {code:'FP0024', name:'Heckler’s Veto', description:'When government suppresses speech due to hostile audience reaction.'},
+  {code:'FP0025', name:'Organizational Membership and Exclusion', description:'Denial or revocation of membership in organizations'},
+  {code:'FP0026', name:'National Interest', description:'Situations where the government asserts restrictions on speech or conduct based on claims of protecting national security, foreign policy, or other overriding interests of the state.'},
+  {code:'FP0027', name:'Grand Jury Subpoenas', description:'Government compels individuals to testify or produce information about confidential sources or observations in criminal investigations before a grand jury.'}
+] AS row
+CREATE (:FactPattern {
+  fact_pattern_upload_code: row.code,
+  fact_pattern_id:          randomUUID(),
+  name:                     row.name,
+  name_embedding:           [],
+  description:              row.description,
+  description_embedding:    []
+});
+
+
+UNWIND [
+  {code:'L0001', name:'First Amendment', citation:'U.S. Const. amend. I', text:'First Amendment', type:'constitution', enactment_date:'1791-12-15'},
+  {code:'L0002', name:'Second Amendment', citation:'U.S. Const. amend. II', text:'Second Amendment', type:'constitution', enactment_date:'1791-12-15'},
+  {code:'L0003', name:'Fourth Amendment', citation:'U.S. Const. amend. IV', text:'Fourth Amendment', type:'constitution', enactment_date:'1791-12-15'},
+  {code:'L0004', name:'Fifth Amendment', citation:'U.S. Const. amend. V', text:'Fifth Amendment', type:'constitution', enactment_date:'1791-12-15'},
+  {code:'L0005', name:'Sixth Amendment', citation:'U.S. Const. amend. VI', text:'Sixth Amendment', type:'constitution', enactment_date:'1791-12-15'},
+  {code:'L0006', name:'Eighth Amendment', citation:'U.S. Const. amend. VIII', text:'Eighth Amendment', type:'constitution', enactment_date:'1791-12-15'},
+  {code:'L0007', name:'Fourteenth Amendment – Due Process Clause', citation:'U.S. Const. amend. XIV, § 1', text:'Fourteenth Amendment – Due Process Clause', type:'constitution', enactment_date:'1868-07-09'},
+  {code:'L0008', name:'Fourteenth Amendment – Equal Protection Clause', citation:'U.S. Const. amend. XIV, § 1', text:'Fourteenth Amendment – Equal Protection Clause', type:'constitution', enactment_date:'1868-07-09'},
+  {code:'L0009', name:'Article I – Commerce Clause', citation:'U.S. Const. art. I, § 8, cl. 3', text:'Commerce Clause', type:'constitution', enactment_date:'1789-03-04'},
+  {code:'L0010', name:'Article I – Necessary and Proper Clause', citation:'U.S. Const. art. I, § 8, cl. 18', text:'Necessary and Proper Clause', type:'constitution', enactment_date:'1789-03-04'},
+  {code:'L0011', name:'Article II – Executive Power', citation:'U.S. Const. art. II, § 1', text:'Executive Power', type:'constitution', enactment_date:'1789-03-04'},
+  {code:'L0012', name:'Article III – Judicial Power', citation:'U.S. Const. art. III, § 1–2', text:'Judicial Power', type:'constitution', enactment_date:'1789-03-04'},
+  {code:'L0013', name:'Supremacy Clause', citation:'U.S. Const. art. VI, cl. 2', text:'Supremacy Clause', type:'constitution', enactment_date:'1789-03-04'},
+  {code:'L0014', name:'Sherman Act, Section 1', citation:'15 U.S.C. § 1', text:'Sherman Act, Section 1', type:'statute', enactment_date:'1890-07-02'},
+  {code:'L0015', name:'Sherman Act, Section 2', citation:'15 U.S.C. § 2', text:'Sherman Act, Section 2', type:'statute', enactment_date:'1890-07-02'},
+  {code:'L0016', name:'Clayton Act, Section 7', citation:'15 U.S.C. § 18', text:'Clayton Act, Section 7', type:'statute', enactment_date:'1914-10-15'},
+  {code:'L0017', name:'Federal Trade Commission Act, Section 5', citation:'15 U.S.C. § 45', text:'FTC Act, Section 5', type:'statute', enactment_date:'1914-09-26'}
+] AS row
+CREATE (:Law {
+  law_upload_code: row.code,
+  law_id:          randomUUID(),
+  name:            row.name,
+  name_embedding:  [],
+  text:            row.text,
+  text_embedding:  [],
+  type:            row.type,
+  enactment_date:  row.enactment_date,
+  citation:        row.citation
+});
+
+UNWIND [
+  {code:'J0001', name:'First Circuit'},
+  {code:'J0002', name:'Second Circuit'},
+  {code:'J0003', name:'Third Circuit'},
+  {code:'J0004', name:'Fourth Circuit'},
+  {code:'J0005', name:'Fifth Circuit'},
+  {code:'J0006', name:'Sixth Circuit'},
+  {code:'J0007', name:'Seventh Circuit'},
+  {code:'J0008', name:'Eighth Circuit'},
+  {code:'J0009', name:'Ninth Circuit'},
+  {code:'J0010', name:'Tenth Circuit'},
+  {code:'J0011', name:'Eleventh Circuit'},
+  {code:'J0012', name:'D.C. Circuit'},
+  {code:'J0013', name:'U.S. Supreme Court'}
+] AS row
+CREATE (:Jurisdiction {
+  jurisdiction_upload_code: row.code,
+  jurisdiction_id:          randomUUID(),
+  name:                     row.name
+});
+
+
+
+UNWIND [
+  // Supreme Court
+  {code:'F0001', name:'U.S. Supreme Court', type:'court', jcode:'J0013'},
+
+  // Courts of Appeals (1st–11th + D.C.)
+  {code:'F0101', name:'First Circuit Court of Appeals',  type:'court', jcode:'J0001'},
+  {code:'F0102', name:'Second Circuit Court of Appeals', type:'court', jcode:'J0002'},
+  {code:'F0103', name:'Third Circuit Court of Appeals',  type:'court', jcode:'J0003'},
+  {code:'F0104', name:'Fourth Circuit Court of Appeals', type:'court', jcode:'J0004'},
+  {code:'F0105', name:'Fifth Circuit Court of Appeals',  type:'court', jcode:'J0005'},
+  {code:'F0106', name:'Sixth Circuit Court of Appeals',  type:'court', jcode:'J0006'},
+  {code:'F0107', name:'Seventh Circuit Court of Appeals',type:'court', jcode:'J0007'},
+  {code:'F0108', name:'Eighth Circuit Court of Appeals', type:'court', jcode:'J0008'},
+  {code:'F0109', name:'Ninth Circuit Court of Appeals',  type:'court', jcode:'J0009'},
+  {code:'F0110', name:'Tenth Circuit Court of Appeals',  type:'court', jcode:'J0010'},
+  {code:'F0111', name:'Eleventh Circuit Court of Appeals',type:'court', jcode:'J0011'},
+  {code:'F0112', name:'D.C. Circuit Court of Appeals',   type:'court', jcode:'J0012'},
+
+  // Districts / Territories
+  {code:'F0201', name:'District of Columbia',                      type:'court', jcode:'J0012'},
+  {code:'F0202', name:'District of Puerto Rico',                   type:'court', jcode:'J0001'},
+  {code:'F0203', name:'District of Guam',                          type:'court', jcode:'J0009'},
+  {code:'F0204', name:'District of the Northern Mariana Islands',  type:'court', jcode:'J0009'},
+  {code:'F0205', name:'District of the Virgin Islands',            type:'court', jcode:'J0003'},
+  {code:'F0206', name:'Northern District of Alabama',              type:'court', jcode:'J0011'},
+  {code:'F0207', name:'Middle District of Alabama',                type:'court', jcode:'J0011'},
+  {code:'F0208', name:'Southern District of Alabama',              type:'court', jcode:'J0011'},
+  {code:'F0209', name:'District of Alaska',                        type:'court', jcode:'J0009'},
+  {code:'F0210', name:'District of Arizona',                       type:'court', jcode:'J0009'},
+  {code:'F0211', name:'Eastern District of Arkansas',              type:'court', jcode:'J0008'},
+  {code:'F0212', name:'Western District of Arkansas',              type:'court', jcode:'J0008'},
+  {code:'F0213', name:'Central District of California',            type:'court', jcode:'J0009'},
+  {code:'F0214', name:'Eastern District of California',            type:'court', jcode:'J0009'},
+  {code:'F0215', name:'Northern District of California',           type:'court', jcode:'J0009'},
+  {code:'F0216', name:'Southern District of California',           type:'court', jcode:'J0009'},
+  {code:'F0217', name:'District of Colorado',                      type:'court', jcode:'J0010'},
+  {code:'F0218', name:'District of Connecticut',                   type:'court', jcode:'J0002'},
+  {code:'F0219', name:'District of Delaware',                      type:'court', jcode:'J0003'},
+  {code:'F0220', name:'Northern District of Florida',              type:'court', jcode:'J0011'},
+  {code:'F0221', name:'Middle District of Florida',                type:'court', jcode:'J0011'},
+  {code:'F0222', name:'Southern District of Florida',              type:'court', jcode:'J0011'},
+  {code:'F0223', name:'Northern District of Georgia',              type:'court', jcode:'J0011'},
+  {code:'F0224', name:'Middle District of Georgia',                type:'court', jcode:'J0011'},
+  {code:'F0225', name:'Southern District of Georgia',              type:'court', jcode:'J0011'},
+  {code:'F0226', name:'District of Hawaii',                        type:'court', jcode:'J0009'},
+  {code:'F0227', name:'District of Idaho',                         type:'court', jcode:'J0009'},
+  {code:'F0228', name:'Central District of Illinois',              type:'court', jcode:'J0007'},
+  {code:'F0229', name:'Northern District of Illinois',             type:'court', jcode:'J0007'},
+  {code:'F0230', name:'Southern District of Illinois',             type:'court', jcode:'J0007'},
+  {code:'F0231', name:'Northern District of Indiana',              type:'court', jcode:'J0007'},
+  {code:'F0232', name:'Southern District of Indiana',              type:'court', jcode:'J0007'},
+  {code:'F0233', name:'Northern District of Iowa',                 type:'court', jcode:'J0008'},
+  {code:'F0234', name:'Southern District of Iowa',                 type:'court', jcode:'J0008'},
+  {code:'F0235', name:'District of Kansas',                        type:'court', jcode:'J0010'},
+  {code:'F0236', name:'Eastern District of Kentucky',              type:'court', jcode:'J0006'},
+  {code:'F0237', name:'Western District of Kentucky',              type:'court', jcode:'J0006'},
+  {code:'F0238', name:'Eastern District of Louisiana',             type:'court', jcode:'J0005'},
+  {code:'F0239', name:'Middle District of Louisiana',              type:'court', jcode:'J0005'},
+  {code:'F0240', name:'Western District of Louisiana',             type:'court', jcode:'J0005'},
+  {code:'F0241', name:'District of Maine',                         type:'court', jcode:'J0001'},
+  {code:'F0242', name:'District of Maryland',                      type:'court', jcode:'J0004'},
+  {code:'F0243', name:'District of Massachusetts',                 type:'court', jcode:'J0001'},
+  {code:'F0244', name:'Eastern District of Michigan',              type:'court', jcode:'J0006'},
+  {code:'F0245', name:'Western District of Michigan',              type:'court', jcode:'J0006'},
+  {code:'F0246', name:'District of Minnesota',                     type:'court', jcode:'J0008'},
+  {code:'F0247', name:'Northern District of Mississippi',          type:'court', jcode:'J0005'},
+  {code:'F0248', name:'Southern District of Mississippi',          type:'court', jcode:'J0005'},
+  {code:'F0249', name:'Eastern District of Missouri',              type:'court', jcode:'J0008'},
+  {code:'F0250', name:'Western District of Missouri',              type:'court', jcode:'J0008'},
+  {code:'F0251', name:'District of Montana',                       type:'court', jcode:'J0009'},
+  {code:'F0252', name:'District of Nebraska',                      type:'court', jcode:'J0008'},
+  {code:'F0253', name:'District of Nevada',                        type:'court', jcode:'J0009'},
+  {code:'F0254', name:'District of New Hampshire',                 type:'court', jcode:'J0001'},
+  {code:'F0255', name:'District of New Jersey',                    type:'court', jcode:'J0003'},
+  {code:'F0256', name:'District of New Mexico',                    type:'court', jcode:'J0010'},
+  {code:'F0257', name:'Eastern District of New York',              type:'court', jcode:'J0002'},
+  {code:'F0258', name:'Northern District of New York',             type:'court', jcode:'J0002'},
+  {code:'F0259', name:'Southern District of New York',             type:'court', jcode:'J0002'},
+  {code:'F0260', name:'Western District of New York',              type:'court', jcode:'J0002'},
+  {code:'F0261', name:'Eastern District of North Carolina',        type:'court', jcode:'J0003'},
+  {code:'F0262', name:'Middle District of North Carolina',         type:'court', jcode:'J0004'},
+  {code:'F0263', name:'Western District of North Carolina',        type:'court', jcode:'J0004'},
+  {code:'F0264', name:'District of North Dakota',                  type:'court', jcode:'J0008'},
+  {code:'F0265', name:'Northern District of Ohio',                 type:'court', jcode:'J0006'},
+  {code:'F0266', name:'Southern District of Ohio',                 type:'court', jcode:'J0006'},
+  {code:'F0267', name:'Eastern District of Oklahoma',              type:'court', jcode:'J0010'},
+  {code:'F0268', name:'Northern District of Oklahoma',             type:'court', jcode:'J0010'},
+  {code:'F0269', name:'Western District of Oklahoma',              type:'court', jcode:'J0010'},
+  {code:'F0270', name:'District of Oregon',                        type:'court', jcode:'J0009'},
+  {code:'F0271', name:'Eastern District of Pennsylvania',          type:'court', jcode:'J0002'},
+  {code:'F0272', name:'Middle District of Pennsylvania',           type:'court', jcode:'J0003'},
+  {code:'F0273', name:'Western District of Pennsylvania',          type:'court', jcode:'J0003'},
+  {code:'F0274', name:'District of Rhode Island',                  type:'court', jcode:'J0001'},
+  {code:'F0275', name:'District of South Carolina',                type:'court', jcode:'J0004'},
+  {code:'F0276', name:'District of South Dakota',                  type:'court', jcode:'J0008'},
+  {code:'F0277', name:'Eastern District of Tennessee',             type:'court', jcode:'J0006'},
+  {code:'F0278', name:'Middle District of Tennessee',              type:'court', jcode:'J0006'},
+  {code:'F0279', name:'Western District of Tennessee',             type:'court', jcode:'J0006'},
+  {code:'F0280', name:'Eastern District of Texas',                 type:'court', jcode:'J0005'},
+  {code:'F0281', name:'Northern District of Texas',                type:'court', jcode:'J0005'},
+  {code:'F0282', name:'Southern District of Texas',                type:'court', jcode:'J0005'},
+  {code:'F0283', name:'Western District of Texas',                 type:'court', jcode:'J0005'},
+  {code:'F0284', name:'District of Utah',                          type:'court', jcode:'J0010'},
+  {code:'F0285', name:'District of Vermont',                       type:'court', jcode:'J0002'},
+  {code:'F0286', name:'Eastern District of Virginia',              type:'court', jcode:'J0004'},
+  {code:'F0287', name:'Western District of Virginia',              type:'court', jcode:'J0004'},
+  {code:'F0288', name:'Western District of Washington',            type:'court', jcode:'J0009'},
+  {code:'F0289', name:'Eastern District of Washington',            type:'court', jcode:'J0009'},
+  {code:'F0290', name:'Northern District of West Virginia',        type:'court', jcode:'J0004'},
+  {code:'F0291', name:'Southern District of West Virginia',        type:'court', jcode:'J0004'},
+  {code:'F0292', name:'Eastern District of Wisconsin',             type:'court', jcode:'J0007'},
+  {code:'F0293', name:'Western District of Wisconsin',             type:'court', jcode:'J0007'},
+  {code:'F0294', name:'District of Wyoming',                       type:'court', jcode:'J0010'}
+] AS row
+CREATE (f:Forum {
+  forum_upload_code: row.code,
+  forum_id:          randomUUID(),
+  name:              row.name,
+  name_embedding:    [],
+  type:              row.type
+})
+WITH f, row
+MATCH (j:Jurisdiction {jurisdiction_upload_code: row.jcode})
+CREATE (f)-[:PART_OF]->(j);
+
+
+
+UNWIND [
+  // ───────── Injunctive Relief ─────────
+  {code:'RL0101', type:'injunction', description:'Permanent injunction restraining or compelling specific action'},
+  {code:'RL0102', type:'injunction', description:'Preliminary injunction to preserve status quo during litigation'},
+  {code:'RL0103', type:'injunction', description:'Temporary restraining order (TRO) to prevent immediate harm'},
+  {code:'RL0104', type:'injunction', description:'Prohibitory injunction preventing a party from specific conduct'},
+  {code:'RL0105', type:'injunction', description:'Mandatory injunction compelling a party to act (e.g., dismantle structure)'},
+
+  // ───────── Monetary / Damages ─────────
+  {code:'RL0201', type:'damages', description:'Compensation for actual losses suffered due to the harm caused'},                        // compensatory damages
+  {code:'RL0202', type:'damages', description:'Indirect losses resulting from breach, such as lost profits or opportunities'},       // consequential damages
+  {code:'RL0203', type:'damages', description:'Monetary award to punish and deter egregious, willful, or malicious conduct'},        // punitive damages
+  {code:'RL0204', type:'damages', description:'Symbolic award recognizing a legal wrong without significant harm'},                  // nominal damages
+  {code:'RL0205', type:'damages', description:'Damages fixed or capped by statute for specific types of legal violations'},          // statutory damages
+  {code:'RL0206', type:'damages', description:'Pre-agreed amount of damages stipulated in a contract'},                              // liquidated damages
+  {code:'RL0207', type:'damages', description:'Return of benefits unjustly retained by a party'},                                    // restitution
+
+  // ───────── Declaratory Relief ─────────
+  {code:'RL0301', type:'declaratory', description:'Declaratory judgment establishing parties\' legal rights or status'},
+
+  // ───────── Equitable / Specific Relief ─────────
+  {code:'RL0401', type:'specific performance', description:'Court order requiring a party to fulfill a contractual obligation'},      // specific performance
+  {code:'RL0402', type:'specific performance', description:'Rescission of a contract; restores parties to original state'},          // rescission → mapped to specific performance class
+  {code:'RL0403', type:'specific performance', description:'Court-mandated revision of contract to reflect true intent'},            // reformation → mapped to specific performance class
+  {code:'RL0404', type:'accounting',           description:'Ordered disclosure of financial accounts'},                               // accounting
+  {code:'RL0405', type:'specific performance', description:'Equitable remedy imposing a constructive trust to prevent unjust enrichment'}, // constructive trust → mapped
+  {code:'RL0406', type:'specific performance', description:'Equitable estoppel preventing contradictory assertions based on prior conduct'}, // equitable estoppel → mapped
+
+  // ───────── Constitutional & Administrative Relief ─────────
+  {code:'RL0501', type:'injunction',       description:'Injunction against enforcement of unconstitutional statute or regulation'},
+  {code:'RL0502', type:'declaratory',      description:'Court declaration voiding government action or rule'},
+  {code:'RL0503', type:'injunction',       description:'Reinstatement—restoration of prior status (e.g., employment, membership)'}, // mapped as injunctive relief
+  {code:'RL0504', type:'injunction',       description:'Vacatur—nullification of a court or agency decision'},                      // mapped as injunctive relief
+  {code:'RL0505', type:'injunction',       description:'Remand—case returned to lower tribunal for further proceedings'},            // mapped as injunctive relief
+  {code:'RL0506', type:'habeas corpus',    description:'Writ to secure release from unlawful detention'},
+  {code:'RL0507', type:'injunction',       description:'Mandamus—writ compelling performance of a legal duty'},                     // mapped as injunctive relief
+
+  // ───────── Settlement / Consent-Based Relief ─────────
+  {code:'RL0601', type:'injunction',       description:'Consent decree—court-approved and enforceable resolution of dispute'},      // often injunctive obligations; mapped as injunction
+  {code:'RL0602', type:'damages',          description:'Judicially approved settlement between parties'}                             // often monetary components; mapped as damages
+] AS row
+CREATE (:ReliefType {
+  relief_type_upload_code: row.code,
+  relief_type_id:          randomUUID(),
+  type:                    row.type,
+  description:             row.description,
+  description_embedding:   []
+});

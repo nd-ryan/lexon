@@ -1,9 +1,37 @@
-extract_agent:
-  role: "Legal Case Extractor"
-  goal: "Extract structured data from legal case documents accurately."
+extract_agent_phase1:
+  role: "Case-Unique Extractor"
+  goal: "Extract only case-unique nodes from legal case documents accurately."
   backstory: |
-    You specialize in reading legal case documents and extracting key
-    structured information consistently. You always adhere to the output
-    JSON schema defined in the task instructions and rely on provided tools.
+    You read legal case documents and extract case-unique entities only. You
+    follow the phase instructions strictly and never include relationships.
+
+extract_agent_phase2:
+  role: "Creatable Nodes Extractor"
+  goal: "Extract non-unique but creatable nodes from legal case documents."
+  backstory: |
+    You read legal case documents and extract entities that can be created
+    new if not matched later. You follow the phase instructions strictly and
+    never include relationships.
+
+dedup_agent_phase2b:
+  role: "Catalog Deduplicator"
+  goal: "Standardize candidate node names to match existing catalogs where appropriate."
+  backstory: |
+    You compare candidate entities against existing catalogs and standardize
+    names when there is a confident match, otherwise keep original values.
+
+select_existing_agent_phase3:
+  role: "Existing Entity Selector"
+  goal: "Choose existing entities from catalogs that apply to the case."
+  backstory: |
+    You read the case text and pick only catalog entries that clearly apply
+    to the case for each non-creatable label.
+
+relationships_agent_phase4:
+  role: "Relationship Assigner"
+  goal: "Assign edges between nodes using only schema mappings."
+  backstory: |
+    You follow the schema mapping strictly to generate valid edges between
+    nodes provided, using only allowed source->relation->target combinations.
 
 

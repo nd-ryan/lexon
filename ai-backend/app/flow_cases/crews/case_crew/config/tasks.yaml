@@ -1,29 +1,126 @@
-extract_task:
+extract_task_phase1:
   description: |
-    Use tools to gather inputs, then populate the CaseGraph model.
+    Read the document and extract only case-unique nodes per instructions.
 
     Required tools (in any order):
     - read_document_tool(file_path="{FILEPATH}", filename="{FILENAME}")
-    - get_neo4j_schema_tool()
 
     Steps:
-    1) Call both tools. Verify responses contain ok:true. If a tool returns ok:false,
-       include the tool's error in your reasoning and proceed sensibly with available data.
-    2) Use "text" from read_document_tool and "schema" from get_neo4j_schema_tool as context.
-    3) Follow any PHASE and label restrictions provided in extra instructions.
-       - In PHASE 1 and 2, do not output relationships.
-       - Never output labels or properties marked ai_ignore in the schema.
-    4) Extract and populate the CaseGraph fields as directed:
-       - case_name: derive from the document (fallback to filename if absent)
-       - nodes: array of { temp_id, label, properties }
-       - edges: array of { from, to, label, properties }
+    1) Call read_document_tool and confirm ok:true.
+    2) Follow PHASE 1 extra instructions (allowed labels only, nodes only; include a Case node).
+    3) Populate CaseGraph fields with nodes only (edges empty).
 
     Constraints:
     - temp_id values must be unique within this payload (e.g., n1, n2, …).
-    - Use canonical node labels and relationship types consistent with the schema when possible.
     - Keep properties flat and prefer values actually present in the text.
-    - edges.from and edges.to must reference existing node temp_ids.
     - Be conservative; avoid inventing facts not supported by the text.
-  expected_output: "A CaseGraph object constructed from the document and schema."
+
+    PHASE: 1 (case_unique=true)
+    You MUST output at least one node for EACH allowed label listed below.
+    You MUST include a 'Case' node.
+    Allowed labels: {ALLOWED_LABELS}
+    Do not output any relationships in this phase.
+    Do not include any ai_ignore labels or properties.
+
+    SCHEMA SPEC:
+    {SCHEMA_SPEC_TEXT}
+  expected_output: "A CaseGraph with nodes for case-unique labels and no edges."
+
+extract_task_phase2:
+  description: |
+    Read the document and extract non-unique but creatable nodes per instructions.
+
+    Required tools (in any order):
+    - read_document_tool(file_path="{FILEPATH}", filename="{FILENAME}")
+
+    Steps:
+    1) Call read_document_tool and confirm ok:true.
+    2) Follow PHASE 2 extra instructions (allowed labels only; nodes only).
+    3) Populate CaseGraph fields with nodes only (edges empty).
+
+    Constraints:
+    - temp_id values must be unique within this payload (e.g., n1, n2, …).
+    - Keep properties flat and prefer values actually present in the text.
+    - Be conservative; avoid inventing facts not supported by the text.
+    
+    PHASE: 2 (case_unique=false && can_create_new=true)
+    You MUST output at least one node for EACH allowed label listed below, if evidence exists in the text.
+    Allowed labels: {ALLOWED_LABELS}
+    Do not output any relationships in this phase.
+    Do not include any ai_ignore labels or properties.
+
+    SCHEMA SPEC:
+    {SCHEMA_SPEC_TEXT}
+  expected_output: "A CaseGraph with nodes for non-unique creatable labels and no edges."
+
+dedup_task_phase2b:
+  description: |
+    Deduplicate candidate nodes against provided existing catalogs.
+
+    Inputs will be provided in the instructions as JSON blocks:
+    - CANDIDATE_NODES_JSON: { "nodes": [ {temp_id, label, properties}, ... ] }
+    - CATALOGS: { label: ["name1", "name2", ...] }
+
+    Steps:
+    1) Compare each candidate to the relevant label catalog by name/synonyms.
+    2) If there is a likely match, standardize candidate to the exact catalog name.
+    3) Return JSON as { "nodes": [ ...updated candidates... ] }.
+
+    Constraints:
+    - Do not remove nodes. Only standardize names when confident; otherwise leave as-is.
+
+    CANDIDATE_NODES_JSON:
+    {CANDIDATE_NODES_JSON}
+
+    CATALOGS:
+    {CATALOGS_JSON}
+  expected_output: "A JSON object { nodes: [...] } with standardized node names."
+
+select_existing_task_phase3:
+  description: |
+    Select existing (non-creatable) nodes for the case from provided catalogs.
+
+    Inputs will be provided in the instructions as JSON blocks:
+    - CASE_TEXT: raw case text
+    - CATALOGS: { label: ["name1", "name2", ...] }
+
+    Steps:
+    1) Use the case text to decide which existing entities apply for each label.
+    2) Return JSON as { "selected": { label: [names...] } }.
+
+    Constraints:
+    - Only return names present in the catalogs.
+
+    CASE_TEXT:
+    {CASE_TEXT}
+
+    CATALOGS:
+    {CATALOGS_JSON}
+  expected_output: "A JSON object { selected: { label: [names...] } }."
+
+relationships_task_phase4:
+  description: |
+    Assign relationships between nodes following the provided schema mappings strictly.
+
+    Inputs will be provided as JSON blocks:
+    - SCHEMA_SPEC: text with mapping lines (Label and Relationships)
+    - NODES_JSON: { "nodes": [ {temp_id, label, properties}, ... ] }
+
+    Steps:
+    1) For each source node, consult allowed relationships for its label.
+    2) Create edges to target nodes whose labels match the allowed target.
+    3) Cap to a small number per relation per source to avoid explosion.
+    4) Return JSON as { "edges": [ {from, to, label, properties}, ... ] }.
+
+    Constraints:
+    - 'from' and 'to' must be existing temp_id values.
+    - Only use relationship labels allowed by the schema mapping.
+
+    SCHEMA SPEC:
+    {SCHEMA_SPEC_TEXT}
+
+    NODES_JSON:
+    {NODES_JSON}
+  expected_output: "A JSON object { edges: [...] } with valid edges."
 
 
