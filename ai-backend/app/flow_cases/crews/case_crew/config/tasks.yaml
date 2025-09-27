@@ -7,7 +7,7 @@ extract_task_phase1:
 
     Steps:
     1) Call read_document_tool and confirm ok:true.
-    2) Follow PHASE 1 extra instructions (allowed labels only, nodes only; include a Case node).
+    2) Follow PHASE 1 instructions (allowed labels only, nodes only; include a Case node).
     3) Populate CaseGraph fields with nodes only (edges empty).
 
     Constraints:
@@ -15,12 +15,11 @@ extract_task_phase1:
     - Keep properties flat and prefer values actually present in the text.
     - Be conservative; avoid inventing facts not supported by the text.
 
-    PHASE: 1 (case_unique=true)
-    You MUST output at least one node for EACH allowed label listed below.
+    PHASE 1 instructions:
+    You MUST output at least one node for EACH label present in the schema below.
     You MUST include a 'Case' node.
-    Allowed labels: {ALLOWED_LABELS}
     Do not output any relationships in this phase.
-    Do not include any ai_ignore labels or properties.
+    Do not include any ai_ignore properties.
 
     SCHEMA SPEC:
     {SCHEMA_SPEC_TEXT}
@@ -28,29 +27,35 @@ extract_task_phase1:
 
 extract_task_phase2:
   description: |
-    Read the document and extract non-unique but creatable nodes per instructions.
+    Read the document and create non-unique but creatable nodes comprehensively.
 
     Required tools (in any order):
     - read_document_tool(file_path="{FILEPATH}", filename="{FILENAME}")
 
     Steps:
     1) Call read_document_tool and confirm ok:true.
-    2) Follow PHASE 2 extra instructions (allowed labels only; nodes only).
-    3) Populate CaseGraph fields with nodes only (edges empty).
+    2) Consider the already generated nodes and the relationship requirements provided below.
+    3) Generate all required non-case-unique, creatable nodes so that for every generated node, if the schema has a relationship to a non-case-unique label, at least one such target node is generated (more if appropriate).
+    4) Populate CaseGraph fields with nodes only (edges empty).
 
     Constraints:
     - temp_id values must be unique within this payload (e.g., n1, n2, …).
     - Keep properties flat and prefer values actually present in the text.
     - Be conservative; avoid inventing facts not supported by the text.
     
-    PHASE: 2 (case_unique=false && can_create_new=true)
-    You MUST output at least one node for EACH allowed label listed below, if evidence exists in the text.
-    Allowed labels: {ALLOWED_LABELS}
+    PHASE 2 instructions:
+    You MUST output nodes for labels present in the schema below, if evidence exists in the text.
     Do not output any relationships in this phase.
-    Do not include any ai_ignore labels or properties.
+    Do not include any ai_ignore properties.
 
-    SCHEMA SPEC:
+    SCHEMA SPEC (only non-case-unique, creatable labels):
     {SCHEMA_SPEC_TEXT}
+
+    ALREADY_GENERATED_NODES:
+    {GENERATED_NODES_JSON}
+
+    RELATIONSHIP_REQUIREMENTS:
+    {REL_REQUIREMENTS_JSON}
   expected_output: "A CaseGraph with nodes for non-unique creatable labels and no edges."
 
 dedup_task_phase2b:
@@ -59,10 +64,13 @@ dedup_task_phase2b:
 
     Inputs will be provided in the instructions as JSON blocks:
     - CANDIDATE_NODES_JSON: { "nodes": [ {temp_id, label, properties}, ... ] }
-    - CATALOGS: { label: ["name1", "name2", ...] }
+    - CATALOGS: { label: [ { name?, description?, text?, citation? }, ... ] }
 
     Steps:
-    1) Compare each candidate to the relevant label catalog by name/synonyms.
+    1) Compare each candidate to the relevant label catalog.
+       - Use 'name' when the label has a name property.
+       - Otherwise use 'description' if present; otherwise 'text'.
+       - For 'law' label, 'citation' may be present for additional matching context.
     2) If there is a likely match, standardize candidate to the exact catalog name.
     3) Return JSON as { "nodes": [ ...updated candidates... ] }.
 
@@ -76,29 +84,7 @@ dedup_task_phase2b:
     {CATALOGS_JSON}
   expected_output: "A JSON object { nodes: [...] } with standardized node names."
 
-select_existing_task_phase3:
-  description: |
-    Select existing (non-creatable) nodes for the case from provided catalogs.
-
-    Inputs will be provided in the instructions as JSON blocks:
-    - CASE_TEXT: raw case text
-    - CATALOGS: { label: ["name1", "name2", ...] }
-
-    Steps:
-    1) Use the case text to decide which existing entities apply for each label.
-    2) Return JSON as { "selected": { label: [names...] } }.
-
-    Constraints:
-    - Only return names present in the catalogs.
-
-    CASE_TEXT:
-    {CASE_TEXT}
-
-    CATALOGS:
-    {CATALOGS_JSON}
-  expected_output: "A JSON object { selected: { label: [names...] } }."
-
-relationships_task_phase4:
+relationships_task_phase3:
   description: |
     Assign relationships between nodes following the provided schema mappings strictly.
 
@@ -122,5 +108,34 @@ relationships_task_phase4:
     NODES_JSON:
     {NODES_JSON}
   expected_output: "A JSON object { edges: [...] } with valid edges."
+
+select_existing_task_phase4:
+  description: |
+    Select existing (non-creatable) nodes for the case from provided catalogs.
+
+    Inputs will be provided in the instructions as JSON blocks:
+    - CASE_TEXT: raw case text
+    - CATALOGS: { label: [ { name?, description?, text?, citation? }, ... ] }
+    - RELATIONSHIP_REQUIREMENTS: { "requirements": [ {from, label, to}, ... ] }
+
+    Steps:
+    1) Use the case text to decide which existing entities apply for each label. Ensure that for each requirement that targets a non-creatable label, at least one catalog entry for that target label is selected when relevant to the case.
+    2) Return JSON as { "selected": { label: [values...] } } where each value is:
+       - 'name' when the label has a name property;
+       - otherwise 'description' if present; otherwise 'text'.
+
+    Constraints:
+    - Only return names present in the catalogs.
+
+    CASE_TEXT:
+    {CASE_TEXT}
+
+    CATALOGS:
+    {CATALOGS_JSON}
+
+    RELATIONSHIP_REQUIREMENTS:
+    {REL_REQUIREMENTS_JSON}
+  expected_output: "A JSON object { selected: { label: [names...] } }."
+
 
 

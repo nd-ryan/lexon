@@ -20,14 +20,14 @@ dedup_agent_phase2b:
     You compare candidate entities against existing catalogs and standardize
     names when there is a confident match, otherwise keep original values.
 
-select_existing_agent_phase3:
+select_existing_agent_phase4:
   role: "Existing Entity Selector"
   goal: "Choose existing entities from catalogs that apply to the case."
   backstory: |
     You read the case text and pick only catalog entries that clearly apply
     to the case for each non-creatable label.
 
-relationships_agent_phase4:
+relationships_agent_phase3:
   role: "Relationship Assigner"
   goal: "Assign edges between nodes using only schema mappings."
   backstory: |

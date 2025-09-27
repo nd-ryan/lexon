@@ -1,7 +1,8 @@
 from crewai import Agent, Crew, Task, LLM, Process
 from crewai.project import CrewBase, agent, task, crew
 from crewai.agents.agent_builder.base_agent import BaseAgent
-from typing import List
+from typing import List, Type
+from pydantic import BaseModel
 from app.models.case_graph import CaseGraph
 
 
@@ -56,6 +57,40 @@ class CaseCrew:
             output_pydantic=CaseGraph
         )
 
+    # Dynamic, per-node Phase 1 task with per-label instructions/examples and schema props
+    def extract_task_phase1_single_node(self, description: str, output_model: Type[BaseModel]) -> Task:
+        cfg = {
+            "description": description,
+            "expected_output": "JSON of properties only for the requested label"
+        }
+        return Task(
+            config=cfg,
+            agent=self.extract_agent_phase1(),
+            output_pydantic=output_model
+        )
+
+    # Dynamic Phase 2 task for generating multiple Fact objects (no pydantic binding on Task)
+    def extract_task_phase2_facts(self, description: str) -> Task:
+        cfg = {
+            "description": description,
+            "expected_output": "A JSON object { facts: [ { ...properties... }, ... ] }"
+        }
+        return Task(
+            config=cfg,
+            agent=self.extract_agent_phase2(),
+        )
+
+    # Dynamic Phase 3 task for generating Witnesses and Evidence for a given Fact
+    def extract_task_phase3_supports(self, description: str) -> Task:
+        cfg = {
+            "description": description,
+            "expected_output": "A JSON object { witnesses: [ { node: {...}, support_strength: number } ], evidence: [ { node: {...}, support_strength: number } ] }"
+        }
+        return Task(
+            config=cfg,
+            agent=self.extract_agent_phase2(),
+        )
+
     @task
     def extract_task_phase2(self) -> Task:
         cfg = self.tasks_config['extract_task_phase2'].copy()  # type: ignore[index]
@@ -99,17 +134,17 @@ class CaseCrew:
         )
 
     @agent
-    def select_existing_agent_phase3(self) -> Agent:
+    def select_existing_agent_phase4(self) -> Agent:
         llm = LLM(model="gpt-4.1", temperature=0)
         return Agent(
-            config=self.agents_config['select_existing_agent_phase3'],  # type: ignore[index]
+            config=self.agents_config['select_existing_agent_phase4'],  # type: ignore[index]
             tools=[],
             llm=llm
         )
 
     @task
-    def select_existing_task_phase3(self) -> Task:
-        cfg = self.tasks_config['select_existing_task_phase3'].copy()  # type: ignore[index]
+    def select_existing_task_phase4(self) -> Task:
+        cfg = self.tasks_config['select_existing_task_phase4'].copy()  # type: ignore[index]
         desc = (
             cfg['description']
             .replace('{FILENAME}', self.filename)
@@ -120,21 +155,21 @@ class CaseCrew:
         cfg['description'] = desc
         return Task(
             config=cfg,
-            agent=self.select_existing_agent_phase3(),
+            agent=self.select_existing_agent_phase4(),
         )
 
     @agent
-    def relationships_agent_phase4(self) -> Agent:
+    def relationships_agent_phase3(self) -> Agent:
         llm = LLM(model="gpt-4.1", temperature=0)
         return Agent(
-            config=self.agents_config['relationships_agent_phase4'],  # type: ignore[index]
+            config=self.agents_config['relationships_agent_phase3'],  # type: ignore[index]
             tools=[],
             llm=llm
         )
 
     @task
-    def relationships_task_phase4(self) -> Task:
-        cfg = self.tasks_config['relationships_task_phase4'].copy()  # type: ignore[index]
+    def relationships_task_phase3(self) -> Task:
+        cfg = self.tasks_config['relationships_task_phase3'].copy()  # type: ignore[index]
         desc = (
             cfg['description']
             .replace('{FILENAME}', self.filename)
@@ -145,7 +180,7 @@ class CaseCrew:
         cfg['description'] = desc
         return Task(
             config=cfg,
-            agent=self.relationships_agent_phase4(),
+            agent=self.relationships_agent_phase3(),
         )
 
     @crew
@@ -156,15 +191,15 @@ class CaseCrew:
                 self.extract_agent_phase1(),
                 self.extract_agent_phase2(),
                 self.dedup_agent_phase2b(),
-                self.select_existing_agent_phase3(),
-                self.relationships_agent_phase4(),
+                self.relationships_agent_phase3(),
+                self.select_existing_agent_phase4(),
             ],
             tasks=[
                 self.extract_task_phase1(),
                 self.extract_task_phase2(),
                 self.dedup_task_phase2b(),
-                self.select_existing_task_phase3(),
-                self.relationships_task_phase4(),
+                self.relationships_task_phase3(),
+                self.select_existing_task_phase4(),
             ],
             process=Process.sequential
         )
