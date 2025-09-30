@@ -23,26 +23,26 @@ class CaseCrew:
         self.replacements = replacements or {}
 
     @agent
-    def extract_agent_phase1(self) -> Agent:
+    def phase1_extract_agent(self) -> Agent:
         llm = LLM(model="gpt-4.1", temperature=0)
         return Agent(
-            config=self.agents_config['extract_agent_phase1'],  # type: ignore[index]
+            config=self.agents_config['phase1_extract_agent'],  # type: ignore[index]
             tools=self.tools,
             llm=llm
         )
 
     @agent
-    def extract_agent_phase2(self) -> Agent:
+    def phase2_extract_agent(self) -> Agent:
         llm = LLM(model="gpt-4.1", temperature=0)
         return Agent(
-            config=self.agents_config['extract_agent_phase2'],  # type: ignore[index]
+            config=self.agents_config['phase2_extract_agent'],  # type: ignore[index]
             tools=self.tools,
             llm=llm
         )
 
     @task
-    def extract_task_phase1(self) -> Task:
-        cfg = self.tasks_config['extract_task_phase1'].copy()  # type: ignore[index]
+    def phase1_extract_task(self) -> Task:
+        cfg = self.tasks_config['phase1_extract_task'].copy()  # type: ignore[index]
         desc = (
             cfg['description']
             .replace('{FILENAME}', self.filename)
@@ -53,47 +53,47 @@ class CaseCrew:
         cfg['description'] = desc
         return Task(
             config=cfg,
-            agent=self.extract_agent_phase1(),
+            agent=self.phase1_extract_agent(),
             output_pydantic=CaseGraph
         )
 
     # Dynamic, per-node Phase 1 task with per-label instructions/examples and schema props
-    def extract_task_phase1_single_node(self, description: str, output_model: Type[BaseModel]) -> Task:
+    def phase1_extract_single_node_task(self, description: str, output_model: Type[BaseModel]) -> Task:
         cfg = {
             "description": description,
             "expected_output": "JSON of properties only for the requested label"
         }
         return Task(
             config=cfg,
-            agent=self.extract_agent_phase1(),
+            agent=self.phase1_extract_agent(),
             output_pydantic=output_model
         )
 
     # Dynamic Phase 2 task for generating multiple Fact objects (no pydantic binding on Task)
-    def extract_task_phase2_facts(self, description: str) -> Task:
+    def phase2_extract_facts_task(self, description: str) -> Task:
         cfg = {
             "description": description,
             "expected_output": "A JSON object { facts: [ { ...properties... }, ... ] }"
         }
         return Task(
             config=cfg,
-            agent=self.extract_agent_phase2(),
+            agent=self.phase2_extract_agent(),
         )
 
     # Dynamic Phase 3 task for generating Witnesses and Evidence for a given Fact
-    def extract_task_phase3_supports(self, description: str) -> Task:
+    def phase3_extract_supports_task(self, description: str) -> Task:
         cfg = {
             "description": description,
             "expected_output": "A JSON object { witnesses: [ { node: {...}, support_strength: number } ], evidence: [ { node: {...}, support_strength: number } ] }"
         }
         return Task(
             config=cfg,
-            agent=self.extract_agent_phase2(),
+            agent=self.phase2_extract_agent(),
         )
 
     @task
-    def extract_task_phase2(self) -> Task:
-        cfg = self.tasks_config['extract_task_phase2'].copy()  # type: ignore[index]
+    def phase2_extract_task(self) -> Task:
+        cfg = self.tasks_config['phase2_extract_task'].copy()  # type: ignore[index]
         desc = (
             cfg['description']
             .replace('{FILENAME}', self.filename)
@@ -104,22 +104,22 @@ class CaseCrew:
         cfg['description'] = desc
         return Task(
             config=cfg,
-            agent=self.extract_agent_phase2(),
+            agent=self.phase2_extract_agent(),
             output_pydantic=CaseGraph
         )
 
     @agent
-    def dedup_agent_phase2b(self) -> Agent:
+    def phase2b_dedup_agent(self) -> Agent:
         llm = LLM(model="gpt-4.1", temperature=0)
         return Agent(
-            config=self.agents_config['dedup_agent_phase2b'],  # type: ignore[index]
+            config=self.agents_config['phase2b_dedup_agent'],  # type: ignore[index]
             tools=[],
             llm=llm
         )
 
     @task
-    def dedup_task_phase2b(self) -> Task:
-        cfg = self.tasks_config['dedup_task_phase2b'].copy()  # type: ignore[index]
+    def phase2b_dedup_task(self) -> Task:
+        cfg = self.tasks_config['phase2b_dedup_task'].copy()  # type: ignore[index]
         desc = (
             cfg['description']
             .replace('{FILENAME}', self.filename)
@@ -130,46 +130,39 @@ class CaseCrew:
         cfg['description'] = desc
         return Task(
             config=cfg,
-            agent=self.dedup_agent_phase2b(),
+            agent=self.phase2b_dedup_agent(),
         )
 
     @agent
-    def select_existing_agent_phase4(self) -> Agent:
+    def phase4_select_existing_agent(self) -> Agent:
         llm = LLM(model="gpt-4.1", temperature=0)
         return Agent(
-            config=self.agents_config['select_existing_agent_phase4'],  # type: ignore[index]
+            config=self.agents_config['phase4_select_existing_agent'],  # type: ignore[index]
             tools=[],
             llm=llm
         )
 
     @task
-    def select_existing_task_phase4(self) -> Task:
-        cfg = self.tasks_config['select_existing_task_phase4'].copy()  # type: ignore[index]
+    def phase4_select_existing_task(self) -> Task:
+        cfg = self.tasks_config['phase4_select_existing_task'].copy()  # type: ignore[index]
         desc = (
             cfg['description']
             .replace('{FILENAME}', self.filename)
             .replace('{FILEPATH}', self.file_path)
-        )
-        for k, v in self.replacements.items():
-            desc = desc.replace('{' + str(k) + '}', str(v))
-        cfg['description'] = desc
-        return Task(
-            config=cfg,
-            agent=self.select_existing_agent_phase4(),
         )
 
     @agent
-    def relationships_agent_phase3(self) -> Agent:
+    def phase5_select_existing_agent(self) -> Agent:
         llm = LLM(model="gpt-4.1", temperature=0)
         return Agent(
-            config=self.agents_config['relationships_agent_phase3'],  # type: ignore[index]
+            config=self.agents_config['phase5_select_existing_agent'],  # type: ignore[index]
             tools=[],
             llm=llm
         )
 
     @task
-    def relationships_task_phase3(self) -> Task:
-        cfg = self.tasks_config['relationships_task_phase3'].copy()  # type: ignore[index]
+    def phase5_select_existing_task(self) -> Task:
+        cfg = self.tasks_config['phase5_select_existing_task'].copy()  # type: ignore[index]
         desc = (
             cfg['description']
             .replace('{FILENAME}', self.filename)
@@ -180,28 +173,88 @@ class CaseCrew:
         cfg['description'] = desc
         return Task(
             config=cfg,
-            agent=self.relationships_agent_phase3(),
+            agent=self.phase5_select_existing_agent(),
         )
 
-    @crew
-    def crew(self) -> Crew:
-        # Default crew: phase1 only. The flow will choose the right task explicitly.
-        return Crew(
-            agents=[
-                self.extract_agent_phase1(),
-                self.extract_agent_phase2(),
-                self.dedup_agent_phase2b(),
-                self.relationships_agent_phase3(),
-                self.select_existing_agent_phase4(),
-            ],
-            tasks=[
-                self.extract_task_phase1(),
-                self.extract_task_phase2(),
-                self.dedup_task_phase2b(),
-                self.relationships_task_phase3(),
-                self.select_existing_task_phase4(),
-            ],
-            process=Process.sequential
+    @agent
+    def phase3_relationships_agent(self) -> Agent:
+        llm = LLM(model="gpt-4.1", temperature=0)
+        return Agent(
+            config=self.agents_config['phase3_relationships_agent'],  # type: ignore[index]
+            tools=[],
+            llm=llm
         )
+
+    @task
+    def phase3_relationships_task(self) -> Task:
+        cfg = self.tasks_config['phase3_relationships_task'].copy()  # type: ignore[index]
+        desc = (
+            cfg['description']
+            .replace('{FILENAME}', self.filename)
+            .replace('{FILEPATH}', self.file_path)
+        )
+
+    @agent
+    def phase6_law_agent(self) -> Agent:
+        llm = LLM(model="gpt-4.1", temperature=0)
+        return Agent(
+            config=self.agents_config['phase6_law_agent'],  # type: ignore[index]
+            tools=[],
+            llm=llm
+        )
+
+    @task
+    def phase6_law_task(self) -> Task:
+        cfg = self.tasks_config['phase6_law_task'].copy()  # type: ignore[index]
+        desc = (
+            cfg['description']
+            .replace('{FILENAME}', self.filename)
+            .replace('{FILEPATH}', self.file_path)
+        )
+
+    @agent
+    def phase7_issue_related_agent(self) -> Agent:
+        llm = LLM(model="gpt-4.1", temperature=0)
+        return Agent(
+            config=self.agents_config['phase7_issue_related_agent'],  # type: ignore[index]
+            tools=[],
+            llm=llm
+        )
+
+    @task
+    def phase7_issue_related_task(self) -> Task:
+        cfg = self.tasks_config['phase7_issue_related_task'].copy()  # type: ignore[index]
+        desc = (
+            cfg['description']
+            .replace('{FILENAME}', self.filename)
+            .replace('{FILEPATH}', self.file_path)
+        )
+
+    @agent
+    def phase8_party_agent(self) -> Agent:
+        llm = LLM(model="gpt-4.1", temperature=0)
+        return Agent(
+            config=self.agents_config['phase8_party_agent'],  # type: ignore[index]
+            tools=[],
+            llm=llm
+        )
+
+    @task
+    def phase8_party_task(self) -> Task:
+        cfg = self.tasks_config['phase8_party_task'].copy()  # type: ignore[index]
+        desc = (
+            cfg['description']
+            .replace('{FILENAME}', self.filename)
+            .replace('{FILEPATH}', self.file_path)
+        )
+        for k, v in self.replacements.items():
+            desc = desc.replace('{' + str(k) + '}', str(v))
+        cfg['description'] = desc
+        return Task(
+            config=cfg,
+            agent=self.phase8_party_agent(),
+        )
+
+    
 
 

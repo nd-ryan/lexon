@@ -532,7 +532,11 @@ def validate_case_graph(
 
 
 def render_spec_text(spec: Dict[str, Any]) -> str:
-    """Render a compact, LLM-friendly text for inclusion in prompts."""
+    """Render a compact, LLM-friendly text for inclusion in prompts.
+
+    Supports relationship entries as either a simple target string or an object
+    with "target" and optional "properties" schema.
+    """
     parts: List[str] = []
     for label_def in spec.get("labels", []):
         label = label_def.get("label")
@@ -550,10 +554,130 @@ def render_spec_text(spec: Dict[str, Any]) -> str:
         if props_lines:
             parts.append(" Properties:\n" + "\n".join(props_lines))
         rels = label_def.get("relationships", {}) or {}
-        if rels:
-            rel_lines = [f"  - {k} -> {v}" for k, v in rels.items()]
-            parts.append(" Relationships:\n" + "\n".join(rel_lines))
+        if isinstance(rels, dict) and rels:
+            rel_section: List[str] = []
+            for rel_label, target in rels.items():
+                if isinstance(target, dict):
+                    tgt = target.get("target")
+                    rel_section.append(f"  - {rel_label} -> {tgt}")
+                    rprops = target.get("properties") or {}
+                    if isinstance(rprops, dict) and rprops:
+                        for rp_name, rp_meta in rprops.items():
+                            if not isinstance(rp_name, str) or not isinstance(rp_meta, dict):
+                                continue
+                            # Skip AI-ignored or hidden relationship properties
+                            if bool(rp_meta.get("ai_ignore", False)):
+                                continue
+                            if bool((rp_meta.get("ui", {}) or {}).get("hidden", False)):
+                                continue
+                            rtype = str(rp_meta.get("type", "STRING")).upper()
+                            rreq = bool((rp_meta.get("ui", {}) or {}).get("required", False))
+                            line = f"      * {rp_name}: {rtype}"
+                            if rreq:
+                                line += " (required)"
+                            ropts = (rp_meta.get("ui", {}) or {}).get("options")
+                            if isinstance(ropts, list) and ropts:
+                                line += f" [one of: {', '.join(map(str, ropts))}]"
+                            if (rp_meta.get("ui", {}) or {}).get("input") == "date":
+                                line += " [format: YYYY-MM-DD]"
+                            rel_section.append(line)
+                else:
+                    rel_section.append(f"  - {rel_label} -> {target}")
+            if rel_section:
+                parts.append(" Relationships:\n" + "\n".join(rel_section))
         parts.append("")
     return "\n".join(parts).strip()
+
+
+def build_relationship_property_models(schema_payload: Any) -> Tuple[Dict[Tuple[str, str], Type[BaseModel]], Dict[Tuple[str, str], Dict[str, Dict[str, Any]]]]:
+    """Create Pydantic models for relationship properties using full schema payload.
+
+    Returns:
+      - models_by_src_rel: { (source_label, rel_label): PydanticModel }
+      - meta_by_src_rel:   { (source_label, rel_label): { prop_name: meta } }
+    Only relationships with a properties map are included.
+    """
+    models_by_src_rel: Dict[Tuple[str, str], Type[BaseModel]] = {}
+    meta_by_src_rel: Dict[Tuple[str, str], Dict[str, Dict[str, Any]]] = {}
+
+    if not isinstance(schema_payload, list):
+        return models_by_src_rel, meta_by_src_rel
+
+    for node_def in schema_payload:
+        src_label = node_def.get("label")
+        if not isinstance(src_label, str) or not src_label:
+            continue
+        rels_map = node_def.get("relationships") or {}
+        if not isinstance(rels_map, dict):
+            continue
+        for rel_label, target_spec in rels_map.items():
+            if not isinstance(rel_label, str):
+                continue
+            # Only relationships with explicit properties
+            if not isinstance(target_spec, dict):
+                continue
+            rprops = target_spec.get("properties") or {}
+            if not isinstance(rprops, dict) or not rprops:
+                continue
+
+            fields: Dict[str, Tuple[Any, Any]] = {}
+            meta: Dict[str, Dict[str, Any]] = {}
+            for rp_name, rp_meta in rprops.items():
+                if not isinstance(rp_name, str) or not isinstance(rp_meta, dict):
+                    continue
+                # Skip AI-ignored or hidden relationship properties
+                if bool(rp_meta.get("ai_ignore", False)):
+                    continue
+                if bool((rp_meta.get("ui", {}) or {}).get("hidden", False)):
+                    continue
+                ui = (rp_meta.get("ui", {}) or {})
+                rtype = str(rp_meta.get("type", "STRING")).upper()
+                required = bool(ui.get("required", False))
+                options = ui.get("options")
+                # Base type mapping
+                py_type: Any
+                if rtype == "INTEGER":
+                    py_type = int
+                elif rtype == "FLOAT":
+                    py_type = float
+                elif rtype == "BOOLEAN":
+                    py_type = bool
+                elif rtype == "LIST":
+                    py_type = List[str]
+                else:
+                    py_type = str
+                if isinstance(options, list) and options:
+                    try:
+                        from typing import Literal  # type: ignore
+                        py_type = Literal[tuple(options)]  # type: ignore[misc]
+                    except Exception:
+                        pass
+                default = ... if required else None
+                if not required:
+                    from typing import Optional as TypingOptional
+                    py_type = TypingOptional[py_type]
+                fields[rp_name] = (py_type, default)
+                meta[rp_name] = {"required": required, "type": rtype, "options": options}
+
+            if ConfigDict is not None:
+                class _IgnoreExtraBase(BaseModel):  # type: ignore[misc,valid-type]
+                    model_config = ConfigDict(extra="ignore")  # type: ignore[assignment]
+                model = create_model(  # type: ignore[call-arg]
+                    f"{src_label}_{rel_label}_PropertiesModel",
+                    __base__=_IgnoreExtraBase,
+                    **fields,
+                )
+            else:
+                model = create_model(  # type: ignore[call-arg]
+                    f"{src_label}_{rel_label}_PropertiesModel",
+                    __base__=BaseModel,
+                    __config__=type("Config", (), {"extra": "ignore"}),
+                    **fields,
+                )
+            key = (src_label, rel_label)
+            models_by_src_rel[key] = model
+            meta_by_src_rel[key] = meta
+
+    return models_by_src_rel, meta_by_src_rel
 
 

@@ -1,4 +1,4 @@
-extract_task_phase1:
+phase1_extract_task:
   description: |
     Read the document and extract only case-unique nodes per instructions.
 
@@ -25,7 +25,7 @@ extract_task_phase1:
     {SCHEMA_SPEC_TEXT}
   expected_output: "A CaseGraph with nodes for case-unique labels and no edges."
 
-extract_task_phase2:
+phase2_extract_task:
   description: |
     Read the document and create non-unique but creatable nodes comprehensively.
 
@@ -58,7 +58,7 @@ extract_task_phase2:
     {REL_REQUIREMENTS_JSON}
   expected_output: "A CaseGraph with nodes for non-unique creatable labels and no edges."
 
-dedup_task_phase2b:
+phase2b_dedup_task:
   description: |
     Deduplicate candidate nodes against provided existing catalogs.
 
@@ -84,7 +84,7 @@ dedup_task_phase2b:
     {CATALOGS_JSON}
   expected_output: "A JSON object { nodes: [...] } with standardized node names."
 
-relationships_task_phase3:
+phase3_relationships_task:
   description: |
     Assign relationships between nodes following the provided schema mappings strictly.
 
@@ -109,7 +109,7 @@ relationships_task_phase3:
     {NODES_JSON}
   expected_output: "A JSON object { edges: [...] } with valid edges."
 
-select_existing_task_phase4:
+phase4_select_existing_task:
   description: |
     Select existing (non-creatable) nodes for the case from provided catalogs.
 
@@ -136,6 +136,136 @@ select_existing_task_phase4:
     RELATIONSHIP_REQUIREMENTS:
     {REL_REQUIREMENTS_JSON}
   expected_output: "A JSON object { selected: { label: [names...] } }."
+
+
+phase5_select_existing_task:
+  description: |
+    Phase 5 selection for ReliefType and Forum from provided catalogs using Ruling properties and case text. Do not select Jurisdiction; it will be added programmatically from the selected Forum.
+
+    Inputs will be provided in the instructions as JSON blocks:
+    - RULING_JSON: { ...properties... } (the single generated Ruling node's properties)
+    - CASE_TEXT: raw case text
+    - CATALOGS: { label: [ { name?, type?, description?, text? }, ... ] }
+
+    Steps:
+    1) Based on RULING_JSON, select the most appropriate ReliefType from the ReliefType catalog.
+    2) Based on CASE_TEXT, select the most appropriate Forum from the Forum catalog.
+    3) Return JSON as { "selected": { "ReliefType": [values...], "Forum": [values...] } } where each value is:
+       - 'name' when the label has a name property;
+       - 'type' when ReliefType uses a type property;
+       - otherwise 'description' if present; otherwise 'text'.
+
+    Constraints:
+    - Only return names present in the catalogs.
+    - Do not invent new values.
+
+    RULING_JSON:
+    {RULING_JSON}
+
+    CASE_TEXT:
+    {CASE_TEXT}
+
+    CATALOGS:
+    {CATALOGS_JSON}
+  expected_output: "A JSON object { selected: { ReliefType: [...], Forum: [...] } }."
+
+
+phase6_law_task:
+  description: |
+    Phase 6: For each provided Argument, select or create at least one Law.
+
+    Inputs provided in instructions as JSON blocks:
+    - ARGUMENTS_JSON: { "arguments": [ { temp_id, properties }, ... ] }
+    - CATALOGS: { "Law": [ { name, text, type, citation }, ... ] }
+    - SCHEMA_SPEC: schema for Law properties for validation context
+
+    Steps:
+    1) For each argument, decide the governing Law(s). Prefer matching entries in the Law catalog by citation or name.
+    2) When no clear match exists, propose a new Law consistent with schema.
+    3) Return JSON as {
+       "laws": [ { properties }, ... ],
+       "argument_to_law": [ { "argument_temp_id": "nX", "law_index": <index in laws array> }, ... ]
+    }
+
+    Constraints:
+    - Do not output duplicate Law entries; deduplicate by citation/name.
+    - Properties must comply with schema types and required fields.
+
+    ARGUMENTS_JSON:
+    {ARGUMENTS_JSON}
+
+    CATALOGS:
+    {CATALOGS_JSON}
+
+    SCHEMA_SPEC:
+    {SCHEMA_SPEC_TEXT}
+  expected_output: "A JSON object { laws: [...], argument_to_law: [...] }."
+
+
+phase7_issue_related_task:
+  description: |
+    Phase 7: For each Issue, select or create one Doctrine, one Policy, and one FactPattern.
+
+    Inputs provided in instructions as JSON blocks:
+    - ISSUES_JSON: { "issues": [ { temp_id, properties }, ... ] }
+    - CATALOGS: {
+        "Doctrine": [ { name, description, category }, ... ],
+        "Policy": [ { name, description, discipline }, ... ],
+        "FactPattern": [ { name, description }, ... ]
+      }
+    - SCHEMA_SPEC: schema snippets for Doctrine, Policy, FactPattern properties
+
+    Steps:
+    1) For each issue, decide one Doctrine, one Policy, and one FactPattern.
+       Prefer catalog matches by name/description; otherwise propose new entries consistent with schema.
+    2) Return JSON as {
+       "doctrines": [ { properties }, ... ],
+       "policies": [ { properties }, ... ],
+       "factpatterns": [ { properties }, ... ],
+       "issue_map": [ { "issue_temp_id": "nX", "doctrine_index": i, "policy_index": j, "factpattern_index": k } ]
+    }
+
+    Constraints:
+    - Deduplicate outputs by name (and category/discipline where applicable).
+    - Properties must comply with schema types and required fields.
+
+    ISSUES_JSON:
+    {ISSUES_JSON}
+
+    CATALOGS:
+    {CATALOGS_JSON}
+
+    SCHEMA_SPEC:
+    {SCHEMA_SPEC_TEXT}
+  expected_output: "A JSON object { doctrines: [...], policies: [...], factpatterns: [...], issue_map: [...] }."
+
+
+phase8_party_task:
+  description: |
+    Phase 8: Identify Parties from case text and deduplicate against existing Party catalog; output roles for Case relationships.
+
+    Inputs provided in instructions as JSON blocks:
+    - CASE_TEXT: raw case text
+    - CATALOGS: { "Party": [ { name, type }, ... ] }
+
+    Steps:
+    1) Extract all parties involved in the case with best-guess role and type.
+    2) For each extracted party name, fuzzy match against the Party catalog; if match is strong, standardize to catalog name.
+    3) Return JSON as {
+       "parties": [ { name, type }, ... ],
+        "case_roles": [ { "party_index": <index in parties array>, "role": "plaintiff|defendant|appellant|appellee|petitioner|respondent" } ]
+    }
+
+    Constraints:
+    - Only standardize to catalog entries; do not invent catalog names.
+    - Prefer high-precision matches; if uncertain, keep extracted name.
+
+    CASE_TEXT:
+    {CASE_TEXT}
+
+    CATALOGS:
+    {CATALOGS_JSON}
+  expected_output: "A JSON object { parties: [...], case_roles: [...] }."
 
 
 

@@ -3,13 +3,13 @@ from crewai import Crew, Process
 from pydantic import BaseModel
 from typing import Dict, Any, List, Optional
 from .crews.case_crew.case_crew import CaseCrew
-from .tools.io_tools import read_document_tool, get_neo4j_schema_tool, fetch_neo4j_schema
-from app.lib.schema_runtime import prune_ui_schema_for_llm, build_property_models, validate_case_graph, render_spec_text
+from .tools.io_tools import read_document_tool, fetch_neo4j_schema
+from app.lib.schema_runtime import prune_ui_schema_for_llm, build_property_models, validate_case_graph, render_spec_text, build_relationship_property_models
 from app.models.case_graph import CaseGraph
 from app.lib.logging_config import setup_logger
 from app.lib.neo4j_client import neo4j_client
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 
 
 logger = setup_logger("case-extract-flow")
@@ -26,6 +26,11 @@ class CaseExtractState(BaseModel):
     rels_by_label: Dict[str, Dict[str, str]] | None = None
     props_meta_by_label: Dict[str, Dict[str, Dict[str, Any]]] | None = None
     label_flags_by_label: Dict[str, Dict[str, bool]] | None = None
+    # Relationship property validators keyed by (source_label, rel_label)
+    rel_prop_models_by_key: Dict[tuple[str, str], Any] | None = None
+    rel_prop_meta_by_key: Dict[tuple[str, str], Dict[str, Dict[str, Any]]] | None = None
+    # Full schema payload (with relationship property schemas) if available
+    schema_full: Any | None = None
     existing_catalog_by_label: Dict[str, List[Dict[str, Any]]] | None = None
     # Working context
     document_text: str = ""
@@ -35,7 +40,7 @@ class CaseExtractState(BaseModel):
 
 class CaseExtractFlow(Flow[CaseExtractState]):
     @start()
-    def kickoff(self) -> Dict[str, Any]:
+    def phase0_kickoff(self) -> Dict[str, Any]:
         return {
             "file_path": self.state.file_path,
             "filename": self.state.filename,
@@ -43,8 +48,8 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             "status": "initialized"
         }
 
-    @listen(kickoff)
-    def prepare_schema(self, ctx: Dict[str, Any]) -> Dict[str, Any]:
+    @listen(phase0_kickoff)
+    def phase0_prepare_schema(self, ctx: Dict[str, Any]) -> Dict[str, Any]:
         logger.info("prepare_schema: starting")
         print("[prepare_schema] starting")
         # Build pruned spec and models up front so we can pass spec to the crew
@@ -64,6 +69,15 @@ class CaseExtractFlow(Flow[CaseExtractState]):
         self.state.rels_by_label = rels_by_label
         self.state.props_meta_by_label = props_meta_by_label
         self.state.label_flags_by_label = label_flags_by_label
+        # Relationship property models from full schema when available
+        try:
+            rel_models, rel_meta = build_relationship_property_models(schema_payload)
+            self.state.rel_prop_models_by_key = rel_models  # type: ignore[assignment]
+            self.state.rel_prop_meta_by_key = rel_meta  # type: ignore[assignment]
+        except Exception:
+            self.state.rel_prop_models_by_key = {}
+            self.state.rel_prop_meta_by_key = {}
+        self.state.schema_full = schema_payload
 
         # Read document once and store text
         try:
@@ -89,13 +103,15 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 flags = (label_flags_by_label or {}).get(lbl, {})
                 if flags.get("ai_ignore"):
                     continue
+                # Skip preloading Party catalog; phase 8 performs on-demand fuzzy lookup
+                if lbl == "Party":
+                    continue
                 should_fetch = False
                 try:
                     is_creatable = flags.get("can_create_new") is True
                     is_non_creatable = flags.get("can_create_new") is False
                     is_case_unique = flags.get("case_unique") is True
-                    # Phase 3 needs catalogs for non-creatable labels
-                    # Phase 2b needs catalogs for non-unique, creatable labels
+
                     if is_non_creatable:
                         should_fetch = True
                     elif (not is_case_unique) and is_creatable:
@@ -134,11 +150,11 @@ class CaseExtractFlow(Flow[CaseExtractState]):
         print("[prepare_schema] completed")
         return ctx
 
-    @listen(prepare_schema)
-    def extract_case_unique(self, ctx: Dict[str, Any]) -> Dict[str, Any]:
+    @listen(phase0_prepare_schema)
+    def phase1_extract_case_unique(self, ctx: Dict[str, Any]) -> Dict[str, Any]:
         # Phase 1: extract only labels where case_unique is true, one LLM call per label
         logger.info(f"Phase 1 (per-node): starting for file {self.state.filename}")
-        tools = [read_document_tool]
+        tools = []
 
         # Load flow_map to determine ordering and instructions/examples
         try:
@@ -201,7 +217,8 @@ class CaseExtractFlow(Flow[CaseExtractState]):
 
                 # Build per-node task description (common guidance + label-specific)
                 task_desc = (
-                    "Read the document and extract ONLY the properties for the label '" + label + "'.\n\n"
+                    "Read the document text (provided below) and extract ONLY the properties for the label '" + label + "'.\n\n"
+                    "CASE_TEXT:\n" + (self.state.document_text or "") + "\n\n"
                     "Guidance:\n"
                     "- Return ONLY JSON matching the schema properties for this label.\n"
                     "- Include all required properties; optional when supported by the text.\n"
@@ -211,16 +228,15 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                     "INSTRUCTIONS (from flow map):\n" + instructions + "\n\n"
                     "EXAMPLES (illustrative, may be partial):\n" + examples_json + "\n\n"
                     "SCHEMA PROPERTIES for '" + label + "':\n" + props_spec_text + "\n\n"
-                    "Required tool: read_document_tool(file_path=\"" + self.state.file_path + "\", filename=\"" + self.state.filename + "\")."
                 )
 
                 # Create and run the task
-                dyn_task = crew.extract_task_phase1_single_node(task_desc, props_model)  # type: ignore[arg-type]
-        single_crew = Crew(
-            agents=[crew.extract_agent_phase1()],
+                dyn_task = crew.phase1_extract_single_node_task(task_desc, props_model)  # type: ignore[arg-type]
+                single_crew = Crew(
+                    agents=[crew.phase1_extract_agent()],
                     tasks=[dyn_task],
-            process=Process.sequential,
-        )
+                    process=Process.sequential,
+                )
                 result = single_crew.kickoff()
 
                 # Parse pydantic output into properties dict
@@ -250,14 +266,11 @@ class CaseExtractFlow(Flow[CaseExtractState]):
         logger.info("Phase 1 (per-node): completed")
         return {"status": "phase1_done"}
 
-        # Return payload as-is; UI is now derived from schema.json on the client
-        return {"status": "phase1_done"}
-
-    @listen(extract_case_unique)
-    def extract_facts_phase2(self, _: Dict[str, Any]) -> Dict[str, Any]:
+    @listen(phase1_extract_case_unique)
+    def phase2_extract_facts(self, _: Dict[str, Any]) -> Dict[str, Any]:
         # New Phase 2: generate Fact nodes per Argument; many facts may support each argument
         logger.info("Phase 2: generating Facts per Argument")
-        tools = [read_document_tool]
+        tools = []
 
         # Load flow_map for Fact instructions/examples
         try:
@@ -305,7 +318,8 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 arg_ctx_json = json.dumps(arg_props, ensure_ascii=False)
                 # Compose task: generate multiple facts supporting this argument
                 desc = (
-                    "Read the document and extract Facts that support the following Argument.\n\n"
+                    "Read the document text (provided below) and extract Facts that support the following Argument.\n\n"
+                    "CASE_TEXT:\n" + (self.state.document_text or "") + "\n\n"
                     "Argument (properties JSON):\n" + arg_ctx_json + "\n\n"
                     "Guidance:\n"
                     "- Produce a JSON object: { facts: [ { ...Fact properties... }, ... ] }.\n"
@@ -316,11 +330,10 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                     "INSTRUCTIONS (from flow map):\n" + instructions + "\n\n"
                     "EXAMPLES (illustrative, may be partial):\n" + examples_json + "\n\n"
                     "SCHEMA PROPERTIES for 'Fact':\n" + spec_text + "\n\n"
-                    "Required tool: read_document_tool(file_path=\"" + self.state.file_path + "\", filename=\"" + self.state.filename + "\")."
                 )
-                task = crew.extract_task_phase2_facts(desc)
+                task = crew.phase2_extract_facts_task(desc)
                 single_crew = Crew(
-                    agents=[crew.extract_agent_phase2()],
+                    agents=[crew.phase2_extract_agent()],
                     tasks=[task],
                     process=Process.sequential,
                 )
@@ -330,38 +343,36 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                     data = json.loads(result)
                 elif isinstance(result, dict):
                     data = result
-                    else:
+                else:
                     data = json.loads(str(result))
                 facts_list = data.get("facts") if isinstance(data, dict) else None
                 if not isinstance(facts_list, list):
                     facts_list = []
 
+                # Create a Fact node and RELIES_ON edge for each extracted fact
                 for fprops in facts_list:
                     if not isinstance(fprops, dict):
                         continue
-                    # Validate against Fact model if available
                     try:
                         if fact_model is not None:
                             inst = fact_model(**fprops)
                             clean_props = inst.model_dump(exclude_none=True)
-                else:
+                        else:
                             clean_props = fprops
                     except Exception:
                         clean_props = {k: v for k, v in fprops.items() if isinstance(k, str)}
-
-                    # Create Fact node
-                    fact_temp_id = f"n{next_idx}"
-                    node = {"temp_id": fact_temp_id, "label": "Fact", "properties": clean_props}
-                    next_idx += 1
-                    (self.state.nodes_accumulated or []).append(node)
-                    # Create edge: Argument RELIES_ON Fact
-                    try:
-                        arg_temp_id = arg_node.get("temp_id")
-                        if isinstance(arg_temp_id, str) and arg_temp_id:
-                            edge = {"from": arg_temp_id, "to": fact_temp_id, "label": "RELIES_ON", "properties": {}}
-                            (self.state.edges_accumulated or []).append(edge)
-                    except Exception:
-                        pass
+                fact_temp_id = f"n{next_idx}"
+                next_idx += 1
+                node = {"temp_id": fact_temp_id, "label": "Fact", "properties": clean_props}
+                (self.state.nodes_accumulated or []).append(node)
+                # Create edge: Argument RELIES_ON Fact
+                try:
+                    arg_temp_id = arg_node.get("temp_id")
+                    if isinstance(arg_temp_id, str) and arg_temp_id:
+                        edge = {"from": arg_temp_id, "to": fact_temp_id, "label": "RELIES_ON", "properties": {}}
+                        (self.state.edges_accumulated or []).append(edge)
+                except Exception:
+                    pass
             except Exception as e:
                 logger.warning(f"Phase 2: fact generation for an Argument failed: {e}")
                 continue
@@ -369,11 +380,11 @@ class CaseExtractFlow(Flow[CaseExtractState]):
         logger.info("Phase 2: Facts generation completed")
         return {"status": "facts_phase2_done"}
 
-    @listen(extract_facts_phase2)
-    def extract_supports_phase3(self, _: Dict[str, Any]) -> Dict[str, Any]:
+    @listen(phase2_extract_facts)
+    def phase3_extract_supports(self, _: Dict[str, Any]) -> Dict[str, Any]:
         # Phase 3: generate Witnesses and Evidence for each Fact, and link via SUPPORTED_BY
         logger.info("Phase 3: generating Witnesses and Evidence per Fact and linking edges")
-        tools = [read_document_tool]
+        tools = []
 
         # Load flow_map entries for Witness and Evidence
         try:
@@ -418,14 +429,15 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             replacements={},
         )
 
-                    next_idx = 1 + len(self.state.nodes_accumulated or [])
+        next_idx = 1 + len(self.state.nodes_accumulated or [])
 
         for fact in facts:
             try:
                 fact_props = fact.get("properties") or {}
                 fact_ctx_json = json.dumps(fact_props, ensure_ascii=False)
                 desc = (
-                    "Read the document and generate Witnesses and Evidence that support the following Fact.\n\n"
+                    "Read the document text (provided below) and generate Witnesses and Evidence that support the following Fact.\n\n"
+                    "CASE_TEXT:\n" + (self.state.document_text or "") + "\n\n"
                     "Fact (properties JSON):\n" + fact_ctx_json + "\n\n"
                     "Guidance:\n"
                     "- Return JSON as { witnesses: [ { node: <Witness properties>, support_strength: number } ], evidence: [ { node: <Evidence properties>, support_strength: number } ] }.\n"
@@ -439,11 +451,10 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                     "EVIDENCE INSTRUCTIONS:\n" + instructions_e + "\n\n"
                     "EVIDENCE EXAMPLES (partial):\n" + examples_e + "\n\n"
                     "SCHEMA PROPERTIES for 'Evidence':\n" + evidence_spec + "\n\n"
-                    "Required tool: read_document_tool(file_path=\"" + self.state.file_path + "\", filename=\"" + self.state.filename + "\")."
                 )
-                task = crew.extract_task_phase3_supports(desc)
+                task = crew.phase3_extract_supports_task(desc)
                 single_crew = Crew(
-                    agents=[crew.extract_agent_phase2()],
+                    agents=[crew.phase2_extract_agent()],
                     tasks=[task],
                     process=Process.sequential,
                 )
@@ -525,15 +536,16 @@ class CaseExtractFlow(Flow[CaseExtractState]):
         logger.info("Phase 3: supports generation completed")
         return {"status": "supports_phase3_done"}
 
-    @listen(extract_supports_phase3)
-    def assign_case_unique_relationships_phase4(self, _: Dict[str, Any]) -> Dict[str, Any]:
+    @listen(phase3_extract_supports)
+    def phase4_assign_case_unique_relationships(self, _: Dict[str, Any]) -> Dict[str, Any]:
         # Phase 4: add remaining relationships among case-unique labels (excluding RELIES_ON and SUPPORTED_BY)
         logger.info("Phase 4: assigning remaining relationships among case-unique nodes")
         try:
             from .crews.case_crew.case_crew import CaseCrew as _CaseCrew
-            nodes = self.state.nodes_accumulated or []
+            all_nodes = self.state.nodes_accumulated or []
             # Build pruned schema spec: only case_unique labels and rels to case_unique targets
-            labels_src = (self.state.schema_spec or {}).get("labels", []) if isinstance(self.state.schema_spec, dict) else []
+            # Prefer full schema to preserve relationship property schemas
+            labels_src = self.state.schema_full if isinstance(self.state.schema_full, list) else ((self.state.schema_spec or {}).get("labels", []) if isinstance(self.state.schema_spec, dict) else [])
             case_unique_set: set[str] = set()
             for ldef in labels_src:
                 if not isinstance(ldef, dict):
@@ -547,20 +559,33 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 if flags.get("case_unique") is True:
                     case_unique_set.add(lbl)
 
+            # Limit to labels present in current nodes
+            present_labels: set[str] = set()
+            for n in all_nodes:
+                if isinstance(n, dict) and isinstance(n.get("label"), str) and n.get("label") in case_unique_set:
+                    present_labels.add(n.get("label"))
+            # Filter nodes to only case-unique present labels
+            nodes = [n for n in all_nodes if isinstance(n, dict) and n.get("label") in present_labels]
+
             keep_labels: List[Dict[str, Any]] = []
             for ldef in labels_src:
                 if not isinstance(ldef, dict):
                     continue
                 lbl = ldef.get("label")
-                if not isinstance(lbl, str) or lbl not in case_unique_set:
+                if not isinstance(lbl, str) or lbl not in present_labels:
                     continue
-                pruned_rels: Dict[str, str] = {}
+                pruned_rels: Dict[str, Any] = {}
                 for rk, rv in (ldef.get("relationships") or {}).items():
-                    if not (isinstance(rk, str) and isinstance(rv, str)):
+                    if not isinstance(rk, str):
                         continue
                     if rk in {"RELIES_ON", "SUPPORTED_BY"}:  # already assigned earlier
                         continue
-                    if rv in case_unique_set:
+                    # rv can be a string target label or an object { target, properties }
+                    if isinstance(rv, dict):
+                        tgt = rv.get("target")
+                        if isinstance(tgt, str) and tgt in present_labels:
+                            pruned_rels[rk] = rv  # preserve properties schema
+                    elif isinstance(rv, str) and rv in present_labels:
                         pruned_rels[rk] = rv
                 new_def = dict(ldef)
                 new_def["relationships"] = pruned_rels
@@ -577,9 +602,9 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                     "NODES_JSON": json.dumps({"nodes": nodes}, ensure_ascii=False),
                 },
             )
-            task = crew.relationships_task_phase3()
+            task = crew.phase3_relationships_task()
             single_crew = Crew(
-                agents=[crew.relationships_agent_phase3()],
+                agents=[crew.phase3_relationships_agent()],
                 tasks=[task],
                 process=Process.sequential,
             )
@@ -600,11 +625,25 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                             continue
                         if e.get("label") in {"RELIES_ON", "SUPPORTED_BY"}:
                             continue
+                        # Coerce relationship properties via Pydantic when available
+                        props = e.get("properties") or {}
+                        try:
+                            temp_id_to_label = {n.get("temp_id"): n.get("label") for n in (self.state.nodes_accumulated or []) if isinstance(n, dict)}
+                            src_label = temp_id_to_label.get(e.get("from"))
+                            rel_label = e.get("label")
+                            key = (str(src_label), str(rel_label))
+                            rel_models = self.state.rel_prop_models_by_key or {}
+                            model = rel_models.get(key)  # type: ignore[index]
+                            if model is not None and isinstance(props, dict):
+                                inst = model(**props)
+                                props = inst.model_dump(exclude_none=True)
+                        except Exception:
+                            pass
                         edges_new.append({
                             "from": e.get("from"),
                             "to": e.get("to"),
                             "label": e.get("label"),
-                            "properties": e.get("properties") or {},
+                            "properties": props or {},
                         })
             except Exception:
                 edges_new = []
@@ -623,309 +662,39 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             logger.warning(f"Phase 4: relationship assignment failed; continuing without new edges: {e}")
             return {"status": "edges_assign_skipped_phase4"}
 
-    @listen(assign_case_unique_relationships_phase4)
-    def extract_non_unique_creatable(self, _: Dict[str, Any]) -> Dict[str, Any]:
-        # Phase 2 (legacy): extract labels where case_unique is false and can_create_new is true
-        # Phase 2: extract labels where case_unique is false and can_create_new is true
-        tools = [read_document_tool]
-        labels_src = (self.state.schema_spec or {}).get("labels", []) if isinstance(self.state.schema_spec, dict) else []
-        phase2_labels = [ld for ld in labels_src if isinstance(ld, dict) and not ld.get("case_unique") and ld.get("can_create_new") and not ld.get("ai_ignore")]
-        phase2_spec = {"labels": phase2_labels}
-        phase2_spec_text = render_spec_text(phase2_spec)
-        allowed_labels = [ld.get("label") for ld in phase2_labels if isinstance(ld, dict)]
-
-        # Build relationship requirements between already generated nodes and non-case-unique creatable labels
-        generated_nodes = self.state.nodes_accumulated or []
-        generated_labels: set[str] = set()
-        for n in generated_nodes:
-            if isinstance(n, dict) and isinstance(n.get("label"), str):
-                generated_labels.add(str(n.get("label")))
-
-        non_unique_creatable: set[str] = set([l for l in allowed_labels if isinstance(l, str)])
-        requirements: List[Dict[str, str]] = []
-        # forward relationships: generated -> non_unique_creatable
-        for ldef in labels_src:
-            if not isinstance(ldef, dict):
-                continue
-            src = ldef.get("label")
-            if not isinstance(src, str):
-                continue
-            rels = ldef.get("relationships") or {}
-            if not isinstance(rels, dict):
-                continue
-            for rel_label, target in rels.items():
-                if not isinstance(rel_label, str):
-                    continue
-                # target may be string or object; normalize to string
-                tgt = target.get("target") if isinstance(target, dict) else target
-                if not isinstance(tgt, str):
-                    continue
-                if src in generated_labels and tgt in non_unique_creatable:
-                    requirements.append({"from": src, "label": rel_label, "to": tgt})
-        # reverse relationships: non_unique_creatable -> generated
-        for ldef in labels_src:
-            if not isinstance(ldef, dict):
-                continue
-            src = ldef.get("label")
-            if not isinstance(src, str):
-                continue
-            rels = ldef.get("relationships") or {}
-            if not isinstance(rels, dict):
-                continue
-            for rel_label, target in rels.items():
-                if not isinstance(rel_label, str):
-                    continue
-                tgt = target.get("target") if isinstance(target, dict) else target
-                if not isinstance(tgt, str):
-                    continue
-                if src in non_unique_creatable and tgt in generated_labels:
-                    requirements.append({"from": src, "label": rel_label, "to": tgt})
-
-        replacements = {
-            "SCHEMA_SPEC_TEXT": phase2_spec_text,
-            "GENERATED_NODES_JSON": json.dumps({"nodes": generated_nodes}, ensure_ascii=False),
-            "REL_REQUIREMENTS_JSON": json.dumps({"requirements": requirements}, ensure_ascii=False),
-        }
-        crew = CaseCrew(
-            file_path=self.state.file_path,
-            filename=self.state.filename,
-            case_id=self.state.case_id,
-            tools=tools,
-            replacements=replacements,
-        )
-        logger.info("Phase 2: extracting non-unique creatable nodes")
-        # Execute only the phase 2 task
-        task = crew.extract_task_phase2()
-        single_crew = Crew(
-            agents=[crew.extract_agent_phase2()],
-            tasks=[task],
-            process=Process.sequential,
-        )
-        raw_result = single_crew.kickoff()
-        logger.info("Phase 2 completed")
-        try:
-            if hasattr(raw_result, 'to_dict'):
-                payload = raw_result.to_dict()  # type: ignore[attr-defined]
-            elif isinstance(raw_result, dict):
-                payload = raw_result
-            elif hasattr(raw_result, 'raw') and getattr(raw_result, 'raw') is not None:
-                raw = getattr(raw_result, 'raw')
-                if hasattr(raw, 'model_dump'):
-                    payload = raw.model_dump()  # type: ignore[attr-defined]
-                elif isinstance(raw, str):
-                    payload = json.loads(raw)
-                else:
-                    payload = raw
-            elif isinstance(raw_result, str):
-                payload = json.loads(raw_result)
-            else:
-                payload = json.loads(str(raw_result))
-
-            nodes = payload.get("nodes") or []
-            if isinstance(nodes, list):
-                filtered = [n for n in nodes if isinstance(n, dict) and n.get("label") in allowed_labels]
-                self.state.nodes_accumulated.extend(filtered)  # type: ignore[arg-type]
-            return {"status": "phase2_done"}
-        except Exception as e:
-            logger.error(f"Phase 2 normalization failed: {e}")
-            raise
-
-    @listen(extract_non_unique_creatable)
-    def dedup_with_llm(self, _: Dict[str, Any]) -> Dict[str, Any]:
-        # Phase 2b: LLM-assisted dedup via dedicated agent/task
-        logger.info("Phase 2b: starting LLM-based dedup via agent")
-        from .crews.case_crew.case_crew import CaseCrew as _CaseCrew
-        labels_for_dedup = [ld.get("label") for ld in (self.state.schema_spec or {}).get("labels", []) if isinstance(ld, dict) and not ld.get("case_unique") and ld.get("can_create_new") and not ld.get("ai_ignore")]
-        candidates = [n for n in (self.state.nodes_accumulated or []) if isinstance(n, dict) and n.get("label") in labels_for_dedup]
-        others = [n for n in (self.state.nodes_accumulated or []) if isinstance(n, dict) and n.get("label") not in labels_for_dedup]
-        catalogs: Dict[str, List[Dict[str, Any]]] = {}
-        for lbl in labels_for_dedup:
-            rows = (self.state.existing_catalog_by_label or {}).get(lbl) or []
-            entries: List[Dict[str, Any]] = []
-            for r in rows:
-                if not isinstance(r, dict):
-                    continue
-                entry: Dict[str, Any] = {}
-                if r.get("name") is not None:
-                    entry["name"] = str(r.get("name"))
-                if r.get("description") is not None:
-                    entry["description"] = str(r.get("description"))
-                if r.get("text") is not None:
-                    entry["text"] = str(r.get("text"))
-                if isinstance(lbl, str) and lbl.lower() == "law" and r.get("citation") is not None:
-                    entry["citation"] = str(r.get("citation"))
-                if entry:
-                    entries.append(entry)
-            catalogs[lbl] = entries
-        # Build one-off crew instance with no tools, use task text to pass inputs
-        crew = _CaseCrew(
-            self.state.file_path,
-            self.state.filename,
-            self.state.case_id,
-            tools=[],
-            replacements={
-                "CANDIDATE_NODES_JSON": json.dumps({"nodes": candidates}, ensure_ascii=False),
-                "CATALOGS_JSON": json.dumps(catalogs, ensure_ascii=False),
-            },
-        )
-        task = crew.dedup_task_phase2b()
-        single_crew = Crew(
-            agents=[crew.dedup_agent_phase2b()],
-            tasks=[task],
-            process=Process.sequential,
-        )
-        result = single_crew.kickoff()
-        try:
-            text = str(result)
-            data = json.loads(text) if isinstance(result, str) else (result if isinstance(result, dict) else json.loads(str(result)))
-            deduped = data.get("nodes") if isinstance(data, dict) else None
-            if not isinstance(deduped, list):
-                deduped = candidates
-        except Exception:
-            deduped = candidates
-        self.state.nodes_accumulated = others + (deduped or [])
-        logger.info("Phase 2b: dedup completed")
-        return {"status": "dedup_done"}
-
-    @listen(dedup_with_llm)
-    def assign_internal_relationships(self, _: Dict[str, Any]) -> Dict[str, Any]:
-        # Phase 3: assign relationships among generated nodes only (exclude non-creatable labels)
-        logger.info("Phase 3: assigning relationships among generated nodes (excluding non-creatable labels)")
+    @listen(phase4_assign_case_unique_relationships)
+    def phase5_select_and_link(self, _: Dict[str, Any]) -> Dict[str, Any]:
+        # Phase 5: select ReliefType based on Ruling, Forum based on case text, then programmatically add Jurisdiction and edges
+        logger.info("Phase 5: selecting ReliefType and Forum; computing Jurisdiction; creating edges")
         try:
             from .crews.case_crew.case_crew import CaseCrew as _CaseCrew
-            nodes = self.state.nodes_accumulated or []
-            # Build pruned schema spec excluding non-creatable labels and any relationships to them
-            labels_src = (self.state.schema_spec or {}).get("labels", []) if isinstance(self.state.schema_spec, dict) else []
-            keep_set: set[str] = set()
-            for ldef in labels_src:
-                if not isinstance(ldef, dict):
-                    continue
-                lbl = ldef.get("label")
-                if not isinstance(lbl, str):
-                    continue
-                flags = (self.state.label_flags_by_label or {}).get(lbl, {})
-                if flags.get("ai_ignore"):
-                    continue
-                if flags.get("can_create_new") is False:
-                    continue
-                keep_set.add(lbl)
-            keep_labels: List[Dict[str, Any]] = []
-            for ldef in labels_src:
-                if not isinstance(ldef, dict):
-                    continue
-                lbl = ldef.get("label")
-                if not isinstance(lbl, str) or lbl not in keep_set:
-                    continue
-                rels = {}
-                for rk, rv in (ldef.get("relationships") or {}).items():
-                    if isinstance(rk, str) and isinstance(rv, str) and rv in keep_set:
-                        rels[rk] = rv
-                new_def = dict(ldef)
-                new_def["relationships"] = rels
-                keep_labels.append(new_def)
-            spec_text = render_spec_text({"labels": keep_labels})
-            crew = _CaseCrew(
-                self.state.file_path,
-                self.state.filename,
-                self.state.case_id,
-                tools=[],
-                replacements={
-                    "SCHEMA_SPEC_TEXT": spec_text,
-                    "NODES_JSON": json.dumps({"nodes": nodes}, ensure_ascii=False),
-                },
-            )
-            task = crew.relationships_task_phase3()
-            single_crew = Crew(
-                agents=[crew.relationships_agent_phase3()],
-                tasks=[task],
-                process=Process.sequential,
-            )
-            result = single_crew.kickoff()
-            # Parse edges JSON
-            edges: List[Dict[str, Any]] = []
-            try:
-                text = str(result)
-                data = json.loads(text) if isinstance(result, str) else (result if isinstance(result, dict) else json.loads(str(result)))
-                eg = data.get("edges") if isinstance(data, dict) else None
-                if isinstance(eg, list):
-                    for e in eg:
-                        if not isinstance(e, dict):
-                            continue
-                        if not isinstance(e.get("from"), str) or not isinstance(e.get("to"), str) or not isinstance(e.get("label"), str):
-                            continue
-                        if e.get("properties") is not None and not isinstance(e.get("properties"), dict):
-                            continue
-                        edges.append({
-                            "from": e.get("from"),
-                            "to": e.get("to"),
-                            "label": e.get("label"),
-                            "properties": e.get("properties") or {},
-                        })
-            except Exception:
-                edges = []
-            temp_ids = {n.get("temp_id") for n in (self.state.nodes_accumulated or []) if isinstance(n, dict)}
-            edges = [e for e in edges if e.get("from") in temp_ids and e.get("to") in temp_ids]
-            self.state.edges_accumulated = edges
-            logger.info(f"Phase 3: agent produced {len(edges)} edges among generated nodes")
-            return {"status": "edges_assigned_phase3"}
-        except Exception as e:
-            self.state.edges_accumulated = []
-            logger.warning(f"Phase 3: relationship assignment failed; continuing without edges: {e}")
-            return {"status": "edges_assign_skipped_phase3"}
-
-    @listen(assign_internal_relationships)
-    def select_existing_and_assign_relationships(self, _: Dict[str, Any]) -> Dict[str, Any]:
-        # Phase 4: select non-creatable catalog nodes and assign relationships involving them
-        logger.info("Phase 4: selecting existing-only nodes and assigning relationships with catalogs")
-        try:
-            from .crews.case_crew.case_crew import CaseCrew as _CaseCrew
-            # First, select existing-only nodes
-            restricted_labels = [ld.get("label") for ld in (self.state.schema_spec or {}).get("labels", []) if isinstance(ld, dict) and ld.get("can_create_new") is False and not ld.get("ai_ignore")]
+            # Prefer full schema to preserve relationship property schemas
+            labels_src = self.state.schema_full if isinstance(self.state.schema_full, list) else ((self.state.schema_spec or {}).get("labels", []) if isinstance(self.state.schema_spec, dict) else [])
+            # Build catalogs for ReliefType and Forum using schema-defined properties
             catalogs: Dict[str, List[Dict[str, Any]]] = {}
-            for lbl in restricted_labels:
+            for lbl in ["ReliefType", "Forum"]:
                 rows = (self.state.existing_catalog_by_label or {}).get(lbl) or []
                 entries: List[Dict[str, Any]] = []
+                props_meta = (self.state.props_meta_by_label or {}).get(lbl) or {}
+                allowed_keys = [k for k in props_meta.keys() if isinstance(k, str)]
                 for r in rows:
                     if not isinstance(r, dict):
                         continue
                     entry: Dict[str, Any] = {}
-                    if r.get("name") is not None:
-                        entry["name"] = str(r.get("name"))
-                    if r.get("description") is not None:
-                        entry["description"] = str(r.get("description"))
-                    if r.get("text") is not None:
-                        entry["text"] = str(r.get("text"))
-                    if isinstance(lbl, str) and lbl.lower() == "law" and r.get("citation") is not None:
-                        entry["citation"] = str(r.get("citation"))
+                    for k in allowed_keys:
+                        if r.get(k) is not None:
+                            v = r.get(k)
+                            try:
+                                entry[k] = v if isinstance(v, (int, float, bool)) else str(v)
+                            except Exception:
+                                entry[k] = str(v)
                     if entry:
                         entries.append(entry)
                 catalogs[lbl] = entries
 
-            # Build relationship requirements for creatable <-> non-creatable pairs
-            labels_src = (self.state.schema_spec or {}).get("labels", []) if isinstance(self.state.schema_spec, dict) else []
-            generated_nodes = self.state.nodes_accumulated or []
-            generated_labels: set[str] = set([str(n.get("label")) for n in generated_nodes if isinstance(n, dict) and isinstance(n.get("label"), str)])
-            non_creatable: set[str] = set([l for l in restricted_labels if isinstance(l, str)])
-            requirements_phase4: List[Dict[str, str]] = []
-            for ldef in labels_src:
-                if not isinstance(ldef, dict):
-                    continue
-                src = ldef.get("label")
-                if not isinstance(src, str):
-                    continue
-                rels = ldef.get("relationships") or {}
-                if not isinstance(rels, dict):
-                    continue
-                for rel_label, target in rels.items():
-                    if not isinstance(rel_label, str):
-                        continue
-                    tgt = target.get("target") if isinstance(target, dict) else target
-                    if not isinstance(tgt, str):
-                        continue
-                    if src in generated_labels and tgt in non_creatable:
-                        requirements_phase4.append({"from": src, "label": rel_label, "to": tgt})
-                    if src in non_creatable and tgt in generated_labels:
-                        requirements_phase4.append({"from": src, "label": rel_label, "to": tgt})
+            # Extract the generated Ruling node properties
+            rulings = [n for n in (self.state.nodes_accumulated or []) if isinstance(n, dict) and n.get("label") == "Ruling"]
+            ruling_props = (rulings[0].get("properties") if rulings and isinstance(rulings[0].get("properties"), dict) else {})
 
             crew_sel = _CaseCrew(
                 self.state.file_path,
@@ -933,14 +702,14 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 self.state.case_id,
                 tools=[],
                 replacements={
+                    "RULING_JSON": json.dumps(ruling_props, ensure_ascii=False),
                     "CASE_TEXT": self.state.document_text or "",
                     "CATALOGS_JSON": json.dumps(catalogs, ensure_ascii=False),
-                    "REL_REQUIREMENTS_JSON": json.dumps({"requirements": requirements_phase4}, ensure_ascii=False),
                 },
             )
-            task_sel = crew_sel.select_existing_task_phase4()
+            task_sel = crew_sel.phase5_select_existing_task()
             single_crew_sel = Crew(
-                agents=[crew_sel.select_existing_agent_phase4()],
+                agents=[crew_sel.phase5_select_existing_agent()],
                 tasks=[task_sel],
                 process=Process.sequential,
             )
@@ -957,14 +726,18 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             except Exception:
                 selected = {}
 
+            # Create selected nodes with appropriate identifying key
             next_idx = 1 + len(self.state.nodes_accumulated or [])
-            for lbl, names in selected.items():
+            for lbl in ["ReliefType", "Forum"]:
+                names = selected.get(lbl) or []
                 for nm in names:
                     key = "name"
                     try:
                         props_meta = (self.state.props_meta_by_label or {}).get(lbl, {})
                         if "name" in props_meta:
                             key = "name"
+                        elif lbl == "ReliefType" and "type" in props_meta:
+                            key = "type"
                         elif "description" in props_meta:
                             key = "description"
                         elif "text" in props_meta:
@@ -975,83 +748,663 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                     next_idx += 1
                     (self.state.nodes_accumulated or []).append(node)
 
-            # Now assign relationships restricted to those to/from non-creatable labels
-            restricted_set: set[str] = set([l for l in restricted_labels if isinstance(l, str)])
-            involved_labels: set[str] = set()
-            label_defs: List[Dict[str, Any]] = []
-            for ldef in labels_src:
-                if not isinstance(ldef, dict):
-                    continue
-                lbl = ldef.get("label")
-                if not isinstance(lbl, str):
-                    continue
-                rels_involving: Dict[str, str] = {}
-                for rk, rv in (ldef.get("relationships") or {}).items():
-                    if isinstance(rk, str) and isinstance(rv, str) and (lbl in restricted_set or rv in restricted_set):
-                        rels_involving[rk] = rv
-                        involved_labels.add(lbl)
-                        involved_labels.add(rv)
-                if rels_involving:
-                    new_def = dict(ldef)
-                    new_def["relationships"] = rels_involving
-                    label_defs.append(new_def)
-            pruned_defs: List[Dict[str, Any]] = []
-            for d in label_defs:
-                if d.get("label") in involved_labels:
-                    pruned_defs.append(d)
-            spec_text_phase4 = render_spec_text({"labels": pruned_defs})
+            # Ensure edges for Phase 5 relationships
+            try:
+                temp_id_to_label: Dict[str, str] = {}
+                for n in (self.state.nodes_accumulated or []):
+                    if isinstance(n, dict) and isinstance(n.get("temp_id"), str) and isinstance(n.get("label"), str):
+                        temp_id_to_label[n.get("temp_id")] = n.get("label")
 
-            nodes = self.state.nodes_accumulated or []
-            crew_rel = _CaseCrew(
+                def find_first_temp_id(label: str) -> Optional[str]:
+                    for n in (self.state.nodes_accumulated or []):
+                        if isinstance(n, dict) and n.get("label") == label and isinstance(n.get("temp_id"), str):
+                            return n.get("temp_id")
+                    return None
+
+                def edge_exists(src_label: str, rel_label: str, tgt_label: str) -> bool:
+                    for e in (self.state.edges_accumulated or []):
+                        if not isinstance(e, dict):
+                            continue
+                        fr = e.get("from")
+                        to = e.get("to")
+                        if not (isinstance(fr, str) and isinstance(to, str)):
+                            continue
+                        if temp_id_to_label.get(fr) == src_label and temp_id_to_label.get(to) == tgt_label and e.get("label") == rel_label:
+                            return True
+                    return False
+
+                r_id = find_first_temp_id("Ruling")
+                rt_id = find_first_temp_id("ReliefType")
+                p_id = find_first_temp_id("Proceeding")
+                f_id = find_first_temp_id("Forum")
+
+                # Use relationships agent to generate RESULTS_IN and HEARD_IN edges with properties per schema
+                try:
+                    labels_src = (self.state.schema_spec or {}).get("labels", []) if isinstance(self.state.schema_spec, dict) else []
+                    # Keep only mappings involving Ruling->RESULTS_IN->ReliefType and Proceeding->HEARD_IN->Forum
+                    pruned_defs: List[Dict[str, Any]] = []
+                    for ldef in labels_src:
+                        if not isinstance(ldef, dict):
+                            continue
+                        lbl = ldef.get("label")
+                        if lbl not in {"Ruling", "Proceeding", "ReliefType", "Forum"}:
+                            continue
+                        rels_obj: Dict[str, Any] = {}
+                        for rk, rv in (ldef.get("relationships") or {}).items():
+                            if lbl == "Ruling" and rk == "RESULTS_IN":
+                                rels_obj[rk] = rv
+                            if lbl == "Proceeding" and rk == "HEARD_IN":
+                                rels_obj[rk] = rv
+                        new_def = dict(ldef)
+                        new_def["relationships"] = rels_obj
+                        pruned_defs.append(new_def)
+                    spec_text_rel = render_spec_text({"labels": pruned_defs})
+
+                    # Embed context so the agent can set required edge property values
+                    context_block = json.dumps({
+                        "RULING_JSON": ruling_props,
+                        "CASE_TEXT": self.state.document_text or ""
+                    }, ensure_ascii=False)
+
+                    crew_rel = _CaseCrew(
+                        self.state.file_path,
+                        self.state.filename,
+                        self.state.case_id,
+                        tools=[],
+                        replacements={
+                            "SCHEMA_SPEC_TEXT": spec_text_rel + "\n\nCONTEXT:\n" + context_block,
+                            "NODES_JSON": json.dumps({"nodes": [n for n in (self.state.nodes_accumulated or []) if isinstance(n, dict) and n.get("label") in {"Ruling", "ReliefType", "Proceeding", "Forum"}]}, ensure_ascii=False),
+                        },
+                    )
+                    task_rel = crew_rel.phase3_relationships_task()
+                    single_crew_rel = Crew(
+                        agents=[crew_rel.phase3_relationships_agent()],
+                        tasks=[task_rel],
+                        process=Process.sequential,
+                    )
+                    result_rel = single_crew_rel.kickoff()
+                    edges_new: List[Dict[str, Any]] = []
+                    try:
+                        text = str(result_rel)
+                        data = json.loads(text) if isinstance(result_rel, str) else (result_rel if isinstance(result_rel, dict) else json.loads(str(result_rel)))
+                        eg = data.get("edges") if isinstance(data, dict) else None
+                        if isinstance(eg, list):
+                            for e in eg:
+                                if not isinstance(e, dict):
+                                    continue
+                                if not isinstance(e.get("from"), str) or not isinstance(e.get("to"), str) or not isinstance(e.get("label"), str):
+                                    continue
+                                if e.get("properties") is not None and not isinstance(e.get("properties"), dict):
+                                    continue
+                                # Coerce relationship properties via Pydantic when available
+                                props = e.get("properties") or {}
+                                try:
+                                    temp_id_to_label = {n.get("temp_id"): n.get("label") for n in (self.state.nodes_accumulated or []) if isinstance(n, dict)}
+                                    src_label = temp_id_to_label.get(e.get("from"))
+                                    rel_label = e.get("label")
+                                    key = (str(src_label), str(rel_label))
+                                    rel_models = self.state.rel_prop_models_by_key or {}
+                                    model = rel_models.get(key)  # type: ignore[index]
+                                    if model is not None and isinstance(props, dict):
+                                        inst = model(**props)
+                                        props = inst.model_dump(exclude_none=True)
+                                except Exception:
+                                    pass
+                                edges_new.append({
+                                    "from": e.get("from"),
+                                    "to": e.get("to"),
+                                    "label": e.get("label"),
+                                    "properties": props or {},
+                                })
+                    except Exception:
+                        edges_new = []
+                    temp_ids = {n.get("temp_id") for n in (self.state.nodes_accumulated or []) if isinstance(n, dict)}
+                    edges_new = [e for e in edges_new if e.get("from") in temp_ids and e.get("to") in temp_ids]
+                    existing = {(e.get("from"), e.get("to"), e.get("label")) for e in (self.state.edges_accumulated or []) if isinstance(e, dict)}
+                    for e in edges_new:
+                        key = (e.get("from"), e.get("to"), e.get("label"))
+                        if key not in existing:
+                            (self.state.edges_accumulated or []).append(e)
+                            existing.add(key)
+                except Exception:
+                    pass
+
+                # Programmatically fetch Jurisdiction for selected Forum
+                try:
+                    if f_id:
+                        forum_nodes = [n for n in (self.state.nodes_accumulated or []) if isinstance(n, dict) and n.get("temp_id") == f_id]
+                        forum_name = None
+                        if forum_nodes:
+                            props = forum_nodes[0].get("properties") or {}
+                            forum_name = props.get("name") or props.get("text") or props.get("description")
+                        if isinstance(forum_name, str) and forum_name.strip():
+                            query = "MATCH (f:Forum {name: $name})-[:PART_OF]->(j:Jurisdiction) RETURN properties(j) AS props LIMIT 1"
+                            rows = neo4j_client.execute_query(query, params={"name": forum_name})
+                            if rows:
+                                j_props = rows[0].get("props") if isinstance(rows[0], dict) else None
+                                if isinstance(j_props, dict):
+                                    j_node_id = find_first_temp_id("Jurisdiction")
+                                    if not j_node_id:
+                                        j_node_id = f"n{next_idx}"
+                                        next_idx += 1
+                                        (self.state.nodes_accumulated or []).append({"temp_id": j_node_id, "label": "Jurisdiction", "properties": j_props})
+                                    # Forum -> PART_OF -> Jurisdiction
+                                    if not edge_exists("Forum", "PART_OF", "Jurisdiction"):
+                                        (self.state.edges_accumulated or []).append({"from": f_id, "to": j_node_id, "label": "PART_OF", "properties": {}})
+                                    # Case -> IN -> Jurisdiction
+                                    c_id = find_first_temp_id("Case")
+                                    if c_id and not edge_exists("Case", "IN", "Jurisdiction"):
+                                        (self.state.edges_accumulated or []).append({"from": c_id, "to": j_node_id, "label": "IN", "properties": {}})
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+            logger.info("Phase 5: selection and relationships completed")
+            return {"status": "phase5_done"}
+        except Exception as e:
+            logger.warning(f"Phase 5: selection/relationship assignment failed: {e}")
+            return {"status": "phase5_skipped"}
+
+    @listen(phase5_select_and_link)
+    def phase6_assign_laws(self, _: Dict[str, Any]) -> Dict[str, Any]:
+        # Phase 6: for each Argument, select or create Law(s) with dedup and add Argument->Law edges
+        logger.info("Phase 6: assigning Laws to Arguments with catalog dedup")
+        try:
+            from .crews.case_crew.case_crew import CaseCrew as _CaseCrew
+            # Collect Arguments
+            arguments = [
+                {"temp_id": n.get("temp_id"), "properties": n.get("properties") or {}}
+                for n in (self.state.nodes_accumulated or [])
+                if isinstance(n, dict) and n.get("label") == "Argument" and isinstance(n.get("temp_id"), str)
+            ]
+            if not arguments:
+                logger.info("Phase 6: no Argument nodes present; skipping law assignment")
+                return {"status": "phase6_skipped"}
+
+            # Build Law catalog using schema-defined properties (no hardcoding)
+            catalogs: Dict[str, List[Dict[str, Any]]] = {"Law": []}
+            try:
+                rows = (self.state.existing_catalog_by_label or {}).get("Law") or []
+                entries: List[Dict[str, Any]] = []
+                # Derive allowed properties for Law from schema meta
+                law_props_meta = (self.state.props_meta_by_label or {}).get("Law") or {}
+                allowed_keys = [k for k in law_props_meta.keys() if isinstance(k, str)]
+                for r in rows:
+                    if not isinstance(r, dict):
+                        continue
+                    entry: Dict[str, Any] = {}
+                    for k in allowed_keys:
+                        if r.get(k) is not None:
+                            v = r.get(k)
+                            try:
+                                entry[k] = v if isinstance(v, (int, float, bool)) else str(v)
+                            except Exception:
+                                entry[k] = str(v)
+                    if entry:
+                        entries.append(entry)
+                catalogs["Law"] = entries
+            except Exception:
+                catalogs = {"Law": []}
+
+            # Law schema spec text for validation context
+            labels_src = (self.state.schema_spec or {}).get("labels", []) if isinstance(self.state.schema_spec, dict) else []
+            law_def = next((ld for ld in labels_src if isinstance(ld, dict) and ld.get("label") == "Law"), None)
+            law_spec_text = render_spec_text({"labels": [law_def]}) if isinstance(law_def, dict) else ""
+
+            crew = _CaseCrew(
                 self.state.file_path,
                 self.state.filename,
                 self.state.case_id,
                 tools=[],
                 replacements={
-                    "SCHEMA_SPEC_TEXT": spec_text_phase4,
-                    "NODES_JSON": json.dumps({"nodes": nodes}, ensure_ascii=False),
-                    "REL_REQUIREMENTS_JSON": json.dumps({"requirements": requirements_phase4}, ensure_ascii=False),
+                    "ARGUMENTS_JSON": json.dumps({"arguments": arguments}, ensure_ascii=False),
+                    "CATALOGS_JSON": json.dumps(catalogs, ensure_ascii=False),
+                    "SCHEMA_SPEC_TEXT": law_spec_text,
                 },
             )
-            task_rel = crew_rel.relationships_task_phase3()
-            single_crew_rel = Crew(
-                agents=[crew_rel.relationships_agent_phase3()],
-                tasks=[task_rel],
+            task = crew.phase6_law_task()
+            single_crew = Crew(
+                agents=[crew.phase6_law_agent()],
+                tasks=[task],
                 process=Process.sequential,
             )
-            result_rel = single_crew_rel.kickoff()
-            edges_new: List[Dict[str, Any]] = []
-            try:
-                text = str(result_rel)
-                data = json.loads(text) if isinstance(result_rel, str) else (result_rel if isinstance(result_rel, dict) else json.loads(str(result_rel)))
-                eg = data.get("edges") if isinstance(data, dict) else None
-                if isinstance(eg, list):
-                    for e in eg:
-                        if not isinstance(e, dict):
-                            continue
-                        if not isinstance(e.get("from"), str) or not isinstance(e.get("to"), str) or not isinstance(e.get("label"), str):
-                            continue
-                        if e.get("properties") is not None and not isinstance(e.get("properties"), dict):
-                            continue
-                        edges_new.append({
-                            "from": e.get("from"),
-                            "to": e.get("to"),
-                            "label": e.get("label"),
-                            "properties": e.get("properties") or {},
-                        })
-            except Exception:
-                edges_new = []
-            temp_ids = {n.get("temp_id") for n in (self.state.nodes_accumulated or []) if isinstance(n, dict)}
-            edges_new = [e for e in edges_new if e.get("from") in temp_ids and e.get("to") in temp_ids]
-            self.state.edges_accumulated = (self.state.edges_accumulated or []) + edges_new
-            logger.info(f"Phase 4: agent added {len(edges_new)} edges involving catalog nodes")
-            return {"status": "existing_and_edges_assigned"}
-        except Exception:
-            logger.warning("Phase 4: existing-only selection/relationship assignment skipped due to error; continuing")
-            return {"status": "existing_assign_skipped"}
+            result = single_crew.kickoff()
 
-    @listen(select_existing_and_assign_relationships)
-    def validate_and_repair(self, _: Dict[str, Any]) -> Dict[str, Any]:
+            # Parse output
+            try:
+                data = json.loads(str(result)) if not isinstance(result, dict) else result
+            except Exception:
+                data = {}
+            laws_list = data.get("laws") if isinstance(data, dict) else None
+            arg_map_list = data.get("argument_to_law") if isinstance(data, dict) else None
+            if not isinstance(laws_list, list):
+                laws_list = []
+            if not isinstance(arg_map_list, list):
+                arg_map_list = []
+
+            # Validate/dedup laws and add nodes
+            law_model = (self.state.models_by_label or {}).get("Law")
+            existing_signatures: set[str] = set()
+            # signature uses citation primarily, fallback to name
+            for n in (self.state.nodes_accumulated or []):
+                if isinstance(n, dict) and n.get("label") == "Law":
+                    props = n.get("properties") or {}
+                    sig = (props.get("citation") or props.get("name") or "").strip()
+                    if sig:
+                        existing_signatures.add(sig)
+
+            created_ids_by_index: Dict[int, str] = {}
+            next_idx = 1 + len(self.state.nodes_accumulated or [])
+            for idx, lprops in enumerate(laws_list):
+                if not isinstance(lprops, dict):
+                    continue
+                # clean/validate
+                try:
+                    if law_model is not None:
+                        inst = law_model(**lprops)
+                        clean_props = inst.model_dump(exclude_none=True)
+                    else:
+                        clean_props = {k: v for k, v in lprops.items() if isinstance(k, str)}
+                except Exception:
+                    clean_props = {k: v for k, v in lprops.items() if isinstance(k, str)}
+
+                sig = (clean_props.get("citation") or clean_props.get("name") or "").strip()
+                if sig and sig in existing_signatures:
+                    # skip creating duplicate node; find existing id if any
+                    temp_id = None
+                    for n in (self.state.nodes_accumulated or []):
+                        if isinstance(n, dict) and n.get("label") == "Law":
+                            props = n.get("properties") or {}
+                            s = (props.get("citation") or props.get("name") or "").strip()
+                            if s == sig and isinstance(n.get("temp_id"), str):
+                                temp_id = n.get("temp_id")
+                                break
+                    if isinstance(temp_id, str):
+                        created_ids_by_index[idx] = temp_id
+                        continue
+                # Create new Law node
+                temp_id = f"n{next_idx}"
+                next_idx += 1
+                (self.state.nodes_accumulated or []).append({"temp_id": temp_id, "label": "Law", "properties": clean_props})
+                created_ids_by_index[idx] = temp_id
+                if sig:
+                    existing_signatures.add(sig)
+
+            # Create Argument -> Law edges (RELIES_ON)
+            existing_edges = {(e.get("from"), e.get("to"), e.get("label")) for e in (self.state.edges_accumulated or []) if isinstance(e, dict)}
+            for m in arg_map_list:
+                if not isinstance(m, dict):
+                    continue
+                a_id = m.get("argument_temp_id")
+                l_index = m.get("law_index")
+                if not (isinstance(a_id, str) and isinstance(l_index, int)):
+                    continue
+                l_id = created_ids_by_index.get(l_index)
+                if not isinstance(l_id, str):
+                    continue
+                key = (a_id, l_id, "RELIES_ON")
+                if key not in existing_edges:
+                    (self.state.edges_accumulated or []).append({"from": a_id, "to": l_id, "label": "RELIES_ON", "properties": {}})
+                    existing_edges.add(key)
+
+            logger.info("Phase 6: law assignment completed")
+            return {"status": "phase6_done"}
+        except Exception as e:
+            logger.warning(f"Phase 6: law assignment failed: {e}")
+            return {"status": "phase6_skipped"}
+
+    @listen(phase6_assign_laws)
+    def phase7_assign_issue_related(self, _: Dict[str, Any]) -> Dict[str, Any]:
+        # Phase 7: per Issue, select/generate Doctrine, Policy, FactPattern with dedup and create edges
+        logger.info("Phase 7: assigning Doctrine/Policy/FactPattern per Issue with catalog dedup")
+        try:
+            from .crews.case_crew.case_crew import CaseCrew as _CaseCrew
+            issues = [
+                {"temp_id": n.get("temp_id"), "properties": n.get("properties") or {}}
+                for n in (self.state.nodes_accumulated or [])
+                if isinstance(n, dict) and n.get("label") == "Issue" and isinstance(n.get("temp_id"), str)
+            ]
+            if not issues:
+                logger.info("Phase 7: no Issue nodes present; skipping")
+                return {"status": "phase7_skipped"}
+
+            # Build catalogs using schema-defined properties
+            catalogs: Dict[str, List[Dict[str, Any]]] = {"Doctrine": [], "Policy": [], "FactPattern": []}
+            try:
+                for lbl in list(catalogs.keys()):
+                    rows = (self.state.existing_catalog_by_label or {}).get(lbl) or []
+                    entries: List[Dict[str, Any]] = []
+                    props_meta = (self.state.props_meta_by_label or {}).get(lbl) or {}
+                    allowed_keys = [k for k in props_meta.keys() if isinstance(k, str)]
+                    for r in rows:
+                        if not isinstance(r, dict):
+                            continue
+                        entry: Dict[str, Any] = {}
+                        for k in allowed_keys:
+                            if r.get(k) is not None:
+                                v = r.get(k)
+                                try:
+                                    entry[k] = v if isinstance(v, (int, float, bool)) else str(v)
+                                except Exception:
+                                    entry[k] = str(v)
+                        if entry:
+                            entries.append(entry)
+                    catalogs[lbl] = entries
+            except Exception:
+                pass
+
+            # Build schema spec snippets
+            labels_src = (self.state.schema_spec or {}).get("labels", []) if isinstance(self.state.schema_spec, dict) else []
+            def get_def(lbl: str) -> Dict[str, Any] | None:
+                return next((ld for ld in labels_src if isinstance(ld, dict) and ld.get("label") == lbl), None)
+            spec_text = render_spec_text({"labels": [d for d in [get_def("Doctrine"), get_def("Policy"), get_def("FactPattern")] if d]})
+
+            crew = _CaseCrew(
+                self.state.file_path,
+                self.state.filename,
+                self.state.case_id,
+                tools=[],
+                replacements={
+                    "ISSUES_JSON": json.dumps({"issues": issues}, ensure_ascii=False),
+                    "CATALOGS_JSON": json.dumps(catalogs, ensure_ascii=False),
+                    "SCHEMA_SPEC_TEXT": spec_text,
+                },
+            )
+            task = crew.phase7_issue_related_task()
+            single_crew = Crew(
+                agents=[crew.phase7_issue_related_agent()],
+                tasks=[task],
+                process=Process.sequential,
+            )
+            result = single_crew.kickoff()
+
+            # Parse
+            try:
+                data = json.loads(str(result)) if not isinstance(result, dict) else result
+            except Exception:
+                data = {}
+            doctrines = data.get("doctrines") if isinstance(data, dict) else None
+            policies = data.get("policies") if isinstance(data, dict) else None
+            factpatterns = data.get("factpatterns") if isinstance(data, dict) else None
+            issue_map = data.get("issue_map") if isinstance(data, dict) else None
+            if not isinstance(doctrines, list):
+                doctrines = []
+            if not isinstance(policies, list):
+                policies = []
+            if not isinstance(factpatterns, list):
+                factpatterns = []
+            if not isinstance(issue_map, list):
+                issue_map = []
+
+            # Models
+            doctrine_model = (self.state.models_by_label or {}).get("Doctrine")
+            policy_model = (self.state.models_by_label or {}).get("Policy")
+            fp_model = (self.state.models_by_label or {}).get("FactPattern")
+
+            # Dedup signatures and add nodes
+            def build_signature(lbl: str, props: Dict[str, Any]) -> str:
+                if lbl == "Doctrine":
+                    return f"{props.get('name','')}//{props.get('category','')}".strip()
+                if lbl == "Policy":
+                    return f"{props.get('name','')}//{props.get('discipline','')}".strip()
+                return f"{props.get('name','')}".strip()
+
+            existing_sig: Dict[str, set[str]] = {"Doctrine": set(), "Policy": set(), "FactPattern": set()}
+            for n in (self.state.nodes_accumulated or []):
+                if not isinstance(n, dict):
+                    continue
+                lbl = n.get("label")
+                if lbl not in existing_sig:
+                    continue
+                props = n.get("properties") or {}
+                sig = build_signature(lbl, props)
+                if sig:
+                    existing_sig[lbl].add(sig)
+
+            created_ids: Dict[str, Dict[int, str]] = {"Doctrine": {}, "Policy": {}, "FactPattern": {}}
+            next_idx = 1 + len(self.state.nodes_accumulated or [])
+            def add_items(lbl: str, items: List[Dict[str, Any]], model) -> None:
+                nonlocal next_idx
+                for idx, iprops in enumerate(items):
+                    if not isinstance(iprops, dict):
+                        continue
+                    try:
+                        if model is not None:
+                            inst = model(**iprops)
+                            clean = inst.model_dump(exclude_none=True)
+                        else:
+                            clean = {k: v for k, v in iprops.items() if isinstance(k, str)}
+                    except Exception:
+                        clean = {k: v for k, v in iprops.items() if isinstance(k, str)}
+                    sig = build_signature(lbl, clean)
+                    if sig and sig in existing_sig[lbl]:
+                        # find existing temp_id
+                        tid = None
+                        for n in (self.state.nodes_accumulated or []):
+                            if isinstance(n, dict) and n.get("label") == lbl:
+                                props = n.get("properties") or {}
+                                if build_signature(lbl, props) == sig and isinstance(n.get("temp_id"), str):
+                                    tid = n.get("temp_id")
+                                    break
+                        if isinstance(tid, str):
+                            created_ids[lbl][idx] = tid
+                            continue
+                    tid = f"n{next_idx}"
+                    next_idx += 1
+                    (self.state.nodes_accumulated or []).append({"temp_id": tid, "label": lbl, "properties": clean})
+                    created_ids[lbl][idx] = tid
+                    if sig:
+                        existing_sig[lbl].add(sig)
+
+            add_items("Doctrine", doctrines, doctrine_model)
+            add_items("Policy", policies, policy_model)
+            add_items("FactPattern", factpatterns, fp_model)
+
+            # Create Issue relationships
+            existing_edges = {(e.get("from"), e.get("to"), e.get("label")) for e in (self.state.edges_accumulated or []) if isinstance(e, dict)}
+            for m in issue_map:
+                if not isinstance(m, dict):
+                    continue
+                i_id = m.get("issue_temp_id")
+                di = m.get("doctrine_index")
+                pi = m.get("policy_index")
+                fi = m.get("factpattern_index")
+                if isinstance(i_id, str) and isinstance(di, int):
+                    d_id = created_ids["Doctrine"].get(di)
+                    if isinstance(d_id, str):
+                        key = (i_id, d_id, "RELATES_TO")
+                        if key not in existing_edges:
+                            (self.state.edges_accumulated or []).append({"from": i_id, "to": d_id, "label": "RELATES_TO", "properties": {}})
+                            existing_edges.add(key)
+                if isinstance(i_id, str) and isinstance(pi, int):
+                    p_id = created_ids["Policy"].get(pi)
+                    if isinstance(p_id, str):
+                        key = (i_id, p_id, "RELATES_TO")
+                        if key not in existing_edges:
+                            (self.state.edges_accumulated or []).append({"from": i_id, "to": p_id, "label": "RELATES_TO", "properties": {}})
+                            existing_edges.add(key)
+                if isinstance(i_id, str) and isinstance(fi, int):
+                    f_id = created_ids["FactPattern"].get(fi)
+                    if isinstance(f_id, str):
+                        key = (i_id, f_id, "RELATES_TO")
+                        if key not in existing_edges:
+                            (self.state.edges_accumulated or []).append({"from": i_id, "to": f_id, "label": "RELATES_TO", "properties": {}})
+                            existing_edges.add(key)
+
+            logger.info("Phase 7: issue-related assignment completed")
+            return {"status": "phase7_done"}
+        except Exception as e:
+            logger.warning(f"Phase 7: issue-related assignment failed: {e}")
+            return {"status": "phase7_skipped"}
+
+    @listen(phase7_assign_issue_related)
+    def phase8_assign_parties(self, _: Dict[str, Any]) -> Dict[str, Any]:
+        # Phase 8: extract/dedupe Parties and create Case->Party INVOLVES edges with roles
+        logger.info("Phase 8: extracting and deduplicating Parties; assigning roles")
+        try:
+            from .crews.case_crew.case_crew import CaseCrew as _CaseCrew
+            # Party catalog can be extremely large; skip preloading and use fuzzy lookup per generated name
+            catalogs: Dict[str, List[Dict[str, Any]]] = {"Party": []}
+
+            crew = _CaseCrew(
+                self.state.file_path,
+                self.state.filename,
+                self.state.case_id,
+                tools=[],
+                replacements={
+                    "CASE_TEXT": self.state.document_text or "",
+                    "CATALOGS_JSON": json.dumps(catalogs, ensure_ascii=False),
+                },
+            )
+            task = crew.phase8_party_task()
+            single_crew = Crew(
+                agents=[crew.phase8_party_agent()],
+                tasks=[task],
+                process=Process.sequential,
+            )
+            result = single_crew.kickoff()
+
+            try:
+                data = json.loads(str(result)) if not isinstance(result, dict) else result
+            except Exception:
+                data = {}
+            parties = data.get("parties") if isinstance(data, dict) else None
+            roles = data.get("case_roles") if isinstance(data, dict) else None
+            if not isinstance(parties, list):
+                parties = []
+            if not isinstance(roles, list):
+                roles = []
+
+            # Validate/dedup parties by name
+            party_model = (self.state.models_by_label or {}).get("Party")
+            existing_names = set()
+            for n in (self.state.nodes_accumulated or []):
+                if isinstance(n, dict) and n.get("label") == "Party":
+                    nm = ((n.get("properties") or {}).get("name") or "").strip()
+                    if nm:
+                        existing_names.add(nm)
+
+            # Fuzzy standardization using Neo4j for each generated party name
+            def _standardize_party_name(raw_name: str) -> str:
+                try:
+                    q = (raw_name or "").strip()
+                    if not q:
+                        return raw_name
+                    query = (
+                        "MATCH (p:Party) "
+                        "WHERE p.name IS NOT NULL AND (toLower(p.name) CONTAINS toLower($q) OR toLower($q) CONTAINS toLower(p.name)) "
+                        "RETURN p.name AS name LIMIT 25"
+                    )
+                    rows = neo4j_client.execute_query(query, {"q": q})
+                    names: List[str] = []
+                    for r in rows:
+                        val = r.get("name")
+                        if isinstance(val, str) and val.strip():
+                            names.append(val.strip())
+                    if not names:
+                        return raw_name
+                    # Prefer case-insensitive exact
+                    for n in names:
+                        if n.lower() == q.lower():
+                            return n
+                    # Heuristic: choose the closest by containment and length similarity
+                    def score(candidate: str) -> float:
+                        c = candidate.lower()
+                        qq = q.lower()
+                        contain = (1.0 if (c in qq or qq in c) else 0.0)
+                        len_ratio = min(len(c), len(qq)) / max(len(c), len(qq)) if max(len(c), len(qq)) > 0 else 0.0
+                        return contain * 0.7 + len_ratio * 0.3
+                    best = max(names, key=score)
+                    if score(best) >= 0.75:
+                        return best
+                    return raw_name
+                except Exception:
+                    return raw_name
+
+            next_idx = 1 + len(self.state.nodes_accumulated or [])
+            created_ids_by_index: Dict[int, str] = {}
+            for idx, p in enumerate(parties):
+                if not isinstance(p, dict):
+                    continue
+                try:
+                    if party_model is not None:
+                        inst = party_model(**p)
+                        clean = inst.model_dump(exclude_none=True)
+                    else:
+                        clean = {k: v for k, v in p.items() if isinstance(k, str)}
+                except Exception:
+                    clean = {k: v for k, v in p.items() if isinstance(k, str)}
+                nm = (clean.get("name") or "").strip()
+                if nm:
+                    standardized = _standardize_party_name(nm)
+                    if standardized and standardized != nm:
+                        clean["name"] = standardized
+                        nm = standardized
+                if nm and nm in existing_names:
+                    # find existing temp_id
+                    tid = None
+                    for n in (self.state.nodes_accumulated or []):
+                        if isinstance(n, dict) and n.get("label") == "Party":
+                            if ((n.get("properties") or {}).get("name") or "").strip() == nm and isinstance(n.get("temp_id"), str):
+                                tid = n.get("temp_id")
+                                break
+                    if isinstance(tid, str):
+                        created_ids_by_index[idx] = tid
+                        continue
+                # create new party
+                tid = f"n{next_idx}"
+                next_idx += 1
+                (self.state.nodes_accumulated or []).append({"temp_id": tid, "label": "Party", "properties": clean})
+                created_ids_by_index[idx] = tid
+                if nm:
+                    existing_names.add(nm)
+
+            # Create Case -> Party INVOLVES edges with role property
+            try:
+                c_id = None
+                for n in (self.state.nodes_accumulated or []):
+                    if isinstance(n, dict) and n.get("label") == "Case" and isinstance(n.get("temp_id"), str):
+                        c_id = n.get("temp_id")
+                        break
+                if isinstance(c_id, str):
+                    existing_edges = {(e.get("from"), e.get("to"), e.get("label")) for e in (self.state.edges_accumulated or []) if isinstance(e, dict)}
+                    for r in roles:
+                        if not isinstance(r, dict):
+                            continue
+                        p_idx = r.get("party_index")
+                        role = r.get("role")
+                        if not (isinstance(p_idx, int) and isinstance(role, str)):
+                            continue
+                        p_id = created_ids_by_index.get(p_idx)
+                        if not isinstance(p_id, str):
+                            continue
+                        key = (c_id, p_id, "INVOLVES")
+                        if key not in existing_edges:
+                            props = {"role": role}
+                            (self.state.edges_accumulated or []).append({"from": c_id, "to": p_id, "label": "INVOLVES", "properties": props})
+                            existing_edges.add(key)
+
+                    # Also create Proceeding -> Party INVOLVES edges (no properties defined in schema)
+                    proceeding_ids = [n.get("temp_id") for n in (self.state.nodes_accumulated or []) if isinstance(n, dict) and n.get("label") == "Proceeding" and isinstance(n.get("temp_id"), str)]
+                    party_ids = {pid for pid in created_ids_by_index.values() if isinstance(pid, str)}
+                    for pr_id in proceeding_ids:
+                        for p_id in party_ids:
+                            key = (pr_id, p_id, "INVOLVES")
+                            if key not in existing_edges:
+                                (self.state.edges_accumulated or []).append({"from": pr_id, "to": p_id, "label": "INVOLVES", "properties": {}})
+                                existing_edges.add(key)
+            except Exception:
+                pass
+
+            logger.info("Phase 8: party extraction/dedup and relationships completed")
+            return {"status": "phase8_done"}
+        except Exception as e:
+            logger.warning(f"Phase 8: party extraction failed: {e}")
+            return {"status": "phase8_skipped"}
+
+    @listen(phase8_assign_parties)
+    def phase9_validate_and_repair(self, _: Dict[str, Any]) -> Dict[str, Any]:
         # Pull validators from state prepared in prepare_schema
         models_by_label = self.state.models_by_label
         rels_by_label = self.state.rels_by_label
