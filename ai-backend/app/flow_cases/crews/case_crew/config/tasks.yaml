@@ -1,89 +1,3 @@
-phase1_extract_task:
-  description: |
-    Read the document and extract only case-unique nodes per instructions.
-
-    Required tools (in any order):
-    - read_document_tool(file_path="{FILEPATH}", filename="{FILENAME}")
-
-    Steps:
-    1) Call read_document_tool and confirm ok:true.
-    2) Follow PHASE 1 instructions (allowed labels only, nodes only; include a Case node).
-    3) Populate CaseGraph fields with nodes only (edges empty).
-
-    Constraints:
-    - temp_id values must be unique within this payload (e.g., n1, n2, …).
-    - Keep properties flat and prefer values actually present in the text.
-    - Be conservative; avoid inventing facts not supported by the text.
-
-    PHASE 1 instructions:
-    You MUST output at least one node for EACH label present in the schema below.
-    You MUST include a 'Case' node.
-    Do not output any relationships in this phase.
-    Do not include any ai_ignore properties.
-
-    SCHEMA SPEC:
-    {SCHEMA_SPEC_TEXT}
-  expected_output: "A CaseGraph with nodes for case-unique labels and no edges."
-
-phase2_extract_task:
-  description: |
-    Read the document and create non-unique but creatable nodes comprehensively.
-
-    Required tools (in any order):
-    - read_document_tool(file_path="{FILEPATH}", filename="{FILENAME}")
-
-    Steps:
-    1) Call read_document_tool and confirm ok:true.
-    2) Consider the already generated nodes and the relationship requirements provided below.
-    3) Generate all required non-case-unique, creatable nodes so that for every generated node, if the schema has a relationship to a non-case-unique label, at least one such target node is generated (more if appropriate).
-    4) Populate CaseGraph fields with nodes only (edges empty).
-
-    Constraints:
-    - temp_id values must be unique within this payload (e.g., n1, n2, …).
-    - Keep properties flat and prefer values actually present in the text.
-    - Be conservative; avoid inventing facts not supported by the text.
-    
-    PHASE 2 instructions:
-    You MUST output nodes for labels present in the schema below, if evidence exists in the text.
-    Do not output any relationships in this phase.
-    Do not include any ai_ignore properties.
-
-    SCHEMA SPEC (only non-case-unique, creatable labels):
-    {SCHEMA_SPEC_TEXT}
-
-    ALREADY_GENERATED_NODES:
-    {GENERATED_NODES_JSON}
-
-    RELATIONSHIP_REQUIREMENTS:
-    {REL_REQUIREMENTS_JSON}
-  expected_output: "A CaseGraph with nodes for non-unique creatable labels and no edges."
-
-phase2b_dedup_task:
-  description: |
-    Deduplicate candidate nodes against provided existing catalogs.
-
-    Inputs will be provided in the instructions as JSON blocks:
-    - CANDIDATE_NODES_JSON: { "nodes": [ {temp_id, label, properties}, ... ] }
-    - CATALOGS: { label: [ { name?, description?, text?, citation? }, ... ] }
-
-    Steps:
-    1) Compare each candidate to the relevant label catalog.
-       - Use 'name' when the label has a name property.
-       - Otherwise use 'description' if present; otherwise 'text'.
-       - For 'law' label, 'citation' may be present for additional matching context.
-    2) If there is a likely match, standardize candidate to the exact catalog name.
-    3) Return JSON as { "nodes": [ ...updated candidates... ] }.
-
-    Constraints:
-    - Do not remove nodes. Only standardize names when confident; otherwise leave as-is.
-
-    CANDIDATE_NODES_JSON:
-    {CANDIDATE_NODES_JSON}
-
-    CATALOGS:
-    {CATALOGS_JSON}
-  expected_output: "A JSON object { nodes: [...] } with standardized node names."
-
 phase3_relationships_task:
   description: |
     Assign relationships between nodes following the provided schema mappings strictly.
@@ -109,38 +23,12 @@ phase3_relationships_task:
     {NODES_JSON}
   expected_output: "A JSON object { edges: [...] } with valid edges."
 
-phase4_select_existing_task:
-  description: |
-    Select existing (non-creatable) nodes for the case from provided catalogs.
-
-    Inputs will be provided in the instructions as JSON blocks:
-    - CASE_TEXT: raw case text
-    - CATALOGS: { label: [ { name?, description?, text?, citation? }, ... ] }
-    - RELATIONSHIP_REQUIREMENTS: { "requirements": [ {from, label, to}, ... ] }
-
-    Steps:
-    1) Use the case text to decide which existing entities apply for each label. Ensure that for each requirement that targets a non-creatable label, at least one catalog entry for that target label is selected when relevant to the case.
-    2) Return JSON as { "selected": { label: [values...] } } where each value is:
-       - 'name' when the label has a name property;
-       - otherwise 'description' if present; otherwise 'text'.
-
-    Constraints:
-    - Only return names present in the catalogs.
-
-    CASE_TEXT:
-    {CASE_TEXT}
-
-    CATALOGS:
-    {CATALOGS_JSON}
-
-    RELATIONSHIP_REQUIREMENTS:
-    {REL_REQUIREMENTS_JSON}
-  expected_output: "A JSON object { selected: { label: [names...] } }."
-
 
 phase5_select_existing_task:
   description: |
     Phase 5 selection for ReliefType and Forum from provided catalogs using Ruling properties and case text. Do not select Jurisdiction; it will be added programmatically from the selected Forum.
+
+    CRITICAL: Base your selections ONLY on the provided CASE_TEXT and RULING_JSON. Do not use general knowledge or external information. Select only what is explicitly or implicitly supported by the text.
 
     Inputs will be provided in the instructions as JSON blocks:
     - RULING_JSON: { ...properties... } (the single generated Ruling node's properties)
@@ -156,8 +44,8 @@ phase5_select_existing_task:
        - otherwise 'description' if present; otherwise 'text'.
 
     Constraints:
-    - Only return names present in the catalogs.
-    - Do not invent new values.
+    - Only return names present in the catalogs and supported by the case text.
+    - Do not invent new values or use general knowledge.
 
     RULING_JSON:
     {RULING_JSON}
@@ -174,14 +62,16 @@ phase6_law_task:
   description: |
     Phase 6: For each provided Argument, select or create at least one Law.
 
+    CRITICAL: Base your analysis ONLY on the Arguments extracted from the case text. The argument properties themselves come from the case text. Do not use general legal knowledge to add laws not referenced in those arguments. Only identify laws that are explicitly or implicitly referenced in the argument text.
+
     Inputs provided in instructions as JSON blocks:
     - ARGUMENTS_JSON: { "arguments": [ { temp_id, properties }, ... ] }
     - CATALOGS: { "Law": [ { name, text, type, citation }, ... ] }
     - SCHEMA_SPEC: schema for Law properties for validation context
 
     Steps:
-    1) For each argument, decide the governing Law(s). Prefer matching entries in the Law catalog by citation or name.
-    2) When no clear match exists, propose a new Law consistent with schema.
+    1) For each argument, decide the governing Law(s) based on what's in the argument text. Prefer matching entries in the Law catalog by citation or name.
+    2) When no clear match exists, propose a new Law consistent with schema, but only if the law is referenced in the argument.
     3) Return JSON as {
        "laws": [ { properties }, ... ],
        "argument_to_law": [ { "argument_temp_id": "nX", "law_index": <index in laws array> }, ... ]
@@ -190,6 +80,7 @@ phase6_law_task:
     Constraints:
     - Do not output duplicate Law entries; deduplicate by citation/name.
     - Properties must comply with schema types and required fields.
+    - Only include laws that are referenced in the argument text, not from general legal knowledge.
 
     ARGUMENTS_JSON:
     {ARGUMENTS_JSON}
@@ -206,6 +97,8 @@ phase7_issue_related_task:
   description: |
     Phase 7: For each Issue, select or create one Doctrine, one Policy, and one FactPattern.
 
+    CRITICAL: Base your analysis ONLY on the Issues extracted from the case text. The issue properties themselves come from the case text. Only identify doctrines, policies, and fact patterns that are explicitly or implicitly referenced in the issue text or case context. Do not use general legal knowledge to add concepts not grounded in the case.
+
     Inputs provided in instructions as JSON blocks:
     - ISSUES_JSON: { "issues": [ { temp_id, properties }, ... ] }
     - CATALOGS: {
@@ -216,8 +109,8 @@ phase7_issue_related_task:
     - SCHEMA_SPEC: schema snippets for Doctrine, Policy, FactPattern properties
 
     Steps:
-    1) For each issue, decide one Doctrine, one Policy, and one FactPattern.
-       Prefer catalog matches by name/description; otherwise propose new entries consistent with schema.
+    1) For each issue, decide one Doctrine, one Policy, and one FactPattern based on what's in the issue text.
+       Prefer catalog matches by name/description; otherwise propose new entries consistent with schema, but only if grounded in the case.
     2) Return JSON as {
        "doctrines": [ { properties }, ... ],
        "policies": [ { properties }, ... ],
@@ -228,6 +121,7 @@ phase7_issue_related_task:
     Constraints:
     - Deduplicate outputs by name (and category/discipline where applicable).
     - Properties must comply with schema types and required fields.
+    - Only include concepts that are referenced in the issue text, not from general legal knowledge.
 
     ISSUES_JSON:
     {ISSUES_JSON}
@@ -244,12 +138,14 @@ phase8_party_task:
   description: |
     Phase 8: Identify Parties from case text and deduplicate against existing Party catalog; output roles for Case relationships.
 
+    CRITICAL: Extract parties ONLY from the provided CASE_TEXT. Do not use general knowledge or external information. Only include parties that are explicitly mentioned in the case text with their roles as stated in the text.
+
     Inputs provided in instructions as JSON blocks:
     - CASE_TEXT: raw case text
     - CATALOGS: { "Party": [ { name, type }, ... ] }
 
     Steps:
-    1) Extract all parties involved in the case with best-guess role and type.
+    1) Extract all parties involved in the case with best-guess role and type based on the case text only.
     2) For each extracted party name, fuzzy match against the Party catalog; if match is strong, standardize to catalog name.
     3) Return JSON as {
        "parties": [ { name, type }, ... ],
@@ -259,6 +155,7 @@ phase8_party_task:
     Constraints:
     - Only standardize to catalog entries; do not invent catalog names.
     - Prefer high-precision matches; if uncertain, keep extracted name.
+    - Extract ONLY parties mentioned in the case text, not from general knowledge.
 
     CASE_TEXT:
     {CASE_TEXT}

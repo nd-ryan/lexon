@@ -17,10 +17,10 @@ except Exception:  # pragma: no cover
     pdfplumber = None  # type: ignore
 
 
-@tool("read_document_tool")
-def read_document_tool(file_path: str, filename: str) -> Dict[str, Any]:
+def read_document(file_path: str, filename: str) -> Dict[str, Any]:
     """
-    Read a local document and return its text and basic metadata.
+    Plain function to read a local document and return its text and basic metadata.
+    Safe to call directly from code.
 
     Returns:
       { ok: bool, text?: str, meta?: {...}, error?: str }
@@ -68,8 +68,17 @@ def read_document_tool(file_path: str, filename: str) -> Dict[str, Any]:
             }
         }
     except Exception as e:
-        logger.exception("read_document_tool failed")
+        logger.exception("read_document failed")
         return {"ok": False, "error": str(e)}
+
+
+@tool("read_document_tool")
+def read_document_tool(file_path: str, filename: str) -> Dict[str, Any]:
+    """
+    CrewAI tool wrapper for reading documents.
+    Delegates to read_document() function.
+    """
+    return read_document(file_path, filename)
 
 
 def fetch_neo4j_schema() -> Dict[str, Any]:

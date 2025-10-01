@@ -1,9 +1,9 @@
 from crewai.flow.flow import Flow, listen, start
 from crewai import Crew, Process
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, create_model
 from typing import Dict, Any, List, Optional
 from .crews.case_crew.case_crew import CaseCrew
-from .tools.io_tools import read_document_tool, fetch_neo4j_schema
+from .tools.io_tools import read_document, fetch_neo4j_schema
 from app.lib.schema_runtime import prune_ui_schema_for_llm, build_property_models, validate_case_graph, render_spec_text, build_relationship_property_models
 from app.models.case_graph import CaseGraph
 from app.lib.logging_config import setup_logger
@@ -41,6 +41,11 @@ class CaseExtractState(BaseModel):
 class CaseExtractFlow(Flow[CaseExtractState]):
     @start()
     def phase0_kickoff(self) -> Dict[str, Any]:
+        # Log initial kickoff context
+        try:
+            logger.info(f"Kickoff: file_path='{self.state.file_path}', filename='{self.state.filename}', case_id='{self.state.case_id}'")
+        except Exception:
+            pass
         return {
             "file_path": self.state.file_path,
             "filename": self.state.filename,
@@ -81,12 +86,24 @@ class CaseExtractFlow(Flow[CaseExtractState]):
 
         # Read document once and store text
         try:
-            doc_res = read_document_tool(self.state.file_path, self.state.filename)
-            if isinstance(doc_res, dict) and doc_res.get("ok"):
-                self.state.document_text = str(doc_res.get("text") or "")
+            logger.info(f"Reading document: file_path='{self.state.file_path}', filename='{self.state.filename}'")
+            doc_res = read_document(self.state.file_path, self.state.filename)
+            logger.info(f"Document read result type: {type(doc_res)}, is_dict: {isinstance(doc_res, dict)}")
+            if isinstance(doc_res, dict):
+                logger.info(f"Document read result keys: {list(doc_res.keys())}, ok={doc_res.get('ok')}")
+                if doc_res.get("ok"):
+                    text_content = doc_res.get("text") or ""
+                    self.state.document_text = str(text_content)
+                    logger.info(f"Document text loaded successfully, length: {len(self.state.document_text)}")
+                else:
+                    error_msg = doc_res.get("error", "Unknown error")
+                    logger.error(f"Document read failed: {error_msg}")
+                    self.state.document_text = ""
             else:
+                logger.warning(f"Document read returned unexpected type: {type(doc_res)}")
                 self.state.document_text = ""
-        except Exception:
+        except Exception as e:
+            logger.error(f"Exception while reading document: {e}", exc_info=True)
             self.state.document_text = ""
 
         # Build existing catalogs for:
@@ -146,7 +163,13 @@ class CaseExtractFlow(Flow[CaseExtractState]):
         # Init accumulators
         self.state.nodes_accumulated = []
         self.state.edges_accumulated = []
-        logger.info("prepare_schema: completed")
+        try:
+            labels_cnt = len((self.state.schema_spec or {}).get("labels", [])) if isinstance(self.state.schema_spec, dict) else 0
+            doc_len = len(self.state.document_text or "")
+            catalog_cnt = len(self.state.existing_catalog_by_label or {}) if isinstance(self.state.existing_catalog_by_label, dict) else 0
+            logger.info(f"prepare_schema: completed (labels={labels_cnt}, doc_len={doc_len}, catalogs={catalog_cnt})")
+        except Exception:
+            logger.info("prepare_schema: completed")
         print("[prepare_schema] completed")
         return ctx
 
@@ -192,14 +215,27 @@ class CaseExtractFlow(Flow[CaseExtractState]):
         next_idx = 1 + len(self.state.nodes_accumulated or [])
         produced_labels: List[str] = []
 
+        # Log target labels for Phase 1
+        try:
+            preview = ", ".join(ordered_labels[:10]) + ("..." if len(ordered_labels) > 10 else "")
+            logger.info(f"Phase 1: target labels count={len(ordered_labels)} [{preview}]")
+        except Exception:
+            pass
+
+        nodes_before_p1 = len(self.state.nodes_accumulated or [])
+
         for label in ordered_labels:
             try:
                 # Build single-label spec for properties rendering
                 ldef = def_map.get(label)
                 if not isinstance(ldef, dict):
                     continue
-                single_spec = {"labels": [ldef]}
-                props_spec_text = render_spec_text(single_spec)
+                # Build properties-only spec for Phase 1 (omit relationships)
+                ldef_props_only = {
+                    "label": ldef.get("label"),
+                    "properties": ldef.get("properties", []),
+                }
+                props_spec_text = render_spec_text({"labels": [ldef_props_only]})
 
                 # Pull instructions/examples from flow_map entry
                 fm_entry = None
@@ -217,40 +253,120 @@ class CaseExtractFlow(Flow[CaseExtractState]):
 
                 # Build per-node task description (common guidance + label-specific)
                 task_desc = (
-                    "Read the document text (provided below) and extract ONLY the properties for the label '" + label + "'.\n\n"
-                    "CASE_TEXT:\n" + (self.state.document_text or "") + "\n\n"
+                    "Analyse the document text (provided below) and identify data as described by the instructions below.\n\n"
+                    "CRITICAL: Extract information ONLY from the provided case text. Do not use general knowledge, external information, or assumptions. If information is not explicitly or implicitly present in the text, do not include it.\n\n"
+                    "INSTRUCTIONS:\n" + instructions + "\n\n"
+                    "Be comprehensive; do not miss any information that IS in the text."
+                    "Return ONLY JSON matching the schema properties for this node type:\n\n"
+                    "SCHEMA PROPERTIES for '" + label + "':\n" + props_spec_text + "\n\n"                   
                     "Guidance:\n"
-                    "- Return ONLY JSON matching the schema properties for this label.\n"
-                    "- Include all required properties; optional when supported by the text.\n"
+                    "- Extract ONLY from the case text provided below - do not rely on general knowledge.\n"
+                    "- Include all properties you can confidently extract from the text.\n"
+                    "- For required properties, provide your best inference from the text if not explicitly stated.\n"
                     "- Enforce types, enums, and date formats exactly as specified.\n"
-                    "- Prefer facts present in the text; avoid invention.\n"
-                    "- Do not output temp_id, label, or relationships here. Properties only.\n\n"
-                    "INSTRUCTIONS (from flow map):\n" + instructions + "\n\n"
+                    "- Use facts present in the text; do not invent or assume.\n"
+                    "- Do not output temp_id or label here. Properties only.\n\n"
                     "EXAMPLES (illustrative, may be partial):\n" + examples_json + "\n\n"
-                    "SCHEMA PROPERTIES for '" + label + "':\n" + props_spec_text + "\n\n"
+                    "CASE_TEXT:\n" + (self.state.document_text or "") + "\n\n"
+                    
                 )
 
-                # Create and run the task
-                dyn_task = crew.phase1_extract_single_node_task(task_desc, props_model)  # type: ignore[arg-type]
-                single_crew = Crew(
-                    agents=[crew.phase1_extract_agent()],
-                    tasks=[dyn_task],
-                    process=Process.sequential,
-                )
-                result = single_crew.kickoff()
+                # Decide single vs multi extraction
+                allow_multiple = label in {"Argument", "Issue"}
+                if allow_multiple:
+                    multi_desc = (
+                        "Analyse the document text (provided below) and extract ALL distinct nodes for the label '" + label + "'.\n\n"
+                        "CRITICAL: Extract information ONLY from the provided case text. Do not use general knowledge, external information, or assumptions. If information is not explicitly or implicitly present in the text, do not include it.\n\n"
+                        "INSTRUCTIONS:\n" + instructions + "\n\n"
+                        "Return a JSON object: { items: [ { ...properties... }, ... ] }.\n"
+                        "Each item must match the schema properties exactly; include required properties; enforce types/enums/dates.\n"
+                        "Extract ONLY from the case text provided - do not rely on general knowledge or make assumptions.\n"
+                        "Do not include temp_id or label in the items.\n\n"
+                        "SCHEMA PROPERTIES for '" + label + "':\n" + props_spec_text + "\n\n"
+                        "EXAMPLES (illustrative, may be partial):\n" + examples_json + "\n\n"
+                        "CASE_TEXT:\n" + (self.state.document_text or "") + "\n\n"
+                    )
+                    
+                    try:
+                        # Create a dynamic Pydantic model for the list of items
+                        list_model = create_model(
+                            f'{label}List',
+                            items=(List[props_model], ...)  # type: ignore
+                        )
+                        logger.info(f"Phase 1: extracting multi-node label '{label}'")
+                        dyn_task = crew.phase1_extract_multi_nodes_task(multi_desc, list_model)
+                        single_crew = Crew(
+                            agents=[crew.phase1_extract_agent()],
+                            tasks=[dyn_task],
+                            process=Process.sequential,
+                        )
+                        result = single_crew.kickoff()
+                        logger.info(f"Phase 1: '{label}' extraction completed, result type: {type(result).__name__}")
+                        
+                        # CrewAI returns a CrewOutput that wraps the Pydantic result
+                        # Access the actual Pydantic model via .pydantic or .raw
+                        actual_result = None
+                        if hasattr(result, 'pydantic'):
+                            actual_result = result.pydantic
+                        elif hasattr(result, 'raw'):
+                            actual_result = result.raw
+                        else:
+                            actual_result = result
+                        
+                        logger.info(f"Phase 1: '{label}' unwrapped result type: {type(actual_result).__name__}, has items: {hasattr(actual_result, 'items')}")
+                        
+                        # Now extract items from the Pydantic model
+                        if not hasattr(actual_result, 'items'):
+                            logger.warning(f"Phase 1: '{label}' result has no 'items' attribute. Result: {actual_result}")
+                            items = []
+                        elif not isinstance(actual_result.items, list):
+                            logger.warning(f"Phase 1: '{label}' result.items is not a list. Type: {type(actual_result.items).__name__}")
+                            items = []
+                        else:
+                            items = actual_result.items
+                            logger.info(f"Phase 1: '{label}' returned {len(items)} items")
 
-                # Parse pydantic output into properties dict
-                if hasattr(result, 'model_dump'):
-                    properties = result.model_dump(exclude_none=True)  # type: ignore[attr-defined]
-                elif isinstance(result, dict):
-                    properties = result
+                        nodes_added_count = 0
+                        for idx, item in enumerate(items):
+                            try:
+                                # Each item is already a validated Pydantic model instance
+                                properties = item.model_dump(exclude_none=True)
+                                node = {"temp_id": f"n{next_idx}", "label": label, "properties": properties}
+                                next_idx += 1
+                                self.state.nodes_accumulated.append(node)
+                                nodes_added_count += 1
+                            except Exception as e:
+                                logger.warning(f"Phase 1: Failed to process item {idx} for '{label}': {e}")
+                                continue
+                        
+                        logger.info(f"Phase 1: '{label}' added {nodes_added_count} nodes")
+                        if nodes_added_count > 0:
+                            produced_labels.append(label)
+                    except Exception as e:
+                        logger.error(f"Phase 1: Multi-node extraction for '{label}' failed with error: {e}", exc_info=True)
+                        continue
                 else:
-                    properties = json.loads(str(result))
+                    # Single-instance labels
+                    dyn_task = crew.phase1_extract_single_node_task(task_desc, props_model)  # type: ignore[arg-type]
+                    single_crew = Crew(
+                        agents=[crew.phase1_extract_agent()],
+                        tasks=[dyn_task],
+                        process=Process.sequential,
+                    )
+                    result = single_crew.kickoff()
 
-                node = {"temp_id": f"n{next_idx}", "label": label, "properties": properties}
-                next_idx += 1
-                (self.state.nodes_accumulated or []).append(node)
-                produced_labels.append(label)
+                    # Parse pydantic output into properties dict
+                    if hasattr(result, 'model_dump'):
+                        properties = result.model_dump(exclude_none=True)  # type: ignore[attr-defined]
+                    elif isinstance(result, dict):
+                        properties = result
+                    else:
+                        properties = json.loads(str(result))
+
+                    node = {"temp_id": f"n{next_idx}", "label": label, "properties": properties}
+                    next_idx += 1
+                    self.state.nodes_accumulated.append(node)
+                    produced_labels.append(label)
             except Exception as e:
                 logger.warning(f"Phase 1 per-node task for {label} failed: {e}")
                 continue
@@ -259,11 +375,17 @@ class CaseExtractFlow(Flow[CaseExtractState]):
         if "Case" in ordered_labels and ("Case" not in produced_labels):
             try:
                 node = {"temp_id": f"n{next_idx}", "label": "Case", "properties": {"name": self.state.filename}}
-                (self.state.nodes_accumulated or []).append(node)
+                self.state.nodes_accumulated.append(node)
             except Exception:
                 pass
 
-        logger.info("Phase 1 (per-node): completed")
+        try:
+            nodes_after_p1 = len(self.state.nodes_accumulated or [])
+            added = max(0, nodes_after_p1 - nodes_before_p1)
+            preview_prod = ", ".join(produced_labels[:10]) + ("..." if len(produced_labels) > 10 else "")
+            logger.info(f"Phase 1: completed (nodes_added={added}, produced_labels={len(produced_labels)} [{preview_prod}])")
+        except Exception:
+            logger.info("Phase 1 (per-node): completed")
         return {"status": "phase1_done"}
 
     @listen(phase1_extract_case_unique)
@@ -293,7 +415,10 @@ class CaseExtractFlow(Flow[CaseExtractState]):
         fact_model = (self.state.models_by_label or {}).get("Fact")
         labels_src = (self.state.schema_spec or {}).get("labels", []) if isinstance(self.state.schema_spec, dict) else []
         fact_def = next((ld for ld in labels_src if isinstance(ld, dict) and ld.get("label") == "Fact"), None)
-        spec_text = render_spec_text({"labels": [fact_def]}) if isinstance(fact_def, dict) else ""
+        spec_text = ""
+        if isinstance(fact_def, dict):
+            fact_def_props_only = {"label": fact_def.get("label"), "properties": fact_def.get("properties", [])}
+            spec_text = render_spec_text({"labels": [fact_def_props_only]})
 
         # Collect existing Arguments from Phase 1 output
         arguments: List[Dict[str, Any]] = [n for n in (self.state.nodes_accumulated or []) if isinstance(n, dict) and n.get("label") == "Argument"]
@@ -311,22 +436,38 @@ class CaseExtractFlow(Flow[CaseExtractState]):
         )
 
         next_idx = 1 + len(self.state.nodes_accumulated or [])
+        facts_created_total = 0
+        
+        # Build cumulative catalog of facts as we process arguments
+        # AI will check this catalog and decide whether to reuse or create new
+        facts_catalog: List[Dict[str, Any]] = []
 
-        for arg_node in arguments:
+        for arg_idx, arg_node in enumerate(arguments):
             try:
                 arg_props = arg_node.get("properties") or {}
                 arg_ctx_json = json.dumps(arg_props, ensure_ascii=False)
+                
+                # Prepare facts catalog for AI to check for reuse
+                facts_catalog_json = json.dumps(facts_catalog, ensure_ascii=False)
+                
                 # Compose task: generate multiple facts supporting this argument
                 desc = (
                     "Read the document text (provided below) and extract Facts that support the following Argument.\n\n"
+                    "CRITICAL: Extract information ONLY from the provided case text. Do not use general knowledge, external information, or assumptions. If information is not explicitly or implicitly present in the text, do not include it.\n\n"
                     "CASE_TEXT:\n" + (self.state.document_text or "") + "\n\n"
                     "Argument (properties JSON):\n" + arg_ctx_json + "\n\n"
+                    "EXISTING FACTS (already created):\n" + facts_catalog_json + "\n\n"
                     "Guidance:\n"
-                    "- Produce a JSON object: { facts: [ { ...Fact properties... }, ... ] }.\n"
-                    "- Each fact MUST be relevant to this argument. There can be many facts per argument.\n"
+                    "- BE COMPREHENSIVE: Extract ALL facts from the case text that support this argument.\n"
+                    "- Check the existing facts catalog above. ONLY reuse a fact if it is EXACTLY the same fact (same content, same alleged_by, same proved status).\n"
+                    "- When in doubt, create a new fact rather than reusing. It's better to have distinct facts than to conflate different facts.\n"
+                    "- Produce a JSON object: { facts: [ { temp_id?: string, fact?: <Fact properties> }, ... ] }.\n"
+                    "- For REUSING an IDENTICAL existing fact: include only 'temp_id' (omit 'fact').\n"
+                    "- For CREATING a new fact: include only 'fact' with properties (omit 'temp_id').\n"
+                    "- Each fact MUST be relevant to this argument and MUST be present in the case text above.\n"
+                    "- There can be many facts per argument - extract all of them from the text.\n"
                     "- Match the Fact schema properties exactly (include all required; optional when supported).\n"
-                    "- Enforce types/enums/date formats; prefer text-grounded content; avoid invention.\n"
-                    "- Do not include temp_id, label, or relationships in the output.\n\n"
+                    "- Enforce types/enums/date formats; extract from text only; avoid invention.\n\n"
                     "INSTRUCTIONS (from flow map):\n" + instructions + "\n\n"
                     "EXAMPLES (illustrative, may be partial):\n" + examples_json + "\n\n"
                     "SCHEMA PROPERTIES for 'Fact':\n" + spec_text + "\n\n"
@@ -349,35 +490,67 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 if not isinstance(facts_list, list):
                     facts_list = []
 
-                # Create a Fact node and RELIES_ON edge for each extracted fact
-                for fprops in facts_list:
-                    if not isinstance(fprops, dict):
+                # Process each fact - AI decides to reuse or create
+                for item in facts_list:
+                    if not isinstance(item, dict):
                         continue
+                    
+                    reuse_temp_id = item.get("temp_id")
+                    fact_props = item.get("fact")
+                    
+                    # Determine if reusing or creating
+                    if isinstance(reuse_temp_id, str) and reuse_temp_id:
+                        # AI chose to reuse existing fact
+                        fact_temp_id = reuse_temp_id
+                        logger.debug(f"Phase 2: AI reusing existing Fact ({fact_temp_id})")
+                    elif isinstance(fact_props, dict):
+                        # AI creating new fact
+                        try:
+                            if fact_model is not None:
+                                inst = fact_model(**fact_props)
+                                clean_props = inst.model_dump(exclude_none=True)
+                            else:
+                                clean_props = fact_props
+                        except Exception:
+                            clean_props = {k: v for k, v in fact_props.items() if isinstance(k, str)}
+
+                        fact_temp_id = f"n{next_idx}"
+                        next_idx += 1
+                        node = {"temp_id": fact_temp_id, "label": "Fact", "properties": clean_props}
+                        self.state.nodes_accumulated.append(node)
+                        facts_created_total += 1
+                        
+                        # Add to catalog for future iterations (minimal info: text summary)
+                        fact_text = clean_props.get("text", "")
+                        fact_text_short = fact_text[:150] if isinstance(fact_text, str) else ""
+                        facts_catalog.append({
+                            "temp_id": fact_temp_id,
+                            "text": fact_text_short,
+                            "alleged_by": clean_props.get("alleged_by"),
+                            "proved": clean_props.get("proved")
+                        })
+                    else:
+                        logger.warning(f"Phase 2: Fact item has neither temp_id nor fact: {item}")
+                        continue
+                    
+                    # Create edge: Argument RELIES_ON_FACT Fact
                     try:
-                        if fact_model is not None:
-                            inst = fact_model(**fprops)
-                            clean_props = inst.model_dump(exclude_none=True)
-                        else:
-                            clean_props = fprops
-                    except Exception:
-                        clean_props = {k: v for k, v in fprops.items() if isinstance(k, str)}
-                fact_temp_id = f"n{next_idx}"
-                next_idx += 1
-                node = {"temp_id": fact_temp_id, "label": "Fact", "properties": clean_props}
-                (self.state.nodes_accumulated or []).append(node)
-                # Create edge: Argument RELIES_ON Fact
-                try:
-                    arg_temp_id = arg_node.get("temp_id")
-                    if isinstance(arg_temp_id, str) and arg_temp_id:
-                        edge = {"from": arg_temp_id, "to": fact_temp_id, "label": "RELIES_ON", "properties": {}}
-                        (self.state.edges_accumulated or []).append(edge)
-                except Exception:
-                    pass
+                        arg_temp_id = arg_node.get("temp_id")
+                        if isinstance(arg_temp_id, str) and arg_temp_id:
+                            edge = {"from": arg_temp_id, "to": fact_temp_id, "label": "RELIES_ON_FACT", "properties": {}}
+                            self.state.edges_accumulated.append(edge)
+                    except Exception as e:
+                        logger.warning(f"Phase 2: Failed to create edge for fact: {e}")
             except Exception as e:
                 logger.warning(f"Phase 2: fact generation for an Argument failed: {e}")
                 continue
 
-        logger.info("Phase 2: Facts generation completed")
+        try:
+            unique_facts = len(facts_catalog)
+            logger.info(f"Phase 2: completed (facts_created={facts_created_total})")
+            logger.info(f"Phase 2: total unique facts - {unique_facts} (AI-driven deduplication)")
+        except Exception:
+            logger.info("Phase 2: Facts generation completed")
         return {"status": "facts_phase2_done"}
 
     @listen(phase2_extract_facts)
@@ -406,8 +579,16 @@ class CaseExtractFlow(Flow[CaseExtractState]):
 
         witness_model = (self.state.models_by_label or {}).get("Witness")
         evidence_model = (self.state.models_by_label or {}).get("Evidence")
-        witness_spec = render_spec_text({"labels": [def_map.get("Witness")]}) if def_map.get("Witness") else ""
-        evidence_spec = render_spec_text({"labels": [def_map.get("Evidence")]}) if def_map.get("Evidence") else ""
+        witness_spec = ""
+        if def_map.get("Witness"):
+            wdef = def_map.get("Witness")
+            wdef_props_only = {"label": wdef.get("label"), "properties": wdef.get("properties", [])}
+            witness_spec = render_spec_text({"labels": [wdef_props_only]})
+        evidence_spec = ""
+        if def_map.get("Evidence"):
+            edef = def_map.get("Evidence")
+            edef_props_only = {"label": edef.get("label"), "properties": edef.get("properties", [])}
+            evidence_spec = render_spec_text({"labels": [edef_props_only]})
 
         fm_w = get_fm_entry("Witness")
         fm_e = get_fm_entry("Evidence")
@@ -430,21 +611,42 @@ class CaseExtractFlow(Flow[CaseExtractState]):
         )
 
         next_idx = 1 + len(self.state.nodes_accumulated or [])
+        witnesses_created = 0
+        evidence_created = 0
+        edges_created = 0
+        
+        # Build cumulative catalog of witnesses and evidence as we process facts
+        # AI will check these catalogs and decide whether to reuse or create new
+        witnesses_catalog: List[Dict[str, Any]] = []
+        evidence_catalog: List[Dict[str, Any]] = []
 
-        for fact in facts:
+        for fact_idx, fact in enumerate(facts):
             try:
                 fact_props = fact.get("properties") or {}
                 fact_ctx_json = json.dumps(fact_props, ensure_ascii=False)
+                
+                # Prepare catalogs for AI to check for reuse
+                witnesses_catalog_json = json.dumps(witnesses_catalog, ensure_ascii=False)
+                evidence_catalog_json = json.dumps(evidence_catalog, ensure_ascii=False)
+                
                 desc = (
                     "Read the document text (provided below) and generate Witnesses and Evidence that support the following Fact.\n\n"
+                    "CRITICAL: Extract information ONLY from the provided case text. Do not use general knowledge, external information, or assumptions. If information is not explicitly or implicitly present in the text, do not include it.\n\n"
                     "CASE_TEXT:\n" + (self.state.document_text or "") + "\n\n"
                     "Fact (properties JSON):\n" + fact_ctx_json + "\n\n"
+                    "EXISTING WITNESSES (already created):\n" + witnesses_catalog_json + "\n\n"
+                    "EXISTING EVIDENCE (already created):\n" + evidence_catalog_json + "\n\n"
                     "Guidance:\n"
-                    "- Return JSON as { witnesses: [ { node: <Witness properties>, support_strength: number } ], evidence: [ { node: <Evidence properties>, support_strength: number } ] }.\n"
-                    "- Each item MUST support this Fact.\n"
-                    "- support_strength: 0 to 100 (percent).\n"
-                    "- Match schema properties strictly; include required; enforce types/enums/dates; avoid invention.\n"
-                    "- Do not include temp_id, label, or relationships inside node objects.\n\n"
+                    "- BE COMPREHENSIVE: Extract ALL witnesses and evidence from the case text that support this fact.\n"
+                    "- Check the existing catalogs above. ONLY reuse if it is EXACTLY the same witness/evidence (same person/document).\n"
+                    "- When in doubt, create new rather than reusing. It's better to have distinct items than to conflate different ones.\n"
+                    "- Return JSON as { witnesses: [ { temp_id?: string, node?: <Witness properties>, support_strength: number } ], evidence: [ { temp_id?: string, node?: <Evidence properties>, support_strength: number } ] }.\n"
+                    "- For REUSING an IDENTICAL existing item: include only 'temp_id' and 'support_strength' (omit 'node').\n"
+                    "- For CREATING a new item: include only 'node' and 'support_strength' (omit 'temp_id').\n"
+                    "- Each item MUST support this Fact and MUST be mentioned in the case text above.\n"
+                    "- support_strength: 0 to 100 (percent) based on what's in the text.\n"
+                    "- Match schema properties strictly; include required; enforce types/enums/dates.\n"
+                    "- Extract from text only; do not invent or assume details not in the text.\n\n"
                     "WITNESS INSTRUCTIONS:\n" + instructions_w + "\n\n"
                     "WITNESS EXAMPLES (partial):\n" + examples_w + "\n\n"
                     "SCHEMA PROPERTIES for 'Witness':\n" + witness_spec + "\n\n"
@@ -474,66 +676,126 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 if not isinstance(evidences, list):
                     evidences = []
 
-                # Witnesses
+                # Witnesses - AI decides to reuse or create
                 for item in witnesses:
                     try:
-                        node_props = item.get("node") if isinstance(item, dict) else None
-                        strength = item.get("support_strength") if isinstance(item, dict) else None
-                        if not isinstance(node_props, dict):
+                        if not isinstance(item, dict):
                             continue
-                        try:
-                            if witness_model is not None:
-                                inst = witness_model(**node_props)
-                                clean_props = inst.model_dump(exclude_none=True)
-                            else:
-                                clean_props = node_props
-                        except Exception:
-                            clean_props = {k: v for k, v in node_props.items() if isinstance(k, str)}
-                        wid = f"n{next_idx}"
-                        next_idx += 1
-                        wnode = {"temp_id": wid, "label": "Witness", "properties": clean_props}
-                        (self.state.nodes_accumulated or []).append(wnode)
+                        
+                        strength = item.get("support_strength")
+                        reuse_temp_id = item.get("temp_id")
+                        node_props = item.get("node")
+                        
+                        # Determine if reusing or creating
+                        if isinstance(reuse_temp_id, str) and reuse_temp_id:
+                            # AI chose to reuse existing witness
+                            wid = reuse_temp_id
+                            logger.debug(f"Phase 3: AI reusing existing Witness ({wid})")
+                        elif isinstance(node_props, dict):
+                            # AI creating new witness
+                            try:
+                                if witness_model is not None:
+                                    inst = witness_model(**node_props)
+                                    clean_props = inst.model_dump(exclude_none=True)
+                                else:
+                                    clean_props = node_props
+                            except Exception:
+                                clean_props = {k: v for k, v in node_props.items() if isinstance(k, str)}
+                            
+                            wid = f"n{next_idx}"
+                            next_idx += 1
+                            wnode = {"temp_id": wid, "label": "Witness", "properties": clean_props}
+                            self.state.nodes_accumulated.append(wnode)
+                            witnesses_created += 1
+                            
+                            # Add to catalog for future iterations (minimal info)
+                            witnesses_catalog.append({
+                                "temp_id": wid,
+                                "name": clean_props.get("name"),
+                                "type": clean_props.get("type")
+                            })
+                        else:
+                            logger.warning(f"Phase 3: Witness item has neither temp_id nor node: {item}")
+                            continue
+                        
+                        # Create edge to this fact
                         try:
                             s_val = float(strength) if isinstance(strength, (int, float)) or (isinstance(strength, str) and strength.strip()) else None
                         except Exception:
                             s_val = None
                         eprops = {"support_strength": s_val if s_val is not None else 0.0}
                         self.state.edges_accumulated.append({"from": fact.get("temp_id"), "to": wid, "label": "SUPPORTED_BY", "properties": eprops})
-                    except Exception:
+                        edges_created += 1
+                    except Exception as e:
+                        logger.warning(f"Phase 3: Failed to process witness: {e}")
                         continue
 
-                # Evidence
+                # Evidence - AI decides to reuse or create
                 for item in evidences:
                     try:
-                        node_props = item.get("node") if isinstance(item, dict) else None
-                        strength = item.get("support_strength") if isinstance(item, dict) else None
-                        if not isinstance(node_props, dict):
+                        if not isinstance(item, dict):
                             continue
-                        try:
-                            if evidence_model is not None:
-                                inst = evidence_model(**node_props)
-                                clean_props = inst.model_dump(exclude_none=True)
-                            else:
-                                clean_props = node_props
-                        except Exception:
-                            clean_props = {k: v for k, v in node_props.items() if isinstance(k, str)}
-                        eid = f"n{next_idx}"
-                        next_idx += 1
-                        enode = {"temp_id": eid, "label": "Evidence", "properties": clean_props}
-                        (self.state.nodes_accumulated or []).append(enode)
+                        
+                        strength = item.get("support_strength")
+                        reuse_temp_id = item.get("temp_id")
+                        node_props = item.get("node")
+                        
+                        # Determine if reusing or creating
+                        if isinstance(reuse_temp_id, str) and reuse_temp_id:
+                            # AI chose to reuse existing evidence
+                            eid = reuse_temp_id
+                            logger.debug(f"Phase 3: AI reusing existing Evidence ({eid})")
+                        elif isinstance(node_props, dict):
+                            # AI creating new evidence
+                            try:
+                                if evidence_model is not None:
+                                    inst = evidence_model(**node_props)
+                                    clean_props = inst.model_dump(exclude_none=True)
+                                else:
+                                    clean_props = node_props
+                            except Exception:
+                                clean_props = {k: v for k, v in node_props.items() if isinstance(k, str)}
+                            
+                            eid = f"n{next_idx}"
+                            next_idx += 1
+                            enode = {"temp_id": eid, "label": "Evidence", "properties": clean_props}
+                            self.state.nodes_accumulated.append(enode)
+                            evidence_created += 1
+                            
+                            # Add to catalog for future iterations (minimal info: type and first 100 chars of description)
+                            desc = clean_props.get("description", "")
+                            desc_short = desc[:100] if isinstance(desc, str) else ""
+                            evidence_catalog.append({
+                                "temp_id": eid,
+                                "type": clean_props.get("type"),
+                                "description": desc_short
+                            })
+                        else:
+                            logger.warning(f"Phase 3: Evidence item has neither temp_id nor node: {item}")
+                            continue
+                        
+                        # Create edge to this fact
                         try:
                             s_val = float(strength) if isinstance(strength, (int, float)) or (isinstance(strength, str) and strength.strip()) else None
                         except Exception:
                             s_val = None
                         eprops = {"support_strength": s_val if s_val is not None else 0.0}
                         self.state.edges_accumulated.append({"from": fact.get("temp_id"), "to": eid, "label": "SUPPORTED_BY", "properties": eprops})
-                    except Exception:
+                        edges_created += 1
+                    except Exception as e:
+                        logger.warning(f"Phase 3: Failed to process evidence: {e}")
                         continue
             except Exception as e:
                 logger.warning(f"Phase 3: supports generation for a Fact failed: {e}")
                 continue
 
-        logger.info("Phase 3: supports generation completed")
+        try:
+            unique_witnesses = len(witnesses_catalog)
+            unique_evidence = len(evidence_catalog)
+            logger.info(f"Phase 3: completed (witnesses_created={witnesses_created}, evidence_created={evidence_created}, edges_added={edges_created})")
+            logger.info(f"Phase 3: total unique items - {unique_witnesses} witnesses, {unique_evidence} evidence (AI-driven deduplication)")
+        except Exception:
+            logger.info("Phase 3: supports generation completed")
         return {"status": "supports_phase3_done"}
 
     @listen(phase3_extract_supports)
@@ -543,9 +805,24 @@ class CaseExtractFlow(Flow[CaseExtractState]):
         try:
             from .crews.case_crew.case_crew import CaseCrew as _CaseCrew
             all_nodes = self.state.nodes_accumulated or []
+            logger.info(f"Phase 4: processing {len(all_nodes)} total nodes")
+            
             # Build pruned schema spec: only case_unique labels and rels to case_unique targets
             # Prefer full schema to preserve relationship property schemas
-            labels_src = self.state.schema_full if isinstance(self.state.schema_full, list) else ((self.state.schema_spec or {}).get("labels", []) if isinstance(self.state.schema_spec, dict) else [])
+            raw_labels = self.state.schema_full
+            logger.info(f"Phase 4: schema_full type: {type(raw_labels)}, is_dict: {isinstance(raw_labels, dict)}, is_list: {isinstance(raw_labels, list)}")
+            
+            if isinstance(raw_labels, dict):
+                raw_labels = raw_labels.get("labels")
+                logger.info(f"Phase 4: extracted labels from dict, new type: {type(raw_labels)}")
+            
+            if isinstance(raw_labels, list):
+                labels_src = raw_labels
+                logger.info(f"Phase 4: using list of {len(labels_src)} label definitions")
+            else:
+                labels_src = (self.state.schema_spec or {}).get("labels", []) if isinstance(self.state.schema_spec, dict) else []
+                logger.info(f"Phase 4: fallback to schema_spec, got {len(labels_src)} label definitions")
+            
             case_unique_set: set[str] = set()
             for ldef in labels_src:
                 if not isinstance(ldef, dict):
@@ -574,22 +851,33 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 lbl = ldef.get("label")
                 if not isinstance(lbl, str) or lbl not in present_labels:
                     continue
-                pruned_rels: Dict[str, Any] = {}
-                for rk, rv in (ldef.get("relationships") or {}).items():
-                    if not isinstance(rk, str):
-                        continue
-                    if rk in {"RELIES_ON", "SUPPORTED_BY"}:  # already assigned earlier
-                        continue
-                    # rv can be a string target label or an object { target, properties }
-                    if isinstance(rv, dict):
-                        tgt = rv.get("target")
-                        if isinstance(tgt, str) and tgt in present_labels:
-                            pruned_rels[rk] = rv  # preserve properties schema
-                    elif isinstance(rv, str) and rv in present_labels:
-                        pruned_rels[rk] = rv
-                new_def = dict(ldef)
-                new_def["relationships"] = pruned_rels
-                keep_labels.append(new_def)
+                
+                try:
+                    pruned_rels: Dict[str, Any] = {}
+                    rels_raw = ldef.get("relationships")
+                    if not isinstance(rels_raw, dict):
+                        logger.warning(f"Phase 4: '{lbl}' relationships is not a dict: {type(rels_raw)}")
+                        rels_raw = {}
+                    
+                    for rk, rv in rels_raw.items():
+                        if not isinstance(rk, str):
+                            continue
+                        if rk in {"RELIES_ON_FACT", "RELIES_ON_LAW", "SUPPORTED_BY"}:  # already assigned earlier
+                            continue
+                        # rv can be a string target label or an object { target, properties }
+                        if isinstance(rv, dict):
+                            tgt = rv.get("target")
+                            if isinstance(tgt, str) and tgt in present_labels:
+                                pruned_rels[rk] = rv  # preserve properties schema
+                        elif isinstance(rv, str) and rv in present_labels:
+                            pruned_rels[rk] = rv
+                    
+                    new_def = dict(ldef)
+                    new_def["relationships"] = pruned_rels
+                    keep_labels.append(new_def)
+                except Exception as e:
+                    logger.error(f"Phase 4: Error processing relationships for '{lbl}': {e}", exc_info=True)
+                    continue
 
             spec_text = render_spec_text({"labels": keep_labels})
             crew = _CaseCrew(
@@ -623,7 +911,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                             continue
                         if e.get("properties") is not None and not isinstance(e.get("properties"), dict):
                             continue
-                        if e.get("label") in {"RELIES_ON", "SUPPORTED_BY"}:
+                        if e.get("label") in {"RELIES_ON_FACT", "RELIES_ON_LAW", "SUPPORTED_BY"}:
                             continue
                         # Coerce relationship properties via Pydantic when available
                         props = e.get("properties") or {}
@@ -653,7 +941,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             for e in edges_new:
                 key = (e.get("from"), e.get("to"), e.get("label"))
                 if key not in existing:
-                    (self.state.edges_accumulated or []).append(e)
+                    self.state.edges_accumulated.append(e)
                     existing.add(key)
 
             logger.info(f"Phase 4: agent produced {len(edges_new)} new edges among case-unique nodes")
@@ -681,9 +969,17 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                     if not isinstance(r, dict):
                         continue
                     entry: Dict[str, Any] = {}
+                    # Include schema-declared properties
                     for k in allowed_keys:
                         if r.get(k) is not None:
                             v = r.get(k)
+                            try:
+                                entry[k] = v if isinstance(v, (int, float, bool)) else str(v)
+                            except Exception:
+                                entry[k] = str(v)
+                    # Also include hidden identifier fields like *_id if present in Neo4j
+                    for k, v in r.items():
+                        if isinstance(k, str) and k.endswith("_id") and v is not None:
                             try:
                                 entry[k] = v if isinstance(v, (int, float, bool)) else str(v)
                             except Exception:
@@ -713,6 +1009,8 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 tasks=[task_sel],
                 process=Process.sequential,
             )
+            edges_before = len(self.state.edges_accumulated or [])
+            nodes_before = len(self.state.nodes_accumulated or [])
             result_sel = single_crew_sel.kickoff()
             selected: Dict[str, List[str]] = {}
             try:
@@ -726,27 +1024,36 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             except Exception:
                 selected = {}
 
-            # Create selected nodes with appropriate identifying key
+            # Create selected nodes using full catalog properties (non-hidden per schema) and preserve *_id
             next_idx = 1 + len(self.state.nodes_accumulated or [])
             for lbl in ["ReliefType", "Forum"]:
                 names = selected.get(lbl) or []
+                # Build index across all allowed keys
+                props_meta = (self.state.props_meta_by_label or {}).get(lbl, {})
+                allowed_keys = [k for k in (props_meta.keys() if isinstance(props_meta, dict) else []) if isinstance(k, str)]
+                catalog_rows = catalogs.get(lbl, [])
+                def find_catalog_match(value: str) -> Dict[str, Any] | None:
+                    for row in catalog_rows:
+                        if not isinstance(row, dict):
+                            continue
+                        for k in allowed_keys:
+                            rv = row.get(k)
+                            if isinstance(rv, (str, int, float)) and str(rv) == str(value):
+                                return row
+                    return None
                 for nm in names:
-                    key = "name"
-                    try:
-                        props_meta = (self.state.props_meta_by_label or {}).get(lbl, {})
-                        if "name" in props_meta:
-                            key = "name"
-                        elif lbl == "ReliefType" and "type" in props_meta:
-                            key = "type"
-                        elif "description" in props_meta:
-                            key = "description"
-                        elif "text" in props_meta:
-                            key = "text"
-                    except Exception:
-                        key = "name"
-                    node = {"temp_id": f"n{next_idx}", "label": lbl, "properties": {key: nm}}
+                    entry = find_catalog_match(nm) or {"name": nm}
+                    # Filter to allowed keys and include *_id
+                    props: Dict[str, Any] = {}
+                    for k in allowed_keys:
+                        if entry.get(k) is not None:
+                            props[k] = entry.get(k)
+                    for k, v in entry.items():
+                        if isinstance(k, str) and k.endswith("_id") and v is not None:
+                            props[k] = str(v) if not isinstance(v, (int, float, bool)) else v
+                    node = {"temp_id": f"n{next_idx}", "label": lbl, "properties": props}
                     next_idx += 1
-                    (self.state.nodes_accumulated or []).append(node)
+                    self.state.nodes_accumulated.append(node)
 
             # Ensure edges for Phase 5 relationships
             try:
@@ -864,7 +1171,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                     for e in edges_new:
                         key = (e.get("from"), e.get("to"), e.get("label"))
                         if key not in existing:
-                            (self.state.edges_accumulated or []).append(e)
+                            self.state.edges_accumulated.append(e)
                             existing.add(key)
                 except Exception:
                     pass
@@ -887,20 +1194,25 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                                     if not j_node_id:
                                         j_node_id = f"n{next_idx}"
                                         next_idx += 1
-                                        (self.state.nodes_accumulated or []).append({"temp_id": j_node_id, "label": "Jurisdiction", "properties": j_props})
+                                        self.state.nodes_accumulated.append({"temp_id": j_node_id, "label": "Jurisdiction", "properties": j_props})
                                     # Forum -> PART_OF -> Jurisdiction
                                     if not edge_exists("Forum", "PART_OF", "Jurisdiction"):
-                                        (self.state.edges_accumulated or []).append({"from": f_id, "to": j_node_id, "label": "PART_OF", "properties": {}})
+                                        self.state.edges_accumulated.append({"from": f_id, "to": j_node_id, "label": "PART_OF", "properties": {}})
                                     # Case -> IN -> Jurisdiction
                                     c_id = find_first_temp_id("Case")
                                     if c_id and not edge_exists("Case", "IN", "Jurisdiction"):
-                                        (self.state.edges_accumulated or []).append({"from": c_id, "to": j_node_id, "label": "IN", "properties": {}})
+                                        self.state.edges_accumulated.append({"from": c_id, "to": j_node_id, "label": "IN", "properties": {}})
                 except Exception:
                     pass
             except Exception:
                 pass
 
-            logger.info("Phase 5: selection and relationships completed")
+            try:
+                nodes_after = len(self.state.nodes_accumulated or [])
+                edges_after = len(self.state.edges_accumulated or [])
+                logger.info(f"Phase 5: completed (nodes_added={max(0, nodes_after - nodes_before)}, edges_added={max(0, edges_after - edges_before)})")
+            except Exception:
+                logger.info("Phase 5: selection and relationships completed")
             return {"status": "phase5_done"}
         except Exception as e:
             logger.warning(f"Phase 5: selection/relationship assignment failed: {e}")
@@ -941,6 +1253,13 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                                 entry[k] = v if isinstance(v, (int, float, bool)) else str(v)
                             except Exception:
                                 entry[k] = str(v)
+                    # Include *_id fields if present
+                    for k, v in r.items():
+                        if isinstance(k, str) and k.endswith("_id") and v is not None:
+                            try:
+                                entry[k] = v if isinstance(v, (int, float, bool)) else str(v)
+                            except Exception:
+                                entry[k] = str(v)
                     if entry:
                         entries.append(entry)
                 catalogs["Law"] = entries
@@ -950,7 +1269,10 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             # Law schema spec text for validation context
             labels_src = (self.state.schema_spec or {}).get("labels", []) if isinstance(self.state.schema_spec, dict) else []
             law_def = next((ld for ld in labels_src if isinstance(ld, dict) and ld.get("label") == "Law"), None)
-            law_spec_text = render_spec_text({"labels": [law_def]}) if isinstance(law_def, dict) else ""
+            law_spec_text = ""
+            if isinstance(law_def, dict):
+                law_def_props_only = {"label": law_def.get("label"), "properties": law_def.get("properties", [])}
+                law_spec_text = render_spec_text({"labels": [law_def_props_only]})
 
             crew = _CaseCrew(
                 self.state.file_path,
@@ -969,6 +1291,8 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 tasks=[task],
                 process=Process.sequential,
             )
+            edges_before = len(self.state.edges_accumulated or [])
+            nodes_before = len(self.state.nodes_accumulated or [])
             result = single_crew.kickoff()
 
             # Parse output
@@ -1026,12 +1350,12 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 # Create new Law node
                 temp_id = f"n{next_idx}"
                 next_idx += 1
-                (self.state.nodes_accumulated or []).append({"temp_id": temp_id, "label": "Law", "properties": clean_props})
+                self.state.nodes_accumulated.append({"temp_id": temp_id, "label": "Law", "properties": clean_props})
                 created_ids_by_index[idx] = temp_id
                 if sig:
                     existing_signatures.add(sig)
 
-            # Create Argument -> Law edges (RELIES_ON)
+            # Create Argument -> Law edges (RELIES_ON_LAW)
             existing_edges = {(e.get("from"), e.get("to"), e.get("label")) for e in (self.state.edges_accumulated or []) if isinstance(e, dict)}
             for m in arg_map_list:
                 if not isinstance(m, dict):
@@ -1043,12 +1367,17 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 l_id = created_ids_by_index.get(l_index)
                 if not isinstance(l_id, str):
                     continue
-                key = (a_id, l_id, "RELIES_ON")
+                key = (a_id, l_id, "RELIES_ON_LAW")
                 if key not in existing_edges:
-                    (self.state.edges_accumulated or []).append({"from": a_id, "to": l_id, "label": "RELIES_ON", "properties": {}})
+                    self.state.edges_accumulated.append({"from": a_id, "to": l_id, "label": "RELIES_ON_LAW", "properties": {}})
                     existing_edges.add(key)
 
-            logger.info("Phase 6: law assignment completed")
+            try:
+                nodes_after = len(self.state.nodes_accumulated or [])
+                edges_after = len(self.state.edges_accumulated or [])
+                logger.info(f"Phase 6: completed (nodes_added={max(0, nodes_after - nodes_before)}, edges_added={max(0, edges_after - edges_before)})")
+            except Exception:
+                logger.info("Phase 6: law assignment completed")
             return {"status": "phase6_done"}
         except Exception as e:
             logger.warning(f"Phase 6: law assignment failed: {e}")
@@ -1088,6 +1417,13 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                                     entry[k] = v if isinstance(v, (int, float, bool)) else str(v)
                                 except Exception:
                                     entry[k] = str(v)
+                        # Include *_id fields if present
+                        for k, v in r.items():
+                            if isinstance(k, str) and k.endswith("_id") and v is not None:
+                                try:
+                                    entry[k] = v if isinstance(v, (int, float, bool)) else str(v)
+                                except Exception:
+                                    entry[k] = str(v)
                         if entry:
                             entries.append(entry)
                     catalogs[lbl] = entries
@@ -1098,7 +1434,12 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             labels_src = (self.state.schema_spec or {}).get("labels", []) if isinstance(self.state.schema_spec, dict) else []
             def get_def(lbl: str) -> Dict[str, Any] | None:
                 return next((ld for ld in labels_src if isinstance(ld, dict) and ld.get("label") == lbl), None)
-            spec_text = render_spec_text({"labels": [d for d in [get_def("Doctrine"), get_def("Policy"), get_def("FactPattern")] if d]})
+            defs_props_only: List[Dict[str, Any]] = []
+            for lbl in ["Doctrine", "Policy", "FactPattern"]:
+                d = get_def(lbl)
+                if isinstance(d, dict):
+                    defs_props_only.append({"label": d.get("label"), "properties": d.get("properties", [])})
+            spec_text = render_spec_text({"labels": defs_props_only})
 
             crew = _CaseCrew(
                 self.state.file_path,
@@ -1117,6 +1458,8 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 tasks=[task],
                 process=Process.sequential,
             )
+            edges_before = len(self.state.edges_accumulated or [])
+            nodes_before = len(self.state.nodes_accumulated or [])
             result = single_crew.kickoff()
 
             # Parse
@@ -1192,7 +1535,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                             continue
                     tid = f"n{next_idx}"
                     next_idx += 1
-                    (self.state.nodes_accumulated or []).append({"temp_id": tid, "label": lbl, "properties": clean})
+                    self.state.nodes_accumulated.append({"temp_id": tid, "label": lbl, "properties": clean})
                     created_ids[lbl][idx] = tid
                     if sig:
                         existing_sig[lbl].add(sig)
@@ -1215,24 +1558,29 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                     if isinstance(d_id, str):
                         key = (i_id, d_id, "RELATES_TO")
                         if key not in existing_edges:
-                            (self.state.edges_accumulated or []).append({"from": i_id, "to": d_id, "label": "RELATES_TO", "properties": {}})
+                            self.state.edges_accumulated.append({"from": i_id, "to": d_id, "label": "RELATES_TO", "properties": {}})
                             existing_edges.add(key)
                 if isinstance(i_id, str) and isinstance(pi, int):
                     p_id = created_ids["Policy"].get(pi)
                     if isinstance(p_id, str):
                         key = (i_id, p_id, "RELATES_TO")
                         if key not in existing_edges:
-                            (self.state.edges_accumulated or []).append({"from": i_id, "to": p_id, "label": "RELATES_TO", "properties": {}})
+                            self.state.edges_accumulated.append({"from": i_id, "to": p_id, "label": "RELATES_TO", "properties": {}})
                             existing_edges.add(key)
                 if isinstance(i_id, str) and isinstance(fi, int):
                     f_id = created_ids["FactPattern"].get(fi)
                     if isinstance(f_id, str):
                         key = (i_id, f_id, "RELATES_TO")
                         if key not in existing_edges:
-                            (self.state.edges_accumulated or []).append({"from": i_id, "to": f_id, "label": "RELATES_TO", "properties": {}})
+                            self.state.edges_accumulated.append({"from": i_id, "to": f_id, "label": "RELATES_TO", "properties": {}})
                             existing_edges.add(key)
 
-            logger.info("Phase 7: issue-related assignment completed")
+            try:
+                nodes_after = len(self.state.nodes_accumulated or [])
+                edges_after = len(self.state.edges_accumulated or [])
+                logger.info(f"Phase 7: completed (nodes_added={max(0, nodes_after - nodes_before)}, edges_added={max(0, edges_after - edges_before)})")
+            except Exception:
+                logger.info("Phase 7: issue-related assignment completed")
             return {"status": "phase7_done"}
         except Exception as e:
             logger.warning(f"Phase 7: issue-related assignment failed: {e}")
@@ -1263,6 +1611,8 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 tasks=[task],
                 process=Process.sequential,
             )
+            edges_before = len(self.state.edges_accumulated or [])
+            nodes_before = len(self.state.nodes_accumulated or [])
             result = single_crew.kickoff()
 
             try:
@@ -1285,42 +1635,48 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                     if nm:
                         existing_names.add(nm)
 
-            # Fuzzy standardization using Neo4j for each generated party name
-            def _standardize_party_name(raw_name: str) -> str:
+            # Fuzzy lookup using Neo4j for each generated party name; returns (standardized_name, party_id or None)
+            def _lookup_existing_party(raw_name: str) -> tuple[str, Optional[str]]:
                 try:
                     q = (raw_name or "").strip()
                     if not q:
-                        return raw_name
+                        return raw_name, None
                     query = (
                         "MATCH (p:Party) "
                         "WHERE p.name IS NOT NULL AND (toLower(p.name) CONTAINS toLower($q) OR toLower($q) CONTAINS toLower(p.name)) "
-                        "RETURN p.name AS name LIMIT 25"
+                        "RETURN properties(p) AS props LIMIT 25"
                     )
                     rows = neo4j_client.execute_query(query, {"q": q})
-                    names: List[str] = []
+                    candidates: List[Dict[str, Any]] = []
                     for r in rows:
-                        val = r.get("name")
-                        if isinstance(val, str) and val.strip():
-                            names.append(val.strip())
-                    if not names:
-                        return raw_name
+                        props = r.get("props") if isinstance(r.get("props"), dict) else None
+                        if isinstance(props, dict):
+                            nm = props.get("name")
+                            if isinstance(nm, str) and nm.strip():
+                                candidates.append(props)
+                    if not candidates:
+                        return raw_name, None
                     # Prefer case-insensitive exact
-                    for n in names:
+                    for props in candidates:
+                        n = str(props.get("name") or "")
                         if n.lower() == q.lower():
-                            return n
+                            pid = props.get("party_id")
+                            return n, (str(pid) if isinstance(pid, (str, int)) else None)
                     # Heuristic: choose the closest by containment and length similarity
-                    def score(candidate: str) -> float:
-                        c = candidate.lower()
+                    def score(candidate_name: str) -> float:
+                        c = candidate_name.lower()
                         qq = q.lower()
                         contain = (1.0 if (c in qq or qq in c) else 0.0)
                         len_ratio = min(len(c), len(qq)) / max(len(c), len(qq)) if max(len(c), len(qq)) > 0 else 0.0
                         return contain * 0.7 + len_ratio * 0.3
-                    best = max(names, key=score)
-                    if score(best) >= 0.75:
-                        return best
-                    return raw_name
+                    best_props = max(candidates, key=lambda p: score(str(p.get("name") or "")))
+                    best_name = str(best_props.get("name") or "")
+                    if score(best_name) >= 0.75:
+                        pid = best_props.get("party_id")
+                        return best_name, (str(pid) if isinstance(pid, (str, int)) else None)
+                    return raw_name, None
                 except Exception:
-                    return raw_name
+                    return raw_name, None
 
             next_idx = 1 + len(self.state.nodes_accumulated or [])
             created_ids_by_index: Dict[int, str] = {}
@@ -1337,10 +1693,12 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                     clean = {k: v for k, v in p.items() if isinstance(k, str)}
                 nm = (clean.get("name") or "").strip()
                 if nm:
-                    standardized = _standardize_party_name(nm)
-                    if standardized and standardized != nm:
-                        clean["name"] = standardized
-                        nm = standardized
+                    standardized_name, matched_party_id = _lookup_existing_party(nm)
+                    if standardized_name and standardized_name != nm:
+                        clean["name"] = standardized_name
+                        nm = standardized_name
+                    if matched_party_id:
+                        clean["party_id"] = matched_party_id
                 if nm and nm in existing_names:
                     # find existing temp_id
                     tid = None
@@ -1382,7 +1740,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                         key = (c_id, p_id, "INVOLVES")
                         if key not in existing_edges:
                             props = {"role": role}
-                            (self.state.edges_accumulated or []).append({"from": c_id, "to": p_id, "label": "INVOLVES", "properties": props})
+                            self.state.edges_accumulated.append({"from": c_id, "to": p_id, "label": "INVOLVES", "properties": props})
                             existing_edges.add(key)
 
                     # Also create Proceeding -> Party INVOLVES edges (no properties defined in schema)
@@ -1392,12 +1750,17 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                         for p_id in party_ids:
                             key = (pr_id, p_id, "INVOLVES")
                             if key not in existing_edges:
-                                (self.state.edges_accumulated or []).append({"from": pr_id, "to": p_id, "label": "INVOLVES", "properties": {}})
+                                self.state.edges_accumulated.append({"from": pr_id, "to": p_id, "label": "INVOLVES", "properties": {}})
                                 existing_edges.add(key)
             except Exception:
                 pass
 
-            logger.info("Phase 8: party extraction/dedup and relationships completed")
+            try:
+                nodes_after = len(self.state.nodes_accumulated or [])
+                edges_after = len(self.state.edges_accumulated or [])
+                logger.info(f"Phase 8: completed (nodes_added={max(0, nodes_after - nodes_before)}, edges_added={max(0, edges_after - edges_before)})")
+            except Exception:
+                logger.info("Phase 8: party extraction/dedup and relationships completed")
             return {"status": "phase8_done"}
         except Exception as e:
             logger.warning(f"Phase 8: party extraction failed: {e}")
@@ -1430,7 +1793,10 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             existing_catalog_by_label=self.state.existing_catalog_by_label if isinstance(self.state.existing_catalog_by_label, dict) else None,
         )
         if not errors:
-            logger.info("Validation: passed with no errors")
+            try:
+                logger.info(f"Validation: passed (nodes={len(cleaned.get('nodes', []))}, edges={len(cleaned.get('edges', []))})")
+            except Exception:
+                logger.info("Validation: passed with no errors")
             return cleaned
 
         # One repair round
@@ -1477,7 +1843,10 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                     existing_catalog_by_label=self.state.existing_catalog_by_label if isinstance(self.state.existing_catalog_by_label, dict) else None,
                 )
                 if not repaired_errors:
-                    logger.info("Validation: repair succeeded")
+                    try:
+                        logger.info(f"Validation: repair succeeded (nodes={len(repaired_clean.get('nodes', []))}, edges={len(repaired_clean.get('edges', []))})")
+                    except Exception:
+                        logger.info("Validation: repair succeeded")
                     return repaired_clean
         except Exception:
             pass

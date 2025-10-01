@@ -361,7 +361,21 @@ def build_property_models(spec: Dict[str, Any]) -> Tuple[Dict[str, Type[BaseMode
             )
 
         models_by_label[label] = model
-        relationships_by_label[label] = label_def.get("relationships", {}) or {}
+        
+        # Extract relationship targets (handle both string and object formats)
+        rels_raw = label_def.get("relationships", {}) or {}
+        rels_mapped: Dict[str, str] = {}
+        for rel_label, rel_def in rels_raw.items():
+            if isinstance(rel_def, str):
+                # Old format: "INVOLVES": "Party"
+                rels_mapped[rel_label] = rel_def
+            elif isinstance(rel_def, dict):
+                # New format: "INVOLVES": {"target": "Party", "properties": {...}}
+                target = rel_def.get("target")
+                if isinstance(target, str):
+                    rels_mapped[rel_label] = target
+        relationships_by_label[label] = rels_mapped
+        
         properties_meta_by_label[label] = properties_meta
         # Capture flags; defaults if not present
         label_flags_by_label[label] = {
@@ -441,6 +455,18 @@ def validate_case_graph(
             for field_name, field_meta in properties_meta_by_label.get(label, {}).items():
                 if field_name in props:
                     coerced[field_name] = props[field_name]
+
+        # Preserve hidden identifier fields like *_id if present in original props
+        try:
+            for original_key, original_val in (props or {}).items():
+                if isinstance(original_key, str) and original_key.endswith("_id") and original_val is not None:
+                    # Cast to string for stability
+                    try:
+                        coerced[original_key] = str(original_val)
+                    except Exception:
+                        coerced[original_key] = original_val
+        except Exception:
+            pass
 
         # Additional format checks (e.g., date)
         for pname, pmeta in properties_meta_by_label.get(label, {}).items():

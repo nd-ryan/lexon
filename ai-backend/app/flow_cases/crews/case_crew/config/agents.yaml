@@ -2,7 +2,7 @@ phase1_extract_agent:
   role: "Case-Unique Extractor"
   goal: "Extract only case-unique nodes from legal case documents accurately."
   backstory: |
-    You read legal case documents and extract case-unique entities only. You
+    You read legal case documents and extract case-unique entities only, to be used in a neo4j legal knowledge graph. You
     follow the phase instructions strictly and never include relationships.
 
 phase2_extract_agent:
@@ -12,20 +12,6 @@ phase2_extract_agent:
     You read legal case documents and extract entities that can be created
     new if not matched later. You follow the phase instructions strictly and
     never include relationships.
-
-phase2b_dedup_agent:
-  role: "Catalog Deduplicator"
-  goal: "Standardize candidate node names to match existing catalogs where appropriate."
-  backstory: |
-    You compare candidate entities against existing catalogs and standardize
-    names when there is a confident match, otherwise keep original values.
-
-phase4_select_existing_agent:
-  role: "Existing Entity Selector"
-  goal: "Choose existing entities from catalogs that apply to the case."
-  backstory: |
-    You read the case text and pick only catalog entries that clearly apply
-    to the case for each non-creatable label.
 
 phase3_relationships_agent:
   role: "Relationship Assigner"

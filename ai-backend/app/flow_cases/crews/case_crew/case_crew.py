@@ -40,28 +40,24 @@ class CaseCrew:
             llm=llm
         )
 
-    @task
-    def phase1_extract_task(self) -> Task:
-        cfg = self.tasks_config['phase1_extract_task'].copy()  # type: ignore[index]
-        desc = (
-            cfg['description']
-            .replace('{FILENAME}', self.filename)
-            .replace('{FILEPATH}', self.file_path)
-        )
-        for k, v in self.replacements.items():
-            desc = desc.replace('{' + str(k) + '}', str(v))
-        cfg['description'] = desc
-        return Task(
-            config=cfg,
-            agent=self.phase1_extract_agent(),
-            output_pydantic=CaseGraph
-        )
 
     # Dynamic, per-node Phase 1 task with per-label instructions/examples and schema props
     def phase1_extract_single_node_task(self, description: str, output_model: Type[BaseModel]) -> Task:
         cfg = {
             "description": description,
             "expected_output": "JSON of properties only for the requested label"
+        }
+        return Task(
+            config=cfg,
+            agent=self.phase1_extract_agent(),
+            output_pydantic=output_model
+        )
+
+    # Dynamic, multi-node Phase 1 task for labels that can occur multiple times
+    def phase1_extract_multi_nodes_task(self, description: str, output_model: Type[BaseModel]) -> Task:
+        cfg = {
+            "description": description,
+            "expected_output": "A JSON object { items: [ { ...properties... }, ... ] }"
         }
         return Task(
             config=cfg,
@@ -90,66 +86,9 @@ class CaseCrew:
             config=cfg,
             agent=self.phase2_extract_agent(),
         )
+        
 
-    @task
-    def phase2_extract_task(self) -> Task:
-        cfg = self.tasks_config['phase2_extract_task'].copy()  # type: ignore[index]
-        desc = (
-            cfg['description']
-            .replace('{FILENAME}', self.filename)
-            .replace('{FILEPATH}', self.file_path)
-        )
-        for k, v in self.replacements.items():
-            desc = desc.replace('{' + str(k) + '}', str(v))
-        cfg['description'] = desc
-        return Task(
-            config=cfg,
-            agent=self.phase2_extract_agent(),
-            output_pydantic=CaseGraph
-        )
-
-    @agent
-    def phase2b_dedup_agent(self) -> Agent:
-        llm = LLM(model="gpt-4.1", temperature=0)
-        return Agent(
-            config=self.agents_config['phase2b_dedup_agent'],  # type: ignore[index]
-            tools=[],
-            llm=llm
-        )
-
-    @task
-    def phase2b_dedup_task(self) -> Task:
-        cfg = self.tasks_config['phase2b_dedup_task'].copy()  # type: ignore[index]
-        desc = (
-            cfg['description']
-            .replace('{FILENAME}', self.filename)
-            .replace('{FILEPATH}', self.file_path)
-        )
-        for k, v in self.replacements.items():
-            desc = desc.replace('{' + str(k) + '}', str(v))
-        cfg['description'] = desc
-        return Task(
-            config=cfg,
-            agent=self.phase2b_dedup_agent(),
-        )
-
-    @agent
-    def phase4_select_existing_agent(self) -> Agent:
-        llm = LLM(model="gpt-4.1", temperature=0)
-        return Agent(
-            config=self.agents_config['phase4_select_existing_agent'],  # type: ignore[index]
-            tools=[],
-            llm=llm
-        )
-
-    @task
-    def phase4_select_existing_task(self) -> Task:
-        cfg = self.tasks_config['phase4_select_existing_task'].copy()  # type: ignore[index]
-        desc = (
-            cfg['description']
-            .replace('{FILENAME}', self.filename)
-            .replace('{FILEPATH}', self.file_path)
-        )
+    
 
     @agent
     def phase5_select_existing_agent(self) -> Agent:
@@ -193,6 +132,13 @@ class CaseCrew:
             .replace('{FILENAME}', self.filename)
             .replace('{FILEPATH}', self.file_path)
         )
+        for k, v in self.replacements.items():
+            desc = desc.replace('{' + str(k) + '}', str(v))
+        cfg['description'] = desc
+        return Task(
+            config=cfg,
+            agent=self.phase3_relationships_agent(),
+        )
 
     @agent
     def phase6_law_agent(self) -> Agent:
@@ -211,6 +157,13 @@ class CaseCrew:
             .replace('{FILENAME}', self.filename)
             .replace('{FILEPATH}', self.file_path)
         )
+        for k, v in self.replacements.items():
+            desc = desc.replace('{' + str(k) + '}', str(v))
+        cfg['description'] = desc
+        return Task(
+            config=cfg,
+            agent=self.phase6_law_agent(),
+        )
 
     @agent
     def phase7_issue_related_agent(self) -> Agent:
@@ -228,6 +181,13 @@ class CaseCrew:
             cfg['description']
             .replace('{FILENAME}', self.filename)
             .replace('{FILEPATH}', self.file_path)
+        )
+        for k, v in self.replacements.items():
+            desc = desc.replace('{' + str(k) + '}', str(v))
+        cfg['description'] = desc
+        return Task(
+            config=cfg,
+            agent=self.phase7_issue_related_agent(),
         )
 
     @agent
