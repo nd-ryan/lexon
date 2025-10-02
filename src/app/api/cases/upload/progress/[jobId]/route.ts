@@ -5,7 +5,7 @@ export async function GET(
   { params }: { params: Promise<{ jobId: string }> }
 ) {
   const { jobId } = await params
-  const FASTAPI_URL = process.env.FASTAPI_URL || 'http://localhost:8000'
+  const FASTAPI_URL = process.env.AI_BACKEND_URL || 'http://localhost:8000'
   const apiKey = process.env.FASTAPI_API_KEY || ''
 
   console.log(`[Progress Proxy] Connecting to FastAPI for job ${jobId}`)

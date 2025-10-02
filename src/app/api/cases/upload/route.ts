@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData()
-    const FASTAPI_URL = process.env.FASTAPI_URL || 'http://localhost:8000'
+    const FASTAPI_URL = process.env.AI_BACKEND_URL || 'http://localhost:8000'
     const apiKey = process.env.FASTAPI_API_KEY || ''
     
     // Start async extraction job - returns immediately with job_id
