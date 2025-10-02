@@ -1,6 +1,7 @@
 "use client";
-import { useEffect, useMemo, useState, useLayoutEffect, useRef } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'next/navigation'
+import type { CaseGraph, GraphEdge, GraphNode, Schema } from '@/types/case-graph'
 import Button from '@/components/ui/button'
 import { Pencil, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/lib/store/appStore'
@@ -9,9 +10,9 @@ import AddNodeModal from '@/components/cases/AddNodeModal.client'
 export default function CaseEditorPage() {
   const params = useParams()
   const id = params?.id as string
-  const schema = useAppStore(s => s.schema)
-  const [data, setData] = useState<any>(null)
-  const [formData, setFormData] = useState<any>({})
+  const schema = useAppStore(s => s.schema as Schema | null)
+  const [data, setData] = useState<CaseGraph | null>(null)
+  const [formData, setFormData] = useState<CaseGraph>({ nodes: [], edges: [] })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [editingEdgeIdx, setEditingEdgeIdx] = useState<number | null>(null)
@@ -19,10 +20,8 @@ export default function CaseEditorPage() {
   const [confirmDeleteIdx, setConfirmDeleteIdx] = useState<number | null>(null)
   const [scrollHistory, setScrollHistory] = useState<number[]>([])
   const [addModalOpen, setAddModalOpen] = useState(false)
-  const [addModalType, setAddModalType] = useState<string>('')
+  const [addModalType] = useState<string>('')
   // Local edit widgets commit on blur to avoid full re-render per keystroke
-  const [activeInputPath, setActiveInputPath] = useState<string | null>(null)
-  const selectionRef = useRef<{ start: number | null; end: number | null }>({ start: null, end: null })
   const [activeHoldingId, setActiveHoldingId] = useState<string | null>(null)
   const [expandedArgs, setExpandedArgs] = useState<Set<string>>(new Set())
   const [expandedFacts, setExpandedFacts] = useState<Set<string>>(new Set())
@@ -41,8 +40,6 @@ export default function CaseEditorPage() {
     console.debug('confirmDeleteIdx changed:', confirmDeleteIdx)
   }, [confirmDeleteIdx])
 
-  // Track expanded/collapsed paths for objects/arrays
-  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set(['']))
 
   useEffect(() => {
     (async () => {
@@ -66,10 +63,6 @@ export default function CaseEditorPage() {
     }
   }
 
-  // Don't early-return before hooks to keep hook order stable
-
-  const pathToKey = (path: (string | number)[]) => path.join('.')
-
   const formatLabel = (label: string) => {
     if (label === 'root') return 'Case'
     const spaced = label
@@ -81,21 +74,21 @@ export default function CaseEditorPage() {
   }
 
   // Build node lookup to show labels and names for edge endpoints
-  const nodesArray = useMemo(() => (Array.isArray(formData?.nodes) ? formData.nodes : []), [formData])
-  const edgesArray = useMemo(() => (Array.isArray(formData?.edges) ? formData.edges : []), [formData])
+  const nodesArray = useMemo<GraphNode[]>(() => (Array.isArray(formData?.nodes) ? formData.nodes : []), [formData])
+  const edgesArray = useMemo<GraphEdge[]>(() => (Array.isArray(formData?.edges) ? formData.edges : []), [formData])
   
   // Build relationship map from schema to determine direction
   const relationshipMap = useMemo(() => {
     if (!schema || !Array.isArray(schema)) return {}
     const map: Record<string, { from: string; to: string; label: string }> = {}
     
-    schema.forEach((labelDef: any) => {
+    schema.forEach((labelDef) => {
       const sourceLabel = labelDef?.label
       if (!sourceLabel) return
       
       const relationships = labelDef?.relationships || {}
-      Object.entries(relationships).forEach(([relLabel, relDef]: [string, any]) => {
-        const targetLabel = typeof relDef === 'string' ? relDef : relDef?.target
+      Object.entries(relationships).forEach(([relLabel, relDef]) => {
+        const targetLabel = typeof relDef === 'string' ? relDef : (relDef as { target?: string })?.target
         if (targetLabel) {
           // Create a key that uniquely identifies this relationship
           const key = `${sourceLabel}->${relLabel}->${targetLabel}`
@@ -116,44 +109,41 @@ export default function CaseEditorPage() {
   }
   
   // Helper to find nodes by label
-  const getNodesByLabel = (label: string) => 
-    nodesArray.filter((n: any) => n?.label === label)
+  const getNodesByLabel = (label: string): GraphNode[] => 
+    nodesArray.filter((n) => n?.label === label)
   
-  // Helper to find edges by relationship
-  const getEdgesByLabel = (relLabel: string) =>
-    edgesArray.filter((e: any) => e?.label === relLabel)
   
   // Schema-aware helper to get related nodes
-  const getRelatedNodesByType = (nodeTempId: string, nodeLabel: string, targetLabel: string): any[] => {
+  const getRelatedNodesByType = (nodeTempId: string, nodeLabel: string, targetLabel: string): GraphNode[] => {
     // Find the relationship from schema
     const relLabel = findRelationship(nodeLabel, targetLabel)
     if (!relLabel) return []
     
     // Get edges using this relationship
-    const edges = edgesArray.filter((e: any) => 
+    const edges = edgesArray.filter((e) => 
       e?.from === nodeTempId && e?.label === relLabel
     )
-    return edges.map((e: any) => nodesArray.find((n: any) => n?.temp_id === e?.to)).filter(Boolean)
+    return edges.map((e) => nodesArray.find((n) => n?.temp_id === e?.to)!).filter(Boolean)
   }
   
   // Schema-aware helper for reverse relationships (incoming edges)
-  const getRelatedNodesByTypeReverse = (nodeTempId: string, sourceLabel: string, nodeLabel: string): any[] => {
+  const getRelatedNodesByTypeReverse = (nodeTempId: string, sourceLabel: string, nodeLabel: string): GraphNode[] => {
     // Find the relationship from schema (sourceLabel -> nodeLabel)
     const relLabel = findRelationship(sourceLabel, nodeLabel)
     if (!relLabel) return []
     
     // Get edges using this relationship (coming TO this node)
-    const edges = edgesArray.filter((e: any) => 
+    const edges = edgesArray.filter((e) => 
       e?.to === nodeTempId && e?.label === relLabel
     )
-    return edges.map((e: any) => nodesArray.find((n: any) => n?.temp_id === e?.from)).filter(Boolean)
+    return edges.map((e) => nodesArray.find((n) => n?.temp_id === e?.from)!).filter(Boolean)
   }
   
   // Organize data by Holdings
   const holdingsData = useMemo(() => {
     const holdings = getNodesByLabel('Holding')
     
-    return holdings.map((holding: any) => {
+    return holdings.map((holding) => {
       const holdingId = holding?.temp_id
       
       // Get Ruling for this Holding (Ruling -> Holding)
@@ -176,12 +166,12 @@ export default function CaseEditorPage() {
       const argumentNodes = getRelatedNodesByTypeReverse(holdingId, 'Argument', 'Holding')
       
       // For each Argument, get Laws and Facts
-      const argumentsWithDetails = argumentNodes.map((arg: any) => {
+      const argumentsWithDetails = argumentNodes.map((arg) => {
         const laws = getRelatedNodesByType(arg.temp_id, 'Argument', 'Law')
         const facts = getRelatedNodesByType(arg.temp_id, 'Argument', 'Fact')
         
         // For each Fact, get Witnesses, Evidence, JudicialNotice
-        const factsWithSupport = facts.map((fact: any) => {
+        const factsWithSupport = facts.map((fact) => {
           const witnesses = getRelatedNodesByType(fact.temp_id, 'Fact', 'Witness')
           const evidence = getRelatedNodesByType(fact.temp_id, 'Fact', 'Evidence')
           const judicialNotice = getRelatedNodesByType(fact.temp_id, 'Fact', 'JudicialNotice')
@@ -228,24 +218,24 @@ export default function CaseEditorPage() {
     
     // Return only Issues used in multiple Holdings
     return Object.entries(issueUsage)
-      .filter(([_, holdingIds]) => holdingIds.length > 1)
+      .filter(([, holdingIds]) => holdingIds.length > 1)
       .reduce((acc, [issueId, holdingIds]) => {
         acc[issueId] = holdingIds
         return acc
       }, {} as Record<string, string[]>)
   }, [holdingsData])
-  const pickNodeName = (node: any): string | undefined => {
-    const p = (node && typeof node === 'object') ? (node.properties || node) : undefined
+  const pickNodeName = (node: GraphNode): string | undefined => {
+    const props = (node?.properties ?? {}) as Record<string, unknown>
     const candidates = ['name', 'title', 'text', 'case_name']
     for (const key of candidates) {
-      const v = p?.[key]
+      const v = props[key]
       if (typeof v === 'string' && v.trim()) return v.trim()
     }
     return undefined
   }
   const nodeOptions = useMemo(() => {
     return (nodesArray || [])
-      .map((n: any) => {
+      .map((n) => {
         const id = n?.temp_id
         if (!id) return null
         const label = n?.label ? String(n.label) : String(id)
@@ -316,8 +306,8 @@ export default function CaseEditorPage() {
   const schemaNodeTypes = useMemo(() => extractNodeTypesFromSchema(schema), [schema])
 
   const groupedNodesByType = useMemo(() => {
-    const groups: Record<string, any[]> = {}
-    ;(nodesArray || []).forEach((node: any) => {
+    const groups: Record<string, GraphNode[]> = {}
+    ;(nodesArray || []).forEach((node) => {
       const typeLabel = String(node?.label || 'Unknown')
       if (!groups[typeLabel]) groups[typeLabel] = []
       groups[typeLabel].push(node)
@@ -330,7 +320,6 @@ export default function CaseEditorPage() {
     return Array.from(set).sort((a, b) => a.localeCompare(b))
   }, [schemaNodeTypes, groupedNodesByType])
 
-  const formatNodeTypeHeading = (type: string) => `${formatLabel(type)} Nodes`
 
   useEffect(() => {
     // eslint-disable-next-line no-console
@@ -342,23 +331,6 @@ export default function CaseEditorPage() {
     // eslint-disable-next-line no-console
     console.log('All node types to render:', allNodeTypes)
   }, [schema, schemaNodeTypes, groupedNodesByType, allNodeTypes])
-
-  const addNodeOfType = (type: string) => {
-    setAddModalType(type)
-    setAddModalOpen(true)
-  }
-
-  const scrollToNode = (targetId?: string) => {
-    if (!targetId) return
-    // Save current scroll position so we can return
-    if (typeof window !== 'undefined') {
-      setScrollHistory(prev => [...prev, window.scrollY])
-    }
-    const el = document.getElementById(`node-${targetId}`)
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }
-  }
 
   const setValueAtPath = (path: (string|number)[], value: any) => {
     setFormData((prev: any) => {
@@ -381,55 +353,7 @@ export default function CaseEditorPage() {
     })
   }
 
-  const ToggleIcon = ({ open }: { open: boolean }) => (
-    <svg
-      className={`h-4 w-4 text-gray-500 transition-transform ${open ? 'rotate-90' : ''}`}
-      viewBox="0 0 20 20"
-      fill="currentColor"
-      aria-hidden="true"
-    >
-      <path fillRule="evenodd" d="M6 6l6 4-6 4V6z" clipRule="evenodd" />
-    </svg>
-  )
 
-  const SectionHeader = ({
-    label,
-    count,
-    depth,
-    path,
-  }: {
-    label: string
-    count?: number
-    depth: number
-    path: (string | number)[]
-  }) => {
-    const key = pathToKey(path)
-    const isOpen = expandedPaths.has(key)
-    const toggle = () => {
-      setExpandedPaths(prev => {
-        const next = new Set(prev)
-        if (next.has(key)) next.delete(key)
-        else next.add(key)
-        return next
-      })
-    }
-    return (
-      <button
-        type="button"
-        onClick={toggle}
-        className="w-full flex items-center justify-between rounded-md bg-gray-50 hover:bg-gray-100 px-3 py-2 border text-left"
-        style={{ marginLeft: depth * 16 }}
-      >
-        <div className="flex items-center gap-2">
-          <ToggleIcon open={isOpen} />
-          <span className="text-sm font-medium text-gray-800">{formatLabel(label)}</span>
-        </div>
-        {typeof count === 'number' && (
-          <span className="inline-flex items-center rounded-full bg-gray-200 px-2 py-0.5 text-xs text-gray-700">{count}</span>
-        )}
-      </button>
-    )
-  }
 
   // Helper to find schema definition for a property
   const getPropertySchema = (path: (string | number)[], propName: string): any => {
@@ -450,6 +374,15 @@ export default function CaseEditorPage() {
     return labelDef.properties[propName]
   }
 
+  // Early return after all hooks to keep hook order stable
+  if (!data) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="rounded-md border bg-gray-50 px-2 py-1 text-xs text-gray-600">Loading...</div>
+      </div>
+    )
+  }
+
   const Field = ({ label, value, path, depth = 0 }: { label: string, value: any, path: (string|number)[], depth?: number }) => {
     const indentStyle = useMemo(() => ({ marginLeft: depth * 16 }), [depth])
     
@@ -459,6 +392,12 @@ export default function CaseEditorPage() {
     const inputType = uiConfig?.input
     const options = uiConfig?.options
     const required = uiConfig?.required
+
+    // Local state for form inputs - always declare hooks at top level
+    const [local, setLocal] = useState<string>(value === null ? '' : String(value))
+    useEffect(() => {
+      setLocal(value === null ? '' : String(value))
+    }, [value])
 
     // Hide temp_id wherever it appears
     if (label === 'temp_id') return null
@@ -492,10 +431,6 @@ export default function CaseEditorPage() {
     // Schema-based rendering for strings and numbers
     if (value === null || typeof value === 'string' || typeof value === 'number') {
       const displayLabel = uiConfig?.label || formatLabel(label)
-      const [local, setLocal] = useState<string>(value === null ? '' : String(value))
-      useEffect(() => {
-        setLocal(value === null ? '' : String(value))
-      }, [value])
       
       // Render dropdown for enums (select with options)
       if (inputType === 'select' && Array.isArray(options) && options.length > 0) {
@@ -1038,13 +973,13 @@ export default function CaseEditorPage() {
                                             {/* Witnesses under this fact */}
                                             {factData.witnesses.length > 0 && (
                                               <div className="space-y-1">
-                                                {factData.witnesses.map((wit: any, witIdx: number) => (
+                                                {factData.witnesses.map((wit: any) => (
                                                   <div
                                                     key={wit.temp_id}
                                                     onClick={() => scrollToNodeById(wit.temp_id, h.holding.temp_id)}
                                                     className="px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-400 cursor-pointer"
                                                   >
-                                                    Witness {witIdx + 1}
+                                                    Witness
                                                   </div>
                                                 ))}
                                               </div>
@@ -1104,9 +1039,6 @@ export default function CaseEditorPage() {
       <div className="flex-1 flex flex-col">
         <div className="p-6 space-y-6 text-xs flex-1 overflow-y-auto">
           <h1 className="text-2xl font-semibold tracking-tight">Edit Case</h1>
-        {!data && (
-          <div className="rounded-md border bg-gray-50 px-2 py-1 text-xs text-gray-600">Loading...</div>
-        )}
         {error && (
           <div className="rounded-md border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-700">{error}</div>
         )}
@@ -1134,7 +1066,7 @@ export default function CaseEditorPage() {
               {proceedingNodes.length > 0 && (
                 <div className="bg-white rounded-lg border p-4 mb-4">
                   <div className="text-sm font-semibold text-gray-700 mb-2">Proceeding</div>
-                  {proceedingNodes.map((proc: any, idx: number) => (
+                  {proceedingNodes.map((proc: any) => (
                     <div key={proc.temp_id} id={`node-${proc.temp_id}`} className="mb-3 last:mb-0 bg-gray-50 rounded p-3 relative">
                       <div className="absolute top-2 right-2">
                         <NodeActionMenu nodeId={proc.temp_id} />

@@ -1,9 +1,8 @@
 import { create } from 'zustand'
-
-type SchemaPayload = any
+import type { Schema } from '@/types/case-graph'
 
 type AppState = {
-  schema: SchemaPayload | null
+  schema: Schema | null
   schemaLoading: boolean
   schemaError: string | null
   loadSchema: () => Promise<void>
@@ -17,7 +16,7 @@ export const useAppStore = create<AppState>((set) => ({
     try {
       set({ schemaLoading: true, schemaError: null })
       const res = await fetch('/api/schema', { cache: 'no-store' })
-      const data = await res.json()
+      const data = await res.json() as { success: boolean; schema: Schema; error?: string }
       if (!res.ok || !data?.success) {
         throw new Error(data?.error || 'Failed to fetch schema')
       }

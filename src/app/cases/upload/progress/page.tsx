@@ -1,8 +1,8 @@
 "use client";
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 
-export default function UploadProgressPage() {
+function UploadProgressContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const jobId = searchParams.get('jobId')
@@ -126,6 +126,14 @@ export default function UploadProgressPage() {
         </div>
       )}
     </div>
+  )
+}
+
+export default function UploadProgressPage() {
+  return (
+    <Suspense fallback={<div className="p-8 max-w-2xl mx-auto">Loading...</div>}>
+      <UploadProgressContent />
+    </Suspense>
   )
 }
 

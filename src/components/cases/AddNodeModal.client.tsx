@@ -1,27 +1,15 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-
-type SchemaItem = {
-  label: string
-  attributes?: Record<string, string>
-  properties?: Record<string, { type?: string; ui?: any }>
-  relationships?: Record<string, string>
-}
-
-type ExistingNode = {
-  label?: string
-  temp_id?: string
-  [key: string]: any
-}
+import type { GraphEdge, GraphNode, Schema, SchemaItem, PropertyUi } from '@/types/case-graph'
 
 interface AddNodeModalProps {
   open: boolean
   nodeType: string
-  schema: any
-  existingNodes: ExistingNode[]
+  schema: Schema | null
+  existingNodes: GraphNode[]
   onCancel: () => void
-  onSubmit: (payload: { node: any; edges: any[] }) => void
+  onSubmit: (payload: { node: GraphNode; edges: GraphEdge[] }) => void
 }
 
 export default function AddNodeModal({ open, nodeType, schema, existingNodes, onCancel, onSubmit }: AddNodeModalProps) {
@@ -49,7 +37,7 @@ export default function AddNodeModal({ open, nodeType, schema, existingNodes, on
     if (!typeDef) return {}
     if (typeDef.properties && typeof typeDef.properties === 'object') {
       const out: Record<string, string> = {}
-      Object.entries(typeDef.properties).forEach(([key, def]: any) => {
+      Object.entries(typeDef.properties).forEach(([key, def]) => {
         const t = (def && typeof def === 'object') ? (def.type || '') : ''
         out[key] = t || ''
       })
@@ -57,17 +45,24 @@ export default function AddNodeModal({ open, nodeType, schema, existingNodes, on
     }
     return typeDef.attributes || {}
   }, [typeDef])
-  const propertyUi: Record<string, any> = useMemo(() => {
+  const propertyUi: Record<string, PropertyUi> = useMemo(() => {
     if (typeDef && typeDef.properties && typeof typeDef.properties === 'object') {
-      const uiMap: Record<string, any> = {}
-      Object.entries(typeDef.properties).forEach(([key, def]: any) => {
-        if (def && typeof def === 'object' && def.ui) uiMap[key] = def.ui
+      const uiMap: Record<string, PropertyUi> = {}
+      Object.entries(typeDef.properties).forEach(([key, def]) => {
+        if (def && typeof def === 'object' && (def as any).ui) uiMap[key] = (def as any).ui
       })
       return uiMap
     }
     return {}
   }, [typeDef])
-  const relationshipsMap: Record<string, string> = useMemo(() => typeDef?.relationships || {}, [typeDef])
+  const relationshipsMap: Record<string, string> = useMemo(() => {
+    const rels = typeDef?.relationships || {}
+    const out: Record<string, string> = {}
+    Object.entries(rels).forEach(([label, def]) => {
+      out[label] = typeof def === 'string' ? def : (def?.target || '')
+    })
+    return out
+  }, [typeDef])
 
   // Build initial property state
   const [properties, setProperties] = useState<Record<string, any>>({})
@@ -165,10 +160,10 @@ export default function AddNodeModal({ open, nodeType, schema, existingNodes, on
       if (!id) return
       const label = String(n?.label || 'Unknown')
       const name = (() => {
-        const p = (n && typeof n === 'object') ? (n.properties || n) : undefined
+        const props = (n?.properties ?? {}) as Record<string, unknown>
         const candidates = ['name', 'title', 'text', 'case_name']
         for (const key of candidates) {
-          const v = p?.[key]
+          const v = props[key]
           if (typeof v === 'string' && v.trim()) return v.trim()
         }
         return id
@@ -314,7 +309,6 @@ export default function AddNodeModal({ open, nodeType, schema, existingNodes, on
             <div className="text-xs text-gray-500">No relationships defined from this node type.</div>
           )}
           {relSelections.map((sel, idx) => {
-            const selected = allNodeOptions.find(o => o.id === sel.targetTempId)
             const hasMapping = !!sel.relLabel
             return (
               <div key={idx} className="flex items-center gap-2">
@@ -369,7 +363,7 @@ export default function AddNodeModal({ open, nodeType, schema, existingNodes, on
               const tempId = (typeof crypto !== 'undefined' && (crypto as any).randomUUID)
                 ? (crypto as any).randomUUID()
                 : Math.random().toString(36).slice(2, 10) + Date.now().toString(36)
-              const normalizedProps: Record<string, any> = {}
+              const normalizedProps: Record<string, unknown> = {}
               Object.entries(properties).forEach(([k, v]) => {
                 const t = String(attributes[k] || '').toUpperCase()
                 if ((t.includes('LIST') || t.includes('ARRAY')) && typeof v === 'string') {
@@ -379,10 +373,10 @@ export default function AddNodeModal({ open, nodeType, schema, existingNodes, on
                 }
               })
 
-              const newNode = { label: nodeType, temp_id: tempId, properties: normalizedProps }
+              const newNode: GraphNode = { label: nodeType, temp_id: tempId, properties: normalizedProps }
               const edges = relSelections
                 .filter(sel => sel.targetTempId && sel.relLabel)
-                .map(sel => ({ from: tempId, to: sel.targetTempId, label: sel.relLabel }))
+                .map<GraphEdge>(sel => ({ from: tempId, to: sel.targetTempId, label: sel.relLabel! }))
               onSubmit({ node: newNode, edges })
             }}
           >
