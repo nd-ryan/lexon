@@ -10,6 +10,7 @@ except Exception:  # pragma: no cover
 import re
 import json
 import os
+from datetime import date as python_date
 
 
 DATE_REGEX = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -90,6 +91,58 @@ def derive_relationship_constraints_from_schema() -> Dict[str, List[str]]:
         constraints[k] = sorted(v)
 
     return constraints
+
+
+def get_relationship_label_for_edge(source_label: str, target_label: str, relationships_by_label: Dict[str, Dict[str, str]]) -> Optional[str]:
+    """Get the correct relationship label for a source->target edge from schema.
+    
+    Args:
+        source_label: The label of the source node
+        target_label: The label of the target node
+        relationships_by_label: Mapping of label -> {rel_label: target_label}
+    
+    Returns:
+        The relationship label if found, None otherwise
+    """
+    source_rels = relationships_by_label.get(source_label, {})
+    for rel_label, tgt in source_rels.items():
+        if tgt == target_label:
+            return rel_label
+    return None
+
+
+def get_all_assigned_relationship_labels(relationships_by_label: Dict[str, Dict[str, str]], exclude_sources: Optional[List[str]] = None) -> set[str]:
+    """Get all relationship labels that are explicitly assigned in earlier phases.
+    
+    This is used to build exclusion lists for Phase 4+ to avoid re-assigning
+    relationships that were already created in earlier phases.
+    
+    Args:
+        relationships_by_label: Mapping of label -> {rel_label: target_label}
+        exclude_sources: Optional list of source labels to limit the search
+    
+    Returns:
+        Set of relationship labels that are manually assigned in earlier phases
+    """
+    # These are assigned in specific phases with special logic:
+    # Phase 2: RELIES_ON_FACT (Argument -> Fact)
+    # Phase 3: SUPPORTED_BY_* (Fact -> Witness/Evidence/JudicialNotice)
+    # Phase 6: RELIES_ON_LAW (Argument -> Law)
+    assigned_rels: set[str] = set()
+    
+    # Get RELIES_ON_FACT from Argument
+    arg_rels = relationships_by_label.get("Argument", {})
+    for rel_label in arg_rels:
+        if rel_label in {"RELIES_ON_FACT", "RELIES_ON_LAW"}:
+            assigned_rels.add(rel_label)
+    
+    # Get SUPPORTED_BY_* from Fact
+    fact_rels = relationships_by_label.get("Fact", {})
+    for rel_label in fact_rels:
+        if rel_label.startswith("SUPPORTED_BY_"):
+            assigned_rels.add(rel_label)
+    
+    return assigned_rels
 
 
 def derive_embedding_config_from_schema() -> Dict[str, List[str]]:
@@ -255,11 +308,21 @@ def prune_ui_schema_for_llm(schema_payload: Any) -> Dict[str, Any]:
                 properties_spec.append(entry)
 
         relationships_map = node_def.get("relationships", {}) or {}
-        rels: Dict[str, str] = {}
+        rels: Dict[str, Any] = {}
         if isinstance(relationships_map, dict):
-            for rel_label, target_label in relationships_map.items():
-                if isinstance(rel_label, str) and isinstance(target_label, str):
-                    rels[rel_label] = target_label
+            for rel_label, rel_def in relationships_map.items():
+                if not isinstance(rel_label, str):
+                    continue
+                # Handle both string format and object format with properties
+                if isinstance(rel_def, str):
+                    # Simple format: "INVOLVES": "Party"
+                    rels[rel_label] = rel_def
+                elif isinstance(rel_def, dict):
+                    # Object format: "INVOLVES": {"target": "Party", "properties": {...}}
+                    target = rel_def.get("target")
+                    if isinstance(target, str):
+                        # Preserve the full object format including properties schema
+                        rels[rel_label] = rel_def
 
         entry = {
             "label": label,
@@ -301,6 +364,11 @@ def build_property_models(spec: Dict[str, Any]) -> Tuple[Dict[str, Type[BaseMode
             name = p.get("name")
             if not isinstance(name, str):
                 continue
+            
+            # Skip hidden properties - they're system-generated and shouldn't be in AI prompts
+            ui_meta = p.get("ui")
+            if isinstance(ui_meta, dict) and ui_meta.get("hidden") is True:
+                continue
 
             ptype = str(p.get("type", "STRING")).upper()
             required = bool(p.get("required", False))
@@ -311,10 +379,16 @@ def build_property_models(spec: Dict[str, Any]) -> Tuple[Dict[str, Type[BaseMode
             py_type: Any
             if ptype == "INTEGER":
                 py_type = int
+            elif ptype == "FLOAT":
+                py_type = float
             elif ptype == "BOOLEAN":
                 py_type = bool
             elif ptype == "LIST":
                 py_type = List[str]
+            elif ptype == "DATE":
+                # Date stored as YYYY-MM-DD string in Python/Pydantic
+                # Will be converted to Neo4j Date when writing to database
+                py_type = str
             else:
                 py_type = str
 
@@ -387,6 +461,52 @@ def build_property_models(spec: Dict[str, Any]) -> Tuple[Dict[str, Type[BaseMode
     return models_by_label, relationships_by_label, properties_meta_by_label, label_flags_by_label
 
 
+def convert_properties_for_neo4j(
+    properties: Dict[str, Any],
+    label: str,
+    properties_meta_by_label: Dict[str, Dict[str, Dict[str, Any]]]
+) -> Dict[str, Any]:
+    """Convert property values to Neo4j-compatible types.
+    
+    Specifically handles:
+    - DATE type: converts "YYYY-MM-DD" strings to neo4j.time.Date objects
+    
+    Args:
+        properties: Dictionary of property key-value pairs
+        label: Node label to determine which properties to convert
+        properties_meta_by_label: Metadata about properties including types
+        
+    Returns:
+        Dictionary with converted values ready for Neo4j
+    """
+    try:
+        from neo4j.time import Date as Neo4jDate
+    except ImportError:
+        # If neo4j driver not available, return as-is
+        return properties
+    
+    meta = properties_meta_by_label.get(label, {})
+    converted = dict(properties)  # shallow copy
+    
+    for prop_name, value in properties.items():
+        prop_meta = meta.get(prop_name, {})
+        prop_type = prop_meta.get("type", "").upper()
+        
+        # Convert DATE type strings to Neo4j Date objects
+        if prop_type == "DATE" and isinstance(value, str):
+            # Validate format YYYY-MM-DD
+            if DATE_REGEX.match(value):
+                try:
+                    # Parse string and create Neo4j Date
+                    year, month, day = value.split("-")
+                    converted[prop_name] = Neo4jDate(int(year), int(month), int(day))
+                except Exception:
+                    # Keep as string if conversion fails
+                    pass
+    
+    return converted
+
+
 def validate_case_graph(
     payload: Dict[str, Any],
     models_by_label: Dict[str, Type[BaseModel]],
@@ -443,6 +563,16 @@ def validate_case_graph(
         if not isinstance(props, dict):
             errors.append(f"node[{idx}] properties must be an object")
             props = {}
+        
+        # Unwrap 'raw' field if present (CrewAI sometimes wraps structured output)
+        if isinstance(props, dict) and len(props) == 1 and "raw" in props:
+            try:
+                raw_val = props.get("raw")
+                if isinstance(raw_val, str):
+                    props = json.loads(raw_val)
+                    errors.append(f"node[{idx}] properties were wrapped in 'raw' field (unwrapped)")
+            except Exception as e:
+                errors.append(f"node[{idx}] failed to unwrap 'raw' field: {e}")
 
         model = models_by_label[label]
         try:
@@ -531,11 +661,19 @@ def validate_case_graph(
         allowed = relationships_by_label.get(src_label, {})
         expected_target = allowed.get(elabel)
         if expected_target is None:
-            errors.append(f"edge[{idx}] label '{elabel}' not allowed for source label '{src_label}'")
+            # Log available relationships for debugging
+            available_rels = list(allowed.keys()) if allowed else []
+            errors.append(f"edge[{idx}] label '{elabel}' not allowed for source label '{src_label}' (available: {available_rels[:5]})")
             continue
-        if expected_target != dst_label:
+        
+        # Handle both string and dict format for expected_target
+        expected_target_label = expected_target
+        if isinstance(expected_target, dict):
+            expected_target_label = expected_target.get("target")
+        
+        if expected_target_label != dst_label:
             errors.append(
-                f"edge[{idx}] label '{elabel}' expects target '{expected_target}', got '{dst_label}'"
+                f"edge[{idx}] label '{elabel}' expects target '{expected_target_label}', got '{dst_label}'"
             )
             continue
 
@@ -565,10 +703,16 @@ def render_spec_text(spec: Dict[str, Any]) -> str:
     """
     parts: List[str] = []
     for label_def in spec.get("labels", []):
+        if not isinstance(label_def, dict):
+            continue
         label = label_def.get("label")
         parts.append(f"Label: {label}")
         props_lines: List[str] = []
         for p in label_def.get("properties", []):
+            if not isinstance(p, dict):
+                continue
+            if not isinstance(p.get("name"), str) or not isinstance(p.get("type"), str):
+                continue
             line = f"  - {p['name']}: {p['type']}"
             if p.get("required"):
                 line += " (required)"

@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field, create_model
 from typing import Dict, Any, List, Optional
 from .crews.case_crew.case_crew import CaseCrew
 from .tools.io_tools import read_document, fetch_neo4j_schema
-from app.lib.schema_runtime import prune_ui_schema_for_llm, build_property_models, validate_case_graph, render_spec_text, build_relationship_property_models
+from app.lib.schema_runtime import prune_ui_schema_for_llm, build_property_models, validate_case_graph, render_spec_text, build_relationship_property_models, get_relationship_label_for_edge, get_all_assigned_relationship_labels
 from app.models.case_graph import CaseGraph
 from app.lib.logging_config import setup_logger
 from app.lib.neo4j_client import neo4j_client
@@ -19,6 +19,8 @@ class CaseExtractState(BaseModel):
     file_path: str = ""
     filename: str = ""
     case_id: str = ""
+    # Progress callback for job tracking
+    progress_callback: Any = None  # Callable[[str, str, int], None] but Any for Pydantic
     # Runtime additions shared across flow steps
     schema_spec: Dict[str, Any] | None = None
     schema_spec_text: str = ""
@@ -355,13 +357,22 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                     )
                     result = single_crew.kickoff()
 
-                    # Parse pydantic output into properties dict
-                    if hasattr(result, 'model_dump'):
-                        properties = result.model_dump(exclude_none=True)  # type: ignore[attr-defined]
-                    elif isinstance(result, dict):
-                        properties = result
+                    # Unwrap CrewOutput to get the actual Pydantic model
+                    actual_result = None
+                    if hasattr(result, 'pydantic'):
+                        actual_result = result.pydantic
+                    elif hasattr(result, 'model_dump'):
+                        actual_result = result
                     else:
-                        properties = json.loads(str(result))
+                        actual_result = result
+
+                    # Parse pydantic output into properties dict
+                    if hasattr(actual_result, 'model_dump'):
+                        properties = actual_result.model_dump(exclude_none=True)  # type: ignore[attr-defined]
+                    elif isinstance(actual_result, dict):
+                        properties = actual_result
+                    else:
+                        properties = json.loads(str(actual_result))
 
                     node = {"temp_id": f"n{next_idx}", "label": label, "properties": properties}
                     next_idx += 1
@@ -386,6 +397,14 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             logger.info(f"Phase 1: completed (nodes_added={added}, produced_labels={len(produced_labels)} [{preview_prod}])")
         except Exception:
             logger.info("Phase 1 (per-node): completed")
+        
+        # Publish progress if callback is set
+        if self.state.progress_callback:
+            try:
+                self.state.progress_callback("Phase 1 complete: Extracted case-unique nodes", "phase1", 25)
+            except Exception as e:
+                logger.warning(f"Failed to publish progress: {e}")
+        
         return {"status": "phase1_done"}
 
     @listen(phase1_extract_case_unique)
@@ -533,12 +552,17 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                         logger.warning(f"Phase 2: Fact item has neither temp_id nor fact: {item}")
                         continue
                     
-                    # Create edge: Argument RELIES_ON_FACT Fact
+                    # Create edge: Argument -> Fact (get relationship label from schema)
                     try:
                         arg_temp_id = arg_node.get("temp_id")
                         if isinstance(arg_temp_id, str) and arg_temp_id:
-                            edge = {"from": arg_temp_id, "to": fact_temp_id, "label": "RELIES_ON_FACT", "properties": {}}
-                            self.state.edges_accumulated.append(edge)
+                            # Get the correct relationship label from schema
+                            rel_label = get_relationship_label_for_edge("Argument", "Fact", self.state.rels_by_label or {})
+                            if rel_label:
+                                edge = {"from": arg_temp_id, "to": fact_temp_id, "label": rel_label, "properties": {}}
+                                self.state.edges_accumulated.append(edge)
+                            else:
+                                logger.warning("Phase 2: No relationship found in schema for Argument -> Fact")
                     except Exception as e:
                         logger.warning(f"Phase 2: Failed to create edge for fact: {e}")
             except Exception as e:
@@ -551,11 +575,19 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             logger.info(f"Phase 2: total unique facts - {unique_facts} (AI-driven deduplication)")
         except Exception:
             logger.info("Phase 2: Facts generation completed")
+        
+        # Publish progress
+        if self.state.progress_callback:
+            try:
+                self.state.progress_callback("Phase 2 complete: Generated facts for arguments", "phase2", 40)
+            except Exception as e:
+                logger.warning(f"Failed to publish progress: {e}")
+        
         return {"status": "facts_phase2_done"}
 
     @listen(phase2_extract_facts)
     def phase3_extract_supports(self, _: Dict[str, Any]) -> Dict[str, Any]:
-        # Phase 3: generate Witnesses and Evidence for each Fact, and link via SUPPORTED_BY
+        # Phase 3: generate Witnesses and Evidence for each Fact, and link via SUPPORTED_BY_WITNESS/EVIDENCE
         logger.info("Phase 3: generating Witnesses and Evidence per Fact and linking edges")
         tools = []
 
@@ -718,14 +750,19 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                             logger.warning(f"Phase 3: Witness item has neither temp_id nor node: {item}")
                             continue
                         
-                        # Create edge to this fact
+                        # Create edge to this fact (get relationship label from schema)
                         try:
                             s_val = float(strength) if isinstance(strength, (int, float)) or (isinstance(strength, str) and strength.strip()) else None
                         except Exception:
                             s_val = None
                         eprops = {"support_strength": s_val if s_val is not None else 0.0}
-                        self.state.edges_accumulated.append({"from": fact.get("temp_id"), "to": wid, "label": "SUPPORTED_BY", "properties": eprops})
-                        edges_created += 1
+                        # Get the correct relationship label from schema
+                        rel_label = get_relationship_label_for_edge("Fact", "Witness", self.state.rels_by_label or {})
+                        if rel_label:
+                            self.state.edges_accumulated.append({"from": fact.get("temp_id"), "to": wid, "label": rel_label, "properties": eprops})
+                            edges_created += 1
+                        else:
+                            logger.warning("Phase 3: No relationship found in schema for Fact -> Witness")
                     except Exception as e:
                         logger.warning(f"Phase 3: Failed to process witness: {e}")
                         continue
@@ -774,14 +811,19 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                             logger.warning(f"Phase 3: Evidence item has neither temp_id nor node: {item}")
                             continue
                         
-                        # Create edge to this fact
+                        # Create edge to this fact (get relationship label from schema)
                         try:
                             s_val = float(strength) if isinstance(strength, (int, float)) or (isinstance(strength, str) and strength.strip()) else None
                         except Exception:
                             s_val = None
                         eprops = {"support_strength": s_val if s_val is not None else 0.0}
-                        self.state.edges_accumulated.append({"from": fact.get("temp_id"), "to": eid, "label": "SUPPORTED_BY", "properties": eprops})
-                        edges_created += 1
+                        # Get the correct relationship label from schema
+                        rel_label = get_relationship_label_for_edge("Fact", "Evidence", self.state.rels_by_label or {})
+                        if rel_label:
+                            self.state.edges_accumulated.append({"from": fact.get("temp_id"), "to": eid, "label": rel_label, "properties": eprops})
+                            edges_created += 1
+                        else:
+                            logger.warning("Phase 3: No relationship found in schema for Fact -> Evidence")
                     except Exception as e:
                         logger.warning(f"Phase 3: Failed to process evidence: {e}")
                         continue
@@ -796,11 +838,19 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             logger.info(f"Phase 3: total unique items - {unique_witnesses} witnesses, {unique_evidence} evidence (AI-driven deduplication)")
         except Exception:
             logger.info("Phase 3: supports generation completed")
+        
+        # Publish progress
+        if self.state.progress_callback:
+            try:
+                self.state.progress_callback("Phase 3 complete: Generated witnesses and evidence", "phase3", 60)
+            except Exception as e:
+                logger.warning(f"Failed to publish progress: {e}")
+        
         return {"status": "supports_phase3_done"}
 
     @listen(phase3_extract_supports)
     def phase4_assign_case_unique_relationships(self, _: Dict[str, Any]) -> Dict[str, Any]:
-        # Phase 4: add remaining relationships among case-unique labels (excluding RELIES_ON and SUPPORTED_BY)
+        # Phase 4: add remaining relationships among case-unique labels (excluding RELIES_ON and SUPPORTED_BY_*)
         logger.info("Phase 4: assigning remaining relationships among case-unique nodes")
         try:
             from .crews.case_crew.case_crew import CaseCrew as _CaseCrew
@@ -808,20 +858,10 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             logger.info(f"Phase 4: processing {len(all_nodes)} total nodes")
             
             # Build pruned schema spec: only case_unique labels and rels to case_unique targets
-            # Prefer full schema to preserve relationship property schemas
-            raw_labels = self.state.schema_full
-            logger.info(f"Phase 4: schema_full type: {type(raw_labels)}, is_dict: {isinstance(raw_labels, dict)}, is_list: {isinstance(raw_labels, list)}")
-            
-            if isinstance(raw_labels, dict):
-                raw_labels = raw_labels.get("labels")
-                logger.info(f"Phase 4: extracted labels from dict, new type: {type(raw_labels)}")
-            
-            if isinstance(raw_labels, list):
-                labels_src = raw_labels
-                logger.info(f"Phase 4: using list of {len(labels_src)} label definitions")
-            else:
-                labels_src = (self.state.schema_spec or {}).get("labels", []) if isinstance(self.state.schema_spec, dict) else []
-                logger.info(f"Phase 4: fallback to schema_spec, got {len(labels_src)} label definitions")
+            # Use the already-pruned schema_spec which is designed for LLM consumption
+            # (relationship property validation is handled separately via rel_prop_models_by_key)
+            labels_src = (self.state.schema_spec or {}).get("labels", []) if isinstance(self.state.schema_spec, dict) else []
+            logger.info(f"Phase 4: using {len(labels_src)} label definitions from schema_spec")
             
             case_unique_set: set[str] = set()
             for ldef in labels_src:
@@ -862,7 +902,9 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                     for rk, rv in rels_raw.items():
                         if not isinstance(rk, str):
                             continue
-                        if rk in {"RELIES_ON_FACT", "RELIES_ON_LAW", "SUPPORTED_BY"}:  # already assigned earlier
+                        # Skip relationships that are explicitly assigned in earlier phases
+                        assigned_rels = get_all_assigned_relationship_labels(self.state.rels_by_label or {})
+                        if rk in assigned_rels:
                             continue
                         # rv can be a string target label or an object { target, properties }
                         if isinstance(rv, dict):
@@ -911,7 +953,9 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                             continue
                         if e.get("properties") is not None and not isinstance(e.get("properties"), dict):
                             continue
-                        if e.get("label") in {"RELIES_ON_FACT", "RELIES_ON_LAW", "SUPPORTED_BY"}:
+                        # Skip relationships that are explicitly assigned in earlier phases
+                        assigned_rels = get_all_assigned_relationship_labels(self.state.rels_by_label or {})
+                        if e.get("label") in assigned_rels:
                             continue
                         # Coerce relationship properties via Pydantic when available
                         props = e.get("properties") or {}
@@ -956,8 +1000,6 @@ class CaseExtractFlow(Flow[CaseExtractState]):
         logger.info("Phase 5: selecting ReliefType and Forum; computing Jurisdiction; creating edges")
         try:
             from .crews.case_crew.case_crew import CaseCrew as _CaseCrew
-            # Prefer full schema to preserve relationship property schemas
-            labels_src = self.state.schema_full if isinstance(self.state.schema_full, list) else ((self.state.schema_spec or {}).get("labels", []) if isinstance(self.state.schema_spec, dict) else [])
             # Build catalogs for ReliefType and Forum using schema-defined properties
             catalogs: Dict[str, List[Dict[str, Any]]] = {}
             for lbl in ["ReliefType", "Forum"]:
@@ -1085,10 +1127,14 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 p_id = find_first_temp_id("Proceeding")
                 f_id = find_first_temp_id("Forum")
 
-                # Use relationships agent to generate RESULTS_IN and HEARD_IN edges with properties per schema
+                # Use relationships agent to generate edges with properties per schema
+                # Get the correct relationship labels from schema
+                rel_ruling_relief = get_relationship_label_for_edge("Ruling", "ReliefType", self.state.rels_by_label or {})
+                rel_proceeding_forum = get_relationship_label_for_edge("Proceeding", "Forum", self.state.rels_by_label or {})
+                
                 try:
                     labels_src = (self.state.schema_spec or {}).get("labels", []) if isinstance(self.state.schema_spec, dict) else []
-                    # Keep only mappings involving Ruling->RESULTS_IN->ReliefType and Proceeding->HEARD_IN->Forum
+                    # Keep only mappings involving Ruling->ReliefType and Proceeding->Forum
                     pruned_defs: List[Dict[str, Any]] = []
                     for ldef in labels_src:
                         if not isinstance(ldef, dict):
@@ -1098,9 +1144,10 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                             continue
                         rels_obj: Dict[str, Any] = {}
                         for rk, rv in (ldef.get("relationships") or {}).items():
-                            if lbl == "Ruling" and rk == "RESULTS_IN":
+                            # Include the relationship if it matches the one from schema
+                            if lbl == "Ruling" and rk == rel_ruling_relief:
                                 rels_obj[rk] = rv
-                            if lbl == "Proceeding" and rk == "HEARD_IN":
+                            if lbl == "Proceeding" and rk == rel_proceeding_forum:
                                 rels_obj[rk] = rv
                         new_def = dict(ldef)
                         new_def["relationships"] = rels_obj
@@ -1185,23 +1232,29 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                             props = forum_nodes[0].get("properties") or {}
                             forum_name = props.get("name") or props.get("text") or props.get("description")
                         if isinstance(forum_name, str) and forum_name.strip():
-                            query = "MATCH (f:Forum {name: $name})-[:PART_OF]->(j:Jurisdiction) RETURN properties(j) AS props LIMIT 1"
-                            rows = neo4j_client.execute_query(query, params={"name": forum_name})
-                            if rows:
-                                j_props = rows[0].get("props") if isinstance(rows[0], dict) else None
-                                if isinstance(j_props, dict):
-                                    j_node_id = find_first_temp_id("Jurisdiction")
-                                    if not j_node_id:
-                                        j_node_id = f"n{next_idx}"
-                                        next_idx += 1
-                                        self.state.nodes_accumulated.append({"temp_id": j_node_id, "label": "Jurisdiction", "properties": j_props})
-                                    # Forum -> PART_OF -> Jurisdiction
-                                    if not edge_exists("Forum", "PART_OF", "Jurisdiction"):
-                                        self.state.edges_accumulated.append({"from": f_id, "to": j_node_id, "label": "PART_OF", "properties": {}})
-                                    # Case -> IN -> Jurisdiction
-                                    c_id = find_first_temp_id("Case")
-                                    if c_id and not edge_exists("Case", "IN", "Jurisdiction"):
-                                        self.state.edges_accumulated.append({"from": c_id, "to": j_node_id, "label": "IN", "properties": {}})
+                            # Get relationship labels from schema
+                            rel_forum_jurisdiction = get_relationship_label_for_edge("Forum", "Jurisdiction", self.state.rels_by_label or {})
+                            rel_case_jurisdiction = get_relationship_label_for_edge("Case", "Jurisdiction", self.state.rels_by_label or {})
+                            
+                            if rel_forum_jurisdiction:
+                                # Query uses the actual relationship label from schema
+                                query = f"MATCH (f:Forum {{name: $name}})-[:{rel_forum_jurisdiction}]->(j:Jurisdiction) RETURN properties(j) AS props LIMIT 1"
+                                rows = neo4j_client.execute_query(query, params={"name": forum_name})
+                                if rows:
+                                    j_props = rows[0].get("props") if isinstance(rows[0], dict) else None
+                                    if isinstance(j_props, dict):
+                                        j_node_id = find_first_temp_id("Jurisdiction")
+                                        if not j_node_id:
+                                            j_node_id = f"n{next_idx}"
+                                            next_idx += 1
+                                            self.state.nodes_accumulated.append({"temp_id": j_node_id, "label": "Jurisdiction", "properties": j_props})
+                                        # Forum -> Jurisdiction
+                                        if not edge_exists("Forum", rel_forum_jurisdiction, "Jurisdiction"):
+                                            self.state.edges_accumulated.append({"from": f_id, "to": j_node_id, "label": rel_forum_jurisdiction, "properties": {}})
+                                        # Case -> Jurisdiction
+                                        c_id = find_first_temp_id("Case")
+                                        if c_id and rel_case_jurisdiction and not edge_exists("Case", rel_case_jurisdiction, "Jurisdiction"):
+                                            self.state.edges_accumulated.append({"from": c_id, "to": j_node_id, "label": rel_case_jurisdiction, "properties": {}})
                 except Exception:
                     pass
             except Exception:
@@ -1213,6 +1266,14 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 logger.info(f"Phase 5: completed (nodes_added={max(0, nodes_after - nodes_before)}, edges_added={max(0, edges_after - edges_before)})")
             except Exception:
                 logger.info("Phase 5: selection and relationships completed")
+            
+            # Publish progress
+            if self.state.progress_callback:
+                try:
+                    self.state.progress_callback("Phase 5 complete: Selected relief types and forums", "phase5", 70)
+                except Exception as e:
+                    logger.warning(f"Failed to publish progress: {e}")
+            
             return {"status": "phase5_done"}
         except Exception as e:
             logger.warning(f"Phase 5: selection/relationship assignment failed: {e}")
@@ -1355,7 +1416,12 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 if sig:
                     existing_signatures.add(sig)
 
-            # Create Argument -> Law edges (RELIES_ON_LAW)
+            # Create Argument -> Law edges (get relationship label from schema)
+            rel_label_arg_law = get_relationship_label_for_edge("Argument", "Law", self.state.rels_by_label or {})
+            if not rel_label_arg_law:
+                logger.warning("Phase 6: No relationship found in schema for Argument -> Law")
+                return {"status": "phase6_skipped"}
+            
             existing_edges = {(e.get("from"), e.get("to"), e.get("label")) for e in (self.state.edges_accumulated or []) if isinstance(e, dict)}
             for m in arg_map_list:
                 if not isinstance(m, dict):
@@ -1367,9 +1433,9 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 l_id = created_ids_by_index.get(l_index)
                 if not isinstance(l_id, str):
                     continue
-                key = (a_id, l_id, "RELIES_ON_LAW")
+                key = (a_id, l_id, rel_label_arg_law)
                 if key not in existing_edges:
-                    self.state.edges_accumulated.append({"from": a_id, "to": l_id, "label": "RELIES_ON_LAW", "properties": {}})
+                    self.state.edges_accumulated.append({"from": a_id, "to": l_id, "label": rel_label_arg_law, "properties": {}})
                     existing_edges.add(key)
 
             try:
@@ -1544,7 +1610,11 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             add_items("Policy", policies, policy_model)
             add_items("FactPattern", factpatterns, fp_model)
 
-            # Create Issue relationships
+            # Create Issue relationships (get labels from schema)
+            rel_label_doctrine = get_relationship_label_for_edge("Issue", "Doctrine", self.state.rels_by_label or {})
+            rel_label_policy = get_relationship_label_for_edge("Issue", "Policy", self.state.rels_by_label or {})
+            rel_label_factpattern = get_relationship_label_for_edge("Issue", "FactPattern", self.state.rels_by_label or {})
+            
             existing_edges = {(e.get("from"), e.get("to"), e.get("label")) for e in (self.state.edges_accumulated or []) if isinstance(e, dict)}
             for m in issue_map:
                 if not isinstance(m, dict):
@@ -1553,26 +1623,26 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 di = m.get("doctrine_index")
                 pi = m.get("policy_index")
                 fi = m.get("factpattern_index")
-                if isinstance(i_id, str) and isinstance(di, int):
+                if isinstance(i_id, str) and isinstance(di, int) and rel_label_doctrine:
                     d_id = created_ids["Doctrine"].get(di)
                     if isinstance(d_id, str):
-                        key = (i_id, d_id, "RELATES_TO")
+                        key = (i_id, d_id, rel_label_doctrine)
                         if key not in existing_edges:
-                            self.state.edges_accumulated.append({"from": i_id, "to": d_id, "label": "RELATES_TO", "properties": {}})
+                            self.state.edges_accumulated.append({"from": i_id, "to": d_id, "label": rel_label_doctrine, "properties": {}})
                             existing_edges.add(key)
-                if isinstance(i_id, str) and isinstance(pi, int):
+                if isinstance(i_id, str) and isinstance(pi, int) and rel_label_policy:
                     p_id = created_ids["Policy"].get(pi)
                     if isinstance(p_id, str):
-                        key = (i_id, p_id, "RELATES_TO")
+                        key = (i_id, p_id, rel_label_policy)
                         if key not in existing_edges:
-                            self.state.edges_accumulated.append({"from": i_id, "to": p_id, "label": "RELATES_TO", "properties": {}})
+                            self.state.edges_accumulated.append({"from": i_id, "to": p_id, "label": rel_label_policy, "properties": {}})
                             existing_edges.add(key)
-                if isinstance(i_id, str) and isinstance(fi, int):
+                if isinstance(i_id, str) and isinstance(fi, int) and rel_label_factpattern:
                     f_id = created_ids["FactPattern"].get(fi)
                     if isinstance(f_id, str):
-                        key = (i_id, f_id, "RELATES_TO")
+                        key = (i_id, f_id, rel_label_factpattern)
                         if key not in existing_edges:
-                            self.state.edges_accumulated.append({"from": i_id, "to": f_id, "label": "RELATES_TO", "properties": {}})
+                            self.state.edges_accumulated.append({"from": i_id, "to": f_id, "label": rel_label_factpattern, "properties": {}})
                             existing_edges.add(key)
 
             try:
@@ -1718,8 +1788,16 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 if nm:
                     existing_names.add(nm)
 
-            # Create Case -> Party INVOLVES edges with role property
+            # Create Case -> Party and Proceeding -> Party edges (get relationship labels from schema)
             try:
+                # Get relationship labels from schema
+                rel_case_party = get_relationship_label_for_edge("Case", "Party", self.state.rels_by_label or {})
+                rel_proceeding_party = get_relationship_label_for_edge("Proceeding", "Party", self.state.rels_by_label or {})
+                
+                if not rel_case_party:
+                    logger.warning("Phase 8: No relationship found in schema for Case -> Party")
+                    return {"status": "phase8_skipped"}
+                
                 c_id = None
                 for n in (self.state.nodes_accumulated or []):
                     if isinstance(n, dict) and n.get("label") == "Case" and isinstance(n.get("temp_id"), str):
@@ -1737,21 +1815,22 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                         p_id = created_ids_by_index.get(p_idx)
                         if not isinstance(p_id, str):
                             continue
-                        key = (c_id, p_id, "INVOLVES")
+                        key = (c_id, p_id, rel_case_party)
                         if key not in existing_edges:
                             props = {"role": role}
-                            self.state.edges_accumulated.append({"from": c_id, "to": p_id, "label": "INVOLVES", "properties": props})
+                            self.state.edges_accumulated.append({"from": c_id, "to": p_id, "label": rel_case_party, "properties": props})
                             existing_edges.add(key)
 
-                    # Also create Proceeding -> Party INVOLVES edges (no properties defined in schema)
-                    proceeding_ids = [n.get("temp_id") for n in (self.state.nodes_accumulated or []) if isinstance(n, dict) and n.get("label") == "Proceeding" and isinstance(n.get("temp_id"), str)]
-                    party_ids = {pid for pid in created_ids_by_index.values() if isinstance(pid, str)}
-                    for pr_id in proceeding_ids:
-                        for p_id in party_ids:
-                            key = (pr_id, p_id, "INVOLVES")
-                            if key not in existing_edges:
-                                self.state.edges_accumulated.append({"from": pr_id, "to": p_id, "label": "INVOLVES", "properties": {}})
-                                existing_edges.add(key)
+                    # Also create Proceeding -> Party edges
+                    if rel_proceeding_party:
+                        proceeding_ids = [n.get("temp_id") for n in (self.state.nodes_accumulated or []) if isinstance(n, dict) and n.get("label") == "Proceeding" and isinstance(n.get("temp_id"), str)]
+                        party_ids = {pid for pid in created_ids_by_index.values() if isinstance(pid, str)}
+                        for pr_id in proceeding_ids:
+                            for p_id in party_ids:
+                                key = (pr_id, p_id, rel_proceeding_party)
+                                if key not in existing_edges:
+                                    self.state.edges_accumulated.append({"from": pr_id, "to": p_id, "label": rel_proceeding_party, "properties": {}})
+                                    existing_edges.add(key)
             except Exception:
                 pass
 
@@ -1761,6 +1840,14 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 logger.info(f"Phase 8: completed (nodes_added={max(0, nodes_after - nodes_before)}, edges_added={max(0, edges_after - edges_before)})")
             except Exception:
                 logger.info("Phase 8: party extraction/dedup and relationships completed")
+            
+            # Publish progress
+            if self.state.progress_callback:
+                try:
+                    self.state.progress_callback("Phase 8 complete: Extracted and linked parties", "phase8", 85)
+                except Exception as e:
+                    logger.warning(f"Failed to publish progress: {e}")
+            
             return {"status": "phase8_done"}
         except Exception as e:
             logger.warning(f"Phase 8: party extraction failed: {e}")
@@ -1768,6 +1855,19 @@ class CaseExtractFlow(Flow[CaseExtractState]):
 
     @listen(phase8_assign_parties)
     def phase9_validate_and_repair(self, _: Dict[str, Any]) -> Dict[str, Any]:
+        # Quick validation mode: just return the data without deep validation
+        # The flow phases already enforce schema rules, so validation is mainly for catching edge cases
+        import os
+        skip_validation = os.getenv("SKIP_CASE_VALIDATION", "false").lower() in ("true", "1", "yes")
+        
+        if skip_validation:
+            logger.info("Validation: skipped (SKIP_CASE_VALIDATION=true)")
+            return {
+                "case_name": self.state.filename,
+                "nodes": self.state.nodes_accumulated or [],
+                "edges": self.state.edges_accumulated or []
+            }
+        
         # Pull validators from state prepared in prepare_schema
         models_by_label = self.state.models_by_label
         rels_by_label = self.state.rels_by_label
@@ -1779,10 +1879,38 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             return {"case_name": self.state.filename, "nodes": self.state.nodes_accumulated or [], "edges": self.state.edges_accumulated or []}
 
         logger.info("Validation: starting")
+        
+        # Unwrap 'raw' field if present (CrewAI sometimes wraps structured output)
+        nodes = self.state.nodes_accumulated or []
+        unwrapped_nodes = []
+        unwrap_count = 0
+        for node in nodes:
+            if isinstance(node, dict):
+                props = node.get("properties") or {}
+                # Check if properties are wrapped in 'raw' field with JSON string
+                if isinstance(props, dict) and len(props) == 1 and "raw" in props:
+                    try:
+                        raw_val = props.get("raw")
+                        if isinstance(raw_val, str):
+                            unwrapped_props = json.loads(raw_val)
+                            # Create new node dict with unwrapped properties
+                            node = dict(node)  # shallow copy to preserve other fields
+                            node["properties"] = unwrapped_props
+                            unwrap_count += 1
+                    except Exception as e:
+                        logger.warning(f"Failed to unwrap 'raw' field for {node.get('temp_id')}: {e}")
+                unwrapped_nodes.append(node)
+        
+        if unwrap_count > 0:
+            logger.info(f"Unwrapped 'raw' field from {unwrap_count} nodes")
+        
+        edges = self.state.edges_accumulated or []
+        logger.info(f"Validation: input has {len(unwrapped_nodes)} nodes, {len(edges)} edges")
+        
         payload = {
             "case_name": self.state.filename,
-            "nodes": self.state.nodes_accumulated or [],
-            "edges": self.state.edges_accumulated or [],
+            "nodes": unwrapped_nodes,
+            "edges": edges,
         }
         cleaned, errors = validate_case_graph(
             payload,
@@ -1792,6 +1920,13 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             label_flags_by_label=label_flags_by_label,
             existing_catalog_by_label=self.state.existing_catalog_by_label if isinstance(self.state.existing_catalog_by_label, dict) else None,
         )
+        
+        # Log validation results
+        if errors:
+            logger.warning(f"Validation: found {len(errors)} errors")
+            logger.warning(f"Validation: first 5 errors: {errors[:5]}")
+            logger.info(f"Validation: cleaned output has {len(cleaned.get('nodes', []))} nodes, {len(cleaned.get('edges', []))} edges")
+        
         if not errors:
             try:
                 logger.info(f"Validation: passed (nodes={len(cleaned.get('nodes', []))}, edges={len(cleaned.get('edges', []))})")
@@ -1799,59 +1934,9 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 logger.info("Validation: passed with no errors")
             return cleaned
 
-        # One repair round
-        try:
-            from crewai import LLM
-            spec_text = self.state.schema_spec_text or ""
-            llm = LLM(model="gpt-4.1", temperature=0)
-            instruction = (
-                "You produced a CaseGraph JSON that did not fully comply with the schema rules. "
-                "Correct it so it passes validation. Return ONLY the corrected JSON.\n\n"
-                "Rules recap:\n"
-                "- Use only listed labels and properties. Include all required properties.\n"
-                "- Enforce data types (str/int/bool/list[str]).\n"
-                "- Enforce enum options if provided.\n"
-                "- Enforce date format YYYY-MM-DD when specified.\n"
-                "- If a label has can_create_new=false, you must match an existing node from the catalogs.\n"
-                "- Do not create nodes or properties marked ai_ignore.\n"
-                "- Edges: label allowed for the source label and targets the expected label; from/to refer to existing node temp_ids.\n"
-            )
-            user_content = (
-                f"SCHEMA SPEC:\n{spec_text}\n\n"
-                + "VALIDATION ERRORS:\n- " + "\n- ".join(errors) + "\n\n"
-                + f"CURRENT JSON:\n{json.dumps(cleaned, ensure_ascii=False)}\n\n"
-                + ("CATALOGS:\n" + json.dumps(self.state.existing_catalog_by_label or {}, ensure_ascii=False) + "\n\n")
-                + "Return ONLY JSON."
-            )
-            resp = llm.call([{ "role": "user", "content": instruction + "\n\n" + user_content }])
-            if resp:
-                text = str(resp).strip()
-                if text.startswith("```"):
-                    lines = text.split('\n')
-                    if lines and lines[0].startswith("```"):
-                        lines = lines[1:]
-                    if lines and lines[-1].startswith("```"):
-                        lines = lines[:-1]
-                    text = "\n".join(lines).strip()
-                repaired = json.loads(text)
-                repaired_clean, repaired_errors = validate_case_graph(
-                    repaired,
-                    models_by_label,
-                    rels_by_label,
-                    props_meta_by_label,
-                    label_flags_by_label=label_flags_by_label,
-                    existing_catalog_by_label=self.state.existing_catalog_by_label if isinstance(self.state.existing_catalog_by_label, dict) else None,
-                )
-                if not repaired_errors:
-                    try:
-                        logger.info(f"Validation: repair succeeded (nodes={len(repaired_clean.get('nodes', []))}, edges={len(repaired_clean.get('edges', []))})")
-                    except Exception:
-                        logger.info("Validation: repair succeeded")
-                    return repaired_clean
-        except Exception:
-            pass
-
-        logger.warning("Validation: returning cleaned output with errors present")
+        # Return cleaned output with validation errors logged
+        # Note: LLM repair was removed because it was slow (~5min) and removed all edges
+        logger.warning(f"Validation: returning cleaned output with {len(errors)} errors, {len(cleaned.get('edges', []))} edges retained")
         return cleaned
 
 

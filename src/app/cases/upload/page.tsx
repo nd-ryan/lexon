@@ -18,7 +18,8 @@ export default function CaseUploadPage() {
     const data = await res.json()
     setLoading(false)
     if (!res.ok || !data.success) { setError(data.detail || data.error || 'Upload failed'); return }
-    router.push(`/cases/${data.caseId}`)
+    // Redirect to progress page to track extraction
+    router.push(`/cases/upload/progress?jobId=${data.jobId}&caseId=${data.caseId}`)
   }
 
   return (
