@@ -1,0 +1,168 @@
+{
+  "_comment": "Manual display overrides for nodes without suitable name_properties. Edit safely; not overwritten by AI.",
+  "snippet": {
+    "default_max_chars": 96,
+    "per_label_max_chars": {
+      "Argument": 96,
+      "Issue": 96
+    }
+  },
+  "label_display_properties": {
+    "Argument": ["argument_text"],
+    "Issue": ["issue_text"],
+    "Ruling": ["ruling_text"],
+    "Evidence": ["description"]
+  },
+  "_node_card_comment": "Per-label configuration for which properties and relationships to show on node cards. You can remove items to hide them.",
+  "node_card": {
+    "Case": {
+      "properties": [
+        "summary",
+        "summary_embedding",
+        "case_name_embedding",
+        "status",
+        "decision_date",
+        "case_name",
+        "case_id",
+        "case_upload_code",
+        "case_type",
+        "outcome",
+        "case_citation"
+      ],
+      "relationships": ["HAS_PARTY", "RAISES", "HEARD_IN"]
+    },
+    "Party": {
+      "properties": [
+        "party_type",
+        "role",
+        "party_id",
+        "party_name",
+        "party_upload_code"
+      ],
+      "relationships": ["INVOLVED_IN"]
+    },
+    "Doctrine": {
+      "properties": [
+        "doctrine_id",
+        "doctrine_upload_code",
+        "doctrine_name",
+        "doctrine_name_embedding",
+        "doctrine_description",
+        "doctrine_description_embedding"
+      ],
+      "relationships": ["RELATED_TO_BY"]
+    },
+    "Argument": {
+      "properties": [
+        "argument_upload_code",
+        "argument_text_embedding",
+        "argument_text",
+        "argument_id"
+      ],
+      "relationships": [
+        "RELIES_ON_LAW",
+        "RELATES_TO_DOCTRINE",
+        "ADDRESSES",
+        "RELIES_ON",
+        "RELATES_TO_PATTERN",
+        "RESOLVED_BY"
+      ]
+    },
+    "Ruling": {
+      "properties": [
+        "ruling_ratio_embedding",
+        "ruling_upload_code",
+        "ruling_text_embedding",
+        "ruling_ratio",
+        "ruling_text",
+        "ruling_id"
+      ],
+      "relationships": ["RESOLVES", "RESULTS_IN"]
+    },
+    "Relief": {
+      "properties": [
+        "relief_description",
+        "relief_upload_code",
+        "relief_id",
+        "relief_description_embedding"
+      ],
+      "relationships": ["RESULT_OF"]
+    },
+    "Evidence": {
+      "properties": [
+        "evidence_upload_code",
+        "description_embedding",
+        "description",
+        "document_id",
+        "credibility_flag",
+        "type"
+      ],
+      "relationships": []
+    },
+    "Jurisdiction": {
+      "properties": [
+        "jurisdiction_id",
+        "jurisdiction_upload_code",
+        "jurisdiction_name"
+      ],
+      "relationships": ["INCLUDES"]
+    },
+    "Forum": {
+      "properties": [
+        "forum_upload_code",
+        "forum_name_embedding",
+        "forum_id",
+        "forum_name",
+        "forum_type"
+      ],
+      "relationships": ["PART_OF", "HEARS"]
+    },
+    "Issue": {
+      "properties": [
+        "issue_upload_code",
+        "issue_subtype",
+        "issue_text",
+        "issue_type",
+        "issue_id",
+        "issue_text_embedding"
+      ],
+      "relationships": ["RAISED_BY", "RESOLVED_BY", "ADDRESSED_BY"]
+    },
+    "Law": {
+      "properties": [
+        "law_name_embedding",
+        "law_id",
+        "law_type",
+        "law_upload_code",
+        "law_text_embedding",
+        "law_text",
+        "law_name"
+      ],
+      "relationships": ["SUPPORTED_BY"]
+    },
+    "FactPattern": {
+      "properties": [
+        "fact_pattern_id",
+        "fact_pattern_name",
+        "fact_pattern_upload_code",
+        "fact_pattern_name_embedding"
+      ],
+      "relationships": ["PATTERN_FOR"]
+    },
+    "Fact": {
+      "properties": [
+        "fact_upload_code",
+        "fact_description",
+        "fact_description_embedding",
+        "fact_id",
+        "alleged",
+        "proved"
+      ],
+      "relationships": ["SUPPORTS"]
+    }
+  }
+}
+
+
+
+

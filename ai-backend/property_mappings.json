@@ -1,0 +1,26 @@
+{
+  "id_properties": [
+    "argument_id",
+    "case_id",
+    "citation",
+    "doctrine_id",
+    "document_id",
+    "fact_id",
+    "fact_pattern_id",
+    "forum_id",
+    "id",
+    "issue_id",
+    "jurisdiction_id",
+    "law_id",
+    "party_id",
+    "relief_id",
+    "ruling_id"
+  ],
+  "name_properties": [
+    "law_name",
+    "name"
+  ],
+  "last_updated": "1756881905",
+  "total_properties": 58,
+  "schema_source": "ai_mcp_neo4j"
+}

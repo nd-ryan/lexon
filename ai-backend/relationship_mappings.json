@@ -1,0 +1,95 @@
+{
+  "Argument->Doctrine": [
+    "RELATES_TO_DOCTRINE"
+  ],
+  "Argument->Fact": [
+    "RELIES_ON",
+    "RELIES_ON_FACT"
+  ],
+  "Argument->FactPattern": [
+    "RELATES_TO_PATTERN"
+  ],
+  "Argument->Issue": [
+    "ADDRESSES"
+  ],
+  "Argument->Law": [
+    "RELIES_ON",
+    "RELIES_ON_LAW"
+  ],
+  "Argument->Ruling": [
+    "RESOLVED_BY"
+  ],
+  "Case->Forum": [
+    "HEARD_IN"
+  ],
+  "Case->Issue": [
+    "RAISES"
+  ],
+  "Case->Party": [
+    "HAS_PARTY"
+  ],
+  "Doctrine->Argument": [
+    "RELATED_TO_BY"
+  ],
+  "Fact->Argument": [
+    "SUPPORTS"
+  ],
+  "FactPattern->Argument": [
+    "PATTERN_FOR"
+  ],
+  "Forum->Case": [
+    "HEARS"
+  ],
+  "Forum->Jurisdiction": [
+    "PART_OF"
+  ],
+  "Issue->Argument": [
+    "ADDRESSED_BY"
+  ],
+  "Issue->Case": [
+    "RAISED_BY"
+  ],
+  "Issue->Ruling": [
+    "RESOLVED_BY"
+  ],
+  "Jurisdiction->Forum": [
+    "INCLUDES"
+  ],
+  "Law->Argument": [
+    "SUPPORTED_BY"
+  ],
+  "Party->Case": [
+    "INVOLVED_IN"
+  ],
+  "Relief->Ruling": [
+    "RESULT_OF"
+  ],
+  "Ruling->Argument": [
+    "RESOLVES"
+  ],
+  "Ruling->Issue": [
+    "RESOLVES"
+  ],
+  "Ruling->Relief": [
+    "RESULTS_IN"
+  ],
+  "Argument->Provision": [
+    "RELIES_ON",
+    "RELIES_ON_LAW",
+    "RELIES_ON_PROVISION"
+  ],
+  "Fact->Evidence": [
+    "SUPPORTED_BY"
+  ],
+  "Case->Argument": [
+    "RESOLVES"
+  ],
+  "Issue->Doctrine": [
+    "RELATES_TO"
+  ],
+  "Issue->FactPattern": [
+    "RELATES_TO",
+    "RELATES_TO_FACT_PATTERN",
+    "RELATES_TO_PATTERN"
+  ]
+}

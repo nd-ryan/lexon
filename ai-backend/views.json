@@ -1,0 +1,98 @@
+{
+  "holdingsCentric": {
+    "description": "Organize case data by Holdings with hierarchical relationships",
+    "topLevel": {
+      "case": {
+        "label": "Case",
+        "single": true
+      },
+      "proceedings": {
+        "label": "Proceeding",
+        "via": "HAS_PROCEEDING",
+        "from": "Case"
+      },
+      "parties": {
+        "label": "Party",
+        "via": "INVOLVES",
+        "from": "Proceeding"
+      },
+      "forums": {
+        "label": "Forum",
+        "via": "HEARD_IN",
+        "from": "Proceeding"
+      },
+      "jurisdictions": {
+        "label": "Jurisdiction",
+        "via": "PART_OF",
+        "from": "Forum"
+      }
+    },
+    "holdings": {
+      "root": "Holding",
+      "structure": {
+        "holding": {
+          "self": true
+        },
+        "ruling": {
+          "via": "SETS",
+          "direction": "incoming",
+          "single": true,
+          "include": {
+            "reliefTypes": {
+              "via": "RESULTS_IN",
+              "label": "ReliefType"
+            }
+          }
+        },
+        "issue": {
+          "via": "ON_ISSUE",
+          "single": true,
+          "include": {
+            "doctrines": {
+              "via": "RELATES_TO_DOCTRINE",
+              "label": "Doctrine"
+            },
+            "policies": {
+              "via": "RELATES_TO_POLICY",
+              "label": "Policy"
+            },
+            "factPatterns": {
+              "via": "RELATES_TO_FACTPATTERN",
+              "label": "FactPattern"
+            }
+          }
+        },
+        "arguments": {
+          "via": "EVALUATED_IN",
+          "direction": "incoming",
+          "label": "Argument",
+          "include": {
+            "laws": {
+              "via": "RELIES_ON_LAW",
+              "label": "Law"
+            },
+            "facts": {
+              "via": "RELIES_ON_FACT",
+              "label": "Fact",
+              "include": {
+                "witnesses": {
+                  "via": "SUPPORTED_BY_WITNESS",
+                  "label": "Witness"
+                },
+                "evidence": {
+                  "via": "SUPPORTED_BY_EVIDENCE",
+                  "label": "Evidence"
+                },
+                "judicialNotice": {
+                  "via": "SUPPORTED_BY_JUDICIAL_NOTICE",
+                  "label": "JudicialNotice"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+

@@ -1,0 +1,259 @@
+[
+  {
+    "label": "Case",
+    "case_unique": true,
+    "can_create_new": true,
+    "instructions": "Identify the case metadata and produce a single Case node summarizing the decision. Include the official case name as the name, and use a concise case synopsis for summary.",
+    "examples": [
+      { "name": "Abrams v. United States", "summary": "Defendants were convicted under the Espionage Act for distributing leaflets urging resistance to U.S. war efforts. The Supreme Court affirmed their conviction, emphasizing the wartime context. A notable dissent by Justice Holmes emphasized the importance of free speech under the First Amendment." },
+      { "name": "Smith v. Acme Manufacturing Co.", "summary": "Plaintiff brought a products liability claim alleging a design defect in a hydraulic press that caused workplace injury. The appellate court affirmed part of the lower court's judgment but remanded for further proceedings on specific claims. The decision clarified the scope of manufacturer duty in design defect cases." },
+      { "name": "People v. Ortega", "summary": "Defendant appealed a conviction on grounds of unlawful search and seizure. The appellate court found that evidence had been obtained in violation of the Fourth Amendment and reversed the conviction. The ruling reinforced constitutional limits on warrantless searches." },
+      { "name": "Green Earth Alliance v. State Water Board", "summary": "An environmental advocacy group sought review of a discharge permit issued by the state agency. The court set aside the permit, holding that the agency failed to adequately consider cumulative environmental impacts as required by law. The decision underscored agencies' duty to conduct comprehensive environmental review." }
+    ],
+    "phase": 1,
+    "relationships": {
+      "RELATES_TO": { "target": "Case", "cardinality": "one-to-many" },
+      "HAS_PROCEEDING": { "target": "Proceeding", "cardinality": "one-to-many" }
+    }
+  },
+  {
+    "label": "Proceeding",
+    "case_unique": true,
+    "can_create_new": true,
+    "instructions": "Extract the distinct stage of the litigation relevant to the opinion (e.g., trial, summary judgment, appeal). Use the stage, docket number, and dates to summarize what occurred.",
+    "examples": [
+      { "stage": "Trial—Superior Court", "docket_no": "19-CV-78231", "start_date": "2021-03-08", "end_date": "2021-03-15" },
+      { "stage": "Appeal—Court of Appeal", "docket_no": "A165432", "start_date": "2022-01-10", "end_date": "2022-11-04" }
+    ],
+    "phase": 1,
+    "relationships": {
+      "HEARD_IN": { "target": "Forum", "cardinality": "one-to-one" },
+      "RESULTS_IN": { "target": "Ruling", "cardinality": "one-to-many" },
+      "ADDRESSES": { "target": "Issue", "cardinality": "one-to-many" },
+      "INVOLVES": { "target": "Party", "cardinality": "one-to-many" }
+    }
+  },
+  {
+    "label": "Holding",
+    "case_unique": true,
+    "can_create_new": true,
+    "instructions": "For the given Issue, state the court's holding as a clear, outcome-determinative rule or answer to that specific legal question. Each holding addresses exactly one issue. Avoid reasoning; focus on the bottom-line legal conclusion for this issue.",
+    "examples": [
+      { "type": "Fourth Amendment", "disposition": "reversed", "summary": "Warrantless search invalid; evidence suppressed." },
+      { "type": "Contract—Non-Compete", "disposition": "affirmed", "summary": "Covenant unenforceable due to overbreadth and lack of protectable interest." }
+    ],
+    "phase": 5,
+    "relationships": {
+      "ON_ISSUE": { "target": "Issue", "cardinality": "one-to-one" }
+    }
+  },
+  {
+    "label": "Argument",
+    "case_unique": true,
+    "can_create_new": true,
+    "instructions": "For the given Holding/Issue, extract ALL of the principal arguments advanced by any party that are relevant to this specific issue. Use a short label and put the thesis or rationale in text.",
+    "examples": [
+      { "label": "Federal preemption applies", "text": "Federal safety standards preempt state tort claims concerning labeling." },
+      { "label": "Habitability breach", "text": "Persistent mold and lack of heat breached the implied warranty of habitability." }
+    ],
+    "phase": 6,
+    "relationships": {
+      "EVALUATED_IN": { "target": "Holding", "cardinality": "many-to-many" },
+      "RELIES_ON_FACT": { "target": "Fact", "cardinality": "many-to-many" },
+      "RELIES_ON_LAW": { "target": "Law", "cardinality": "many-to-many" }
+    }
+  },
+  {
+    "label": "Ruling",
+    "case_unique": true,
+    "can_create_new": true,
+    "instructions": "Summarize the court's disposition (affirmed, reversed, remanded, etc.) and capture the operative basis in text. A single ruling may apply to multiple issues/holdings in the case.",
+    "examples": [
+      { "label": "Judgment affirmed", "decision_date": "2022-09-14", "type": "appeal", "text": "Sufficient evidence supported the jury's negligence finding." },
+      { "label": "Order reversed and remanded", "decision_date": "2023-02-27", "type": "post-trial decision", "text": "Trial court applied an incorrect standard for preliminary injunction." }
+    ],
+    "phase": 6,
+    "relationships": {
+      "SETS": { "target": "Holding", "cardinality": "one-to-many" },
+      "RESULTS_IN": { "target": "ReliefType", "cardinality": "one-to-many" },
+      "MODIFIES": { "target": "Ruling", "cardinality": "many-to-many" }
+    }
+  },
+  {
+    "label": "Evidence",
+    "case_unique": true,
+    "can_create_new": true,
+    "instructions": "List key pieces of evidence the court relied upon. Use the evidence type and summarize its content or relevance in description; indicate whether it was admitted.",
+    "examples": [
+      { "type": "Email chain", "description": "Internal messages showing knowledge of scheduling delays.", "admitted": "YES" },
+      { "type": "Dashcam video", "description": "Footage contradicting officer's account of the traffic stop.", "admitted": "YES" }
+    ],
+    "phase": 10,
+    "relationships": {}
+  },
+  {
+    "label": "Witness",
+    "case_unique": true,
+    "can_create_new": true,
+    "instructions": "Identify each witness referenced by the court. Use the person's name and type; briefly summarize testimony and whether the witness was admitted.",
+    "examples": [
+      { "name": "Dr. Elena Park", "type": "expert", "testimony_summary": "Orthopedic expert opined injuries consistent with repetitive strain.", "expert": true, "expert_type": "economics", "admitted": "YES" },
+      { "name": "Officer Luis Moreno", "type": "layperson", "testimony_summary": "Described chain of custody for seized laptop.", "expert": false, "admitted": "YES" }
+    ],
+    "phase": 10,
+    "relationships": {}
+  },
+  {
+    "label": "Issue",
+    "case_unique": true,
+    "can_create_new": true,
+    "instructions": "Create a new Issue node for each legal question decided by the court in neutral terms. Put the concise statement in label and the fuller question in text; include a brief summary. Each issue will have its own holding.",
+    "examples": [
+      { "label": "Enforceability of clickwrap", "text": "Is an online clickwrap agreement enforceable against the user?", "type": "procedural", "summary": "Click acceptance binds the user where terms are conspicuous and assent is clear." },
+      { "label": "Tolling by concealment", "text": "Was the statute of limitations tolled by fraudulent concealment?", "type": "substantive", "summary": "Concealment of defect reports tolled limitations period." }
+    ],
+    "phase": 1,
+    "relationships": {
+      "RELATES_TO_DOCTRINE": { "target": "Doctrine", "cardinality": "many-to-many" },
+      "RELATES_TO_POLICY": { "target": "Policy", "cardinality": "many-to-many" },
+      "RELATES_TO_FACTPATTERN": { "target": "FactPattern", "cardinality": "many-to-many" }
+    }
+  },
+  {
+    "label": "Fact",
+    "case_unique": true,
+    "can_create_new": true,
+    "instructions": "Extract material, case-dispositive facts credited by the court. Place the full fact sentence in text, note who alleged it, and whether it was proved.",
+    "examples": [
+      { "text": "The replacement valve failed pressure tests within two weeks of installation.", "alleged_by": "plaintiff", "proved": "yes" },
+      { "text": "The mobile app continued collecting GPS data after the user opted out.", "alleged_by": "plaintiff", "proved": "no" }
+    ],
+    "phase": 9,
+    "relationships": {
+      "SUPPORTED_BY_WITNESS": { "target": "Witness", "cardinality": "many-to-many" },
+      "SUPPORTED_BY_EVIDENCE": { "target": "Evidence", "cardinality": "many-to-many" },
+      "SUPPORTED_BY_JUDICIAL_NOTICE": { "target": "JudicialNotice", "cardinality": "many-to-many" }
+    }
+  },
+  {
+    "label": "Party",
+    "case_unique": false,
+    "can_create_new": true,
+    "dependent_on": [],
+    "instructions": "Identify and extract all parties involved in the case, labeling them by role elsewhere. Use the entity's official name and the entity type.",
+    "examples": [
+      { "name": "Omega BioTech, Inc.", "type": "corporation" },
+      { "name": "Alicia Ramirez", "type": "individual" }
+    ],
+    "phase": 3,
+    "relationships": {}
+  },
+  {
+    "label": "Doctrine",
+    "case_unique": false,
+    "can_create_new": true,
+    "dependent_on": ["Issue"],
+    "instructions": "Link each issue to the governing legal doctrine(s). Use the doctrine name and give a short, jurisdiction-neutral description plus category.",
+    "examples": [
+      { "name": "Business Judgment Rule", "description": "Deference to informed, good-faith board decisions absent fraud or self-dealing.", "category": "corporate" },
+      { "name": "Daubert Standard", "description": "Expert testimony must be relevant and reliably grounded in scientific methodology.", "category": "evidentiary" }
+    ],
+    "phase": 4,
+    "relationships": {
+      "RELATES_TO": { "target": "Doctrine", "cardinality": "many-to-many" }
+    }
+  },
+  {
+    "label": "Policy",
+    "case_unique": false,
+    "can_create_new": true,
+    "dependent_on": ["Issue"],
+    "instructions": "Capture explicit policy considerations the court invokes. Use a concise name, short description, and the relevant discipline.",
+    "examples": [
+      { "name": "Encouraging prompt product recalls", "description": "Liability rules should not deter swift disclosure of defects.", "discipline": "economics" },
+      { "name": "Finality of arbitration awards", "description": "Limiting judicial review preserves efficiency and party autonomy.", "discipline": "law & economics" }
+    ],
+    "phase": 4,
+    "relationships": {
+      "RELATES_TO": { "target": "Policy", "cardinality": "many-to-many" }
+    }
+  },
+  {
+    "label": "Law",
+    "case_unique": false,
+    "can_create_new": true,
+    "dependent_on": ["Argument"],
+    "instructions": "List the specific constitutional provisions, statutes, regulations, rules, contracts, or cases cited. Use the official name and include the operative text; provide the type and citation.",
+    "examples": [
+      { "name": "U.C.C. § 2-314—Implied Warranty of Merchantability", "text": "Goods must be fit for the ordinary purposes for which such goods are used.", "type": "statute", "citation": "U.C.C. § 2-314" },
+      { "name": "Cal. Civ. Proc. Code § 425.16—Anti-SLAPP", "text": "Allows early dismissal of suits arising from protected speech on public issues.", "type": "statute", "citation": "Cal. Civ. Proc. Code § 425.16" }
+    ],
+    "phase": 7,
+    "relationships": {}
+  },
+  {
+    "label": "FactPattern",
+    "case_unique": false,
+    "can_create_new": true,
+    "dependent_on": ["Issue"],
+    "instructions": "Abstract the recurring scenario that the issue relates to. Use a succinct name and a short description.",
+    "examples": [
+      { "name": "Medical Device Off-Label Promotion", "description": "Manufacturer communications to physicians about unapproved uses." },
+      { "name": "Gig-Worker Misclassification", "description": "Platform control over workers resembles employment relationship." }
+    ], 
+    "phase": 4,
+    "relationships": {
+      "RELATES_TO": { "target": "FactPattern", "cardinality": "many-to-many" }
+    }
+  },
+  {
+    "label": "ReliefType",
+    "case_unique": false,
+    "can_create_new": false,
+    "instructions": "Select the type(s) of relief awarded or sought as defined by the schema. Use the standardized type and a short description.",
+    "examples": [
+      { "type": "injunction", "description": "Order restraining competitor from using misappropriated trade secrets." },
+      { "type": "declaratory", "description": "Declaration that insurer owes no duty to defend under the policy." }
+    ],
+    "phase": 8,
+    "relationships": {}
+  },
+  {
+    "label": "Jurisdiction",
+    "case_unique": false,
+    "can_create_new": false,
+    "instructions": "Choose the relevant jurisdiction entity. Use the official jurisdiction name.",
+    "examples": [
+      { "name": "U.S. Supreme Court" },
+      { "name": "California Court of Appeal, First District" }
+    ],
+    "phase": 2,
+    "relationships": {}
+  },
+  {
+    "label": "Forum",
+    "case_unique": false,
+    "can_create_new": false,
+    "instructions": "Select the adjudicative body where the matter was heard (court, agency, board). Use the forum name and type.",
+    "examples": [
+      { "name": "U.S. District Court for the Southern District of New York", "type": "federal trial court" },
+      { "name": "National Labor Relations Board", "type": "administrative agency" }
+    ],
+    "phase": 2,
+    "relationships": {
+      "PART_OF": { "target": "Jurisdiction", "cardinality": "one-to-one" }
+    }
+  },
+  {
+    "label": "JudicialNotice",
+    "case_unique": false,
+    "can_create_new": true,
+    "ai_ignore": true,
+    "instructions": "When applicable, capture facts the court takes judicial notice of. Use the type and a short description of what was noticed.",
+    "examples": [
+      { "type": "publication", "description": "Court noticed FDA recall announcement as a matter of public record." },
+      { "type": "event", "description": "Court noticed state's declared emergency date for tolling analysis." }
+    ],
+    "relationships": {}
+  }
+]

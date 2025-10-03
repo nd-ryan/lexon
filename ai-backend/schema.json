@@ -1,0 +1,387 @@
+[
+  {
+    "label": "Case",
+    "case_unique": true,
+    "can_create_new": true,
+    "properties": {
+      "case_upload_code": { "type": "STRING", "ui": { "hidden": true } },
+      "case_id": { "type": "STRING", "ui": { "hidden": true } },
+      "name": { "type": "STRING", "ui": { "order": 1, "input": "text", "required": true, "label": "Name" } },
+      "name_embedding": { "type": "LIST", "ui": { "hidden": true } },
+      "citation": { "type": "STRING", "ui": { "order": 2, "input": "text", "label": "Citation", "required": true } },
+      "type": { "type": "STRING", "ui": { "order": 3, "input": "select", "options": ["criminal", "civil", "arbitration", "administrative"], "label": "Type", "required": true } },
+      "summary": { "type": "STRING", "ui": { "order": 4, "input": "textarea", "label": "Summary", "required": true } },
+      "summary_embedding": { "type": "LIST", "ui": { "hidden": true } },
+      "status": { "type": "STRING", "ai_ignore": true, "ui": { "order": 5, "input": "select", "options": ["final", "reversed", "pending"], "label": "Status", "required": true } },
+      "outcome": { "type": "STRING", "ui": { "order": 6, "input": "text", "label": "Outcome", "required": true, "notes": "e.g. conviction affirmed, injunction granted, regulation upheld, etc" } },
+      "court_level": { "type": "STRING", "ui": { "order": 7, "input": "select", "options": ["district", "circuit", "supreme court", "other"], "label": "Court level", "required": true } }
+    },
+    "relationships": {
+      "RELATES_TO": {
+        "target": "Case",
+        "properties": {
+          "type": { "type": "STRING", "ui": { "order": 1, "input": "select", "options": ["follows", "applies", "cited_approvingly", "extends", "distinguishes", "limits", "modifies", "overrules", "conflicts_with", "questions"], "label": "Type", "required": true } },
+          "strength": { "type": "FLOAT", "ui": { "order": 2, "input": "number", "label": "Strength", "required": true } },
+          "rationale": { "type": "STRING", "ui":  { "order": 3, "input": "textarea", "label": "Rationale", "required": true } }
+        }
+      },
+      "HAS_PROCEEDING": {
+        "target": "Proceeding"
+      }
+    }
+  },
+  {
+    "label": "Proceeding",
+    "case_unique": true,
+    "can_create_new": true,
+    "properties": {
+      "proceeding_upload_code": { "type": "STRING", "ui": { "hidden": true } },
+      "proceeding_id": { "type": "STRING", "ui": { "hidden": true } },
+      "stage": { "type": "STRING", "ui": { "order": 1, "input": "text", "required": true, "label": "Stage" } },
+      "docket_no": { "type": "STRING", "ui": { "order": 2, "input": "text", "required": true, "label": "Docket Number" } },
+      "start_date": { "type": "DATE", "ui": { "order": 3, "input": "date", "required": true, "label": "Start Date" } },
+      "end_date": { "type": "DATE", "ui": { "order": 4, "input": "date", "required": true, "label": "End Date" } }
+    },
+    "relationships": {
+      "HEARD_IN": {
+        "target": "Forum"
+      },
+      "RESULTS_IN": {
+        "target": "Ruling"
+      },
+      "ADDRESSES": {
+        "target": "Issue"
+      },
+      "INVOLVES": {
+        "target": "Party",
+        "properties": {
+          "role": { "type": "STRING", "ui": { "order": 1, "input": "select", "options": ["plaintiff", "defendant", "appellant", "appellee", "petitioner", "respondent"], "label": "Role", "required": true } }
+        }
+      }
+    }
+  },
+  {
+    "label": "Party",
+    "case_unique": false,
+    "can_create_new": true,
+    "properties": {
+      "party_upload_code": { "type": "STRING", "ui": { "hidden": true } },
+      "party_id": { "type": "STRING", "ui": { "hidden": true } },
+      "name": { "type": "STRING", "ui": { "order": 1, "input": "text", "required": true, "label": "Name" } },
+      "type": { "type": "STRING", "ui": { "order": 2, "input": "select", "options": ["individual", "corporation", "organization", "government"], "label": "Type", "required": true } }
+    },
+    "relationships": {}
+  },
+  {
+    "label": "Holding",
+    "case_unique": true,
+    "can_create_new": true,
+    "properties": {
+      "holding_upload_code": { "type": "STRING", "ui": { "hidden": true } },
+      "holding_id": { "type": "STRING", "ui": { "hidden": true } },
+      "type": { "type": "STRING", "ui": { "order": 1, "input": "text", "required": true, "label": "Type" } },
+      "disposition": { "type": "STRING", "ui": { "order": 2, "input": "text", "required": true, "label": "Disposition" } },
+      "summary": { "type": "STRING", "ui": { "order": 3, "input": "textarea", "required": true, "label": "Summary" } },
+      "summary_embedding": { "type": "LIST", "ui": { "hidden": true } }
+    },
+    "relationships": {
+      "ON_ISSUE": {
+        "target": "Issue"
+      }
+    }
+  },
+  {
+    "label": "Doctrine",
+    "case_unique": false,
+    "can_create_new": true,
+    "properties": {
+      "doctrine_upload_code": { "type": "STRING", "ui": { "hidden": true } },
+      "doctrine_id": { "type": "STRING", "ui": { "hidden": true } },
+      "name": { "type": "STRING", "ui": { "order": 1, "input": "text", "required": true, "label": "Name" } },
+      "name_embedding": { "type": "LIST", "ui": { "hidden": true } },
+      "description": { "type": "STRING", "ui": { "order": 2, "input": "textarea", "label": "Description", "required": true } },
+      "description_embedding": { "type": "LIST", "ui": { "hidden": true } },
+      "category": { "type": "STRING", "ui": { "order": 3, "input": "text", "required": true, "label": "Category", "notes": "e.g., constitutional, evidentiary, tort, antitrust, copyright" } }
+    },
+    "relationships": {
+      "RELATES_TO": {
+        "target": "Doctrine",
+        "properties": {
+          "type": { "type": "STRING", "ui": { "order": 1, "input": "select", "options": ["FOLLOWS", "APPLIES", "CITED_APPROVINGLY", "EXTENDS", "DISTINGUISHES", "LIMITS", "MODIFIES", "OVERRULES", "CONFLICTS_WITH", "QUESTIONS"], "label": "Type", "required": true } },
+          "relationship_strength": { "type": "FLOAT", "ui": { "order": 2, "input": "number", "label": "Relationship Strength", "required": true } },
+          "relationship_rationale": { "type": "STRING", "ui": { "order": 3, "input": "textarea", "label": "Relationship Rationale", "required": true } }
+        }
+      }
+    }
+  },
+  {
+    "label": "Policy",
+    "case_unique": false,
+    "can_create_new": true,
+    "properties": {
+      "policy_upload_code": { "type": "STRING", "ui": { "hidden": true } },
+      "policy_id": { "type": "STRING", "ui": { "hidden": true } },
+      "name": { "type": "STRING", "ui": { "order": 1, "input": "text", "required": true, "label": "Name", "notes": "e.g., Press Freedom, Child Protection, National Security" } },
+      "name_embedding": { "type": "LIST", "ui": { "hidden": true } },
+      "description": { "type": "STRING", "ui": { "order": 2, "input": "textarea", "label": "Description", "required": true } },
+      "description_embedding": { "type": "LIST", "ui": { "hidden": true } },
+      "discipline": { "type": "STRING", "ui": { "order": 3, "input": "text", "required": true, "label": "Discipline", "notes": "e.g., economics, psychology, sociology" } }
+    },
+    "relationships": {
+      "RELATES_TO": {
+        "target": "Policy",
+        "properties": {
+          "type": { "type": "STRING", "ui": { "order": 1, "input": "select", "options": ["FOLLOWS", "APPLIES", "CITED_APPROVINGLY", "EXTENDS", "DISTINGUISHES", "LIMITS", "MODIFIES", "OVERRULES", "CONFLICTS_WITH", "QUESTIONS"], "label": "Type", "required": true } },
+          "relationship_strength": { "type": "FLOAT", "ui": { "order": 2, "input": "number", "label": "Relationship Strength", "required": true } },
+          "relationship_rationale": { "type": "STRING", "ui": { "order": 3, "input": "textarea", "label": "Relationship Rationale", "required": true } }
+        }
+      }
+    }
+  },
+  {
+    "label": "Argument",
+    "case_unique": true,
+    "can_create_new": true,
+    "properties": {
+      "argument_upload_code": { "type": "STRING", "ui": { "hidden": true } },
+      "argument_id": { "type": "STRING", "ui": { "hidden": true } },
+      "label": { "type": "STRING", "ui": { "order": 1, "input": "text", "required": true, "label": "Label" } },
+      "text": { "type": "STRING", "ui": { "order": 2, "input": "textarea", "label": "Text", "required": true } },
+      "text_embedding": { "type": "LIST", "ui": { "hidden": true } },
+      "type": { "type": "STRING", "ui": { "order": 3, "input": "select", "options": ["substantive", "procedural", "constitutional"], "label": "Type", "required": true } },
+      "raised_by": { "type": "STRING", "ui": { "order": 4, "input": "select", "options": ["plaintiff", "defendant", "appellant", "appellee", "petitioner", "respondent"], "label": "Raised by", "required": true } }
+    },
+    "relationships": {
+      "EVALUATED_IN": {
+        "target": "Holding",
+        "properties": {
+          "status": { "type": "STRING", "ui": { "order": 1, "input": "select", "options": ["Supported", "Rejected"], "label": "Status", "required": true } }
+        }
+      },
+      "RELIES_ON_FACT": {
+        "target": "Fact"
+      },
+      "RELIES_ON_LAW": {
+        "target": "Law"
+      }
+    }
+  },
+  {
+    "label": "Ruling",
+    "case_unique": true,
+    "can_create_new": true,
+    "properties": {
+      "ruling_upload_code": { "type": "STRING", "ui": { "hidden": true } },
+      "ruling_id": { "type": "STRING", "ui": { "hidden": true } },
+      "label": { "type": "STRING", "ui": { "order": 1, "input": "text", "required": true, "label": "Label", "notes": "brief label, e.g., Content-Based Ban Invalid" } },
+      "decision_date": { "type": "DATE", "ui": { "order": 2, "input": "date", "required": true, "label": "Decision Date" } },
+      "type": { "type": "STRING", "ui": { "order": 3, "input": "select", "options": ["interim", "temporary", "discovery", "jury verdict", "bench verdict", "post-trial decision", "appeal"], "label": "Type", "required": true } },
+      "text": { "type": "STRING", "ui": { "order": 4, "input": "textarea", "label": "Text", "required": true, "notes": "full description of the court's reasoning and decision on issue" } },
+      "text_embedding": { "type": "LIST", "ui": { "hidden": true } }
+    },
+    "relationships": {
+      "SETS": {
+        "target": "Holding",
+        "properties": {
+          "in_favor": { "type": "STRING", "ui": { "order": 1, "input": "select", "options": ["plaintiff", "defendant", "appellant", "appellee", "petitioner", "respondent"], "label": "In Favor", "required": true } }
+        }
+      },
+      "RESULTS_IN": {
+        "target": "ReliefType",
+        "properties": {
+          "relief_status": { "type": "STRING", "ui": { "order": 1, "input": "select", "options": ["granted", "denied", "partially granted"], "label": "Relief Status", "required": true } },
+          "amount": { "type": "FLOAT", "ui": { "order": 2, "input": "number", "label": "Amount", "required": false, "notes": "if monetary, null if N/A" } },
+          "description": { "type": "STRING", "ui": { "order": 3, "input": "textarea", "label": "Description", "required": true, "notes": "for non-monetary" } }
+        }
+      },
+      "MODIFIES": {
+        "target": "Ruling"
+      }
+    }
+  },
+  {
+    "label": "ReliefType",
+    "case_unique": false,
+    "can_create_new": false,
+    "properties": {
+      "relief_type_upload_code": { "type": "STRING", "ui": { "hidden": true } },
+      "relief_type_id": { "type": "STRING", "ui": { "hidden": true } },
+      "type": { "type": "STRING", "ui": { "order": 1, "input": "select", "options": ["injunction", "damages", "declaratory", "habeas corpus", "specific performance", "royalty", "accounting"], "label": "Type", "required": true } },
+      "description": { "type": "STRING", "ui": { "order": 2, "input": "textarea", "label": "Description", "required": true } },
+      "description_embedding": { "type": "LIST", "ui": { "hidden": true } }
+    },
+    "relationships": {}
+  },
+  {
+    "label": "Evidence",
+    "case_unique": true,
+    "can_create_new": true,
+    "properties": {
+      "evidence_upload_code": { "type": "STRING", "ui": { "hidden": true } },
+      "evidence_id": { "type": "STRING", "ui": { "hidden": true } },
+      "type": { "type": "STRING", "ui": { "order": 1, "input": "text", "required": true, "label": "Type", "notes": "e.g., email, message, document, photograph, forensic, digital" } },
+      "description": { "type": "STRING", "ui": { "order": 2, "input": "textarea", "label": "Description", "required": true } },
+      "description_embedding": { "type": "LIST", "ui": { "hidden": true } },
+      "admitted": { "type": "STRING", "ui": { "order": 3, "input": "select", "options": ["YES", "NO", "NOT_CONSIDERED"], "label": "Admitted", "required": true } }
+    },
+    "relationships": {}
+  },
+  {
+    "label": "Witness",
+    "case_unique": true,
+    "can_create_new": true,
+    "properties": {
+      "witness_upload_code": { "type": "STRING", "ui": { "hidden": true } },
+      "witness_id": { "type": "STRING", "ui": { "hidden": true } },
+      "name": { "type": "STRING", "ui": { "order": 1, "input": "text", "required": true, "label": "Name" } },
+      "name_embedding": { "type": "LIST", "ui": { "hidden": true } },
+      "type": { "type": "STRING", "ui": { "order": 2, "input": "select", "options": ["expert", "layperson", "character"], "label": "Type", "required": true } },
+      "testimony_summary": { "type": "STRING", "ui": { "order": 3, "input": "textarea", "label": "Testimony Summary", "required": true } },
+      "testimony_summary_embedding": { "type": "LIST", "ui": { "hidden": true } },
+      "expert_type": { "type": "STRING", "ui": { "order": 4, "input": "select", "options": ["economics", "psychology", "sociology", "other"], "label": "Expert Type", "required": false, "notes": "only applicable when type is 'expert'" } },
+      "admitted": { "type": "STRING", "ui": { "order": 5, "input": "select", "options": ["YES", "NO", "NOT_CONSIDERED"], "label": "Admitted", "required": true } }
+    },
+    "relationships": {}
+  },
+  {
+    "label": "JudicialNotice",
+    "case_unique": false,
+    "can_create_new": true,
+    "ai_ignore": true,
+    "properties": {
+      "notice_upload_code": { "type": "STRING", "ui": { "hidden": true } },
+      "notice_id": { "type": "STRING", "ui": { "hidden": true } },
+      "type": { "type": "STRING", "ui": { "order": 1, "input": "text", "required": true, "label": "Type", "notes": "e.g., event, publication" } },
+      "description": { "type": "STRING", "ui": { "order": 2, "input": "textarea", "label": "Description", "required": true } },
+      "description_embedding": { "type": "LIST", "ui": { "hidden": true } }
+    },
+    "relationships": {}
+  },
+  {
+    "label": "Jurisdiction",
+    "case_unique": false,
+    "can_create_new": false,
+    "properties": {
+      "jurisdiction_upload_code": { "type": "STRING", "ui": { "hidden": true } },
+      "jurisdiction_id": { "type": "STRING", "ui": { "hidden": true } },
+      "name": { "type": "STRING", "ui": { "order": 1, "input": "text", "required": true, "label": "Name" } }
+    },
+    "relationships": {}
+  },
+  {
+    "label": "Forum",
+    "case_unique": false,
+    "can_create_new": false,
+    "properties": {
+      "forum_upload_code": { "type": "STRING", "ui": { "hidden": true } },
+      "forum_id": { "type": "STRING", "ui": { "hidden": true } },
+      "name": { "type": "STRING", "ui": { "order": 1, "input": "text", "label": "Name", "required": true } },
+      "name_embedding": { "type": "LIST", "ui": { "hidden": true } },
+      "type": { "type": "STRING", "ui": { "order": 2, "input": "text", "label": "Type", "required": true } }
+    },
+    "relationships": {
+      "PART_OF": {
+        "target": "Jurisdiction"
+      }
+    }
+  },
+  {
+    "label": "Issue",
+    "case_unique": true,
+    "can_create_new": true,
+    "properties": {
+      "issue_upload_code": { "type": "STRING", "ui": { "hidden": true } },
+      "issue_id": { "type": "STRING", "ui": { "hidden": true } },
+      "label": { "type": "STRING", "ui": { "order": 1, "input": "text", "required": true, "label": "Label" } },
+      "text": { "type": "STRING", "ui": { "order": 2, "input": "textarea", "label": "Text", "required": true } },
+      "text_embedding": { "type": "LIST", "ui": { "hidden": true } },
+      "type": { "type": "STRING", "ui": { "order": 3, "input": "select", "options": ["substantive", "procedural", "constitutional"], "label": "Type", "required": true } },
+      "summary": { "type": "STRING", "ui": { "order": 4, "input": "textarea", "label": "Summary", "required": true } },
+      "summary_embedding": { "type": "LIST", "ui": { "hidden": true } }
+    },
+    "relationships": {
+      "RELATES_TO_DOCTRINE": {
+        "target": "Doctrine"
+      },
+      "RELATES_TO_POLICY": {
+        "target": "Policy"
+      },
+      "RELATES_TO_FACTPATTERN": {
+        "target": "FactPattern"
+      }
+    }
+  },
+  {
+    "label": "Law",
+    "case_unique": false,
+    "can_create_new": true,
+    "properties": {
+      "law_upload_code": { "type": "STRING", "ui": { "hidden": true } },
+      "law_id": { "type": "STRING", "ui": { "hidden": true } },
+      "name": { "type": "STRING", "ui": { "order": 1, "input": "text", "required": true, "label": "Name" } },
+      "name_embedding": { "type": "LIST", "ui": { "hidden": true } },
+      "text": { "type": "STRING", "ui": { "order": 2, "input": "textarea", "label": "Text", "required": true } },
+      "text_embedding": { "type": "LIST", "ui": { "hidden": true } },
+      "type": { "type": "STRING", "ui": { "order": 3, "input": "select", "options": ["constitution", "statute", "rule", "regulation", "contract", "common law"], "label": "Type", "required": true } },
+      "enactment_date": { "type": "DATE", "ui": { "order": 4, "input": "date", "required": false, "label": "Enactment Date" } },
+      "citation": { "type": "STRING", "ui": { "order": 5, "input": "text", "required": true, "label": "Citation", "notes": "e.g., Const. 1st Amendment; 42 U.S.C. § 1983" } }
+    },
+    "relationships": {}
+  },
+  {
+    "label": "FactPattern",
+    "case_unique": false,
+    "can_create_new": true,
+    "properties": {
+      "fact_pattern_upload_code": { "type": "STRING", "ui": { "hidden": true } },
+      "fact_pattern_id": { "type": "STRING", "ui": { "hidden": true } },
+      "name": { "type": "STRING", "ui": { "order": 1, "input": "text", "label": "Name", "required": true } },
+      "name_embedding": { "type": "LIST", "ui": { "hidden": true } },
+      "description": { "type": "STRING", "ui": { "order": 2, "input": "textarea", "label": "Description", "required": true } },
+      "description_embedding": { "type": "LIST", "ui": { "hidden": true } }
+    },
+    "relationships": {
+      "RELATES_TO": {
+        "target": "FactPattern",
+        "properties": {
+          "type": { "type": "STRING", "ui": { "order": 1, "input": "select", "options": ["FOLLOWS", "APPLIES", "CITED_APPROVINGLY", "EXTENDS", "DISTINGUISHES", "LIMITS", "MODIFIES", "OVERRULES", "CONFLICTS_WITH", "QUESTIONS"], "label": "Type", "required": true } },
+          "relationship_strength": { "type": "FLOAT", "ui": { "order": 2, "input": "number", "label": "Relationship Strength", "required": true } },
+          "relationship_rationale": { "type": "STRING", "ui": { "order": 3, "input": "textarea", "label": "Relationship Rationale", "required": true } }
+        }
+      }
+    }
+  },
+  {
+    "label": "Fact",
+    "case_unique": true,
+    "can_create_new": true,
+    "properties": {
+      "fact_upload_code": { "type": "STRING", "ui": { "hidden": true } },
+      "fact_id": { "type": "STRING", "ui": { "hidden": true } },
+      "text": { "type": "STRING", "ui": { "order": 1, "input": "textarea", "label": "Text", "required": true } },
+      "text_embedding": { "type": "LIST", "ui": { "hidden": true } },
+      "alleged_by": { "type": "STRING", "ui": { "order": 2, "input": "select", "options": ["plaintiff", "defendant", "petitioner", "respondent", "appellant", "appellee"], "label": "Alleged By", "required": true } },
+      "proved": { "type": "STRING", "ui": { "order": 3, "input": "select", "options": ["yes", "no", "not considered"], "label": "Proved", "required": true } }
+    },
+    "relationships": {
+      "SUPPORTED_BY_WITNESS": {
+        "target": "Witness",
+        "properties": {
+          "support_strength": { "type": "FLOAT", "ui": { "order": 1, "input": "number", "label": "Support Strength", "required": true, "notes": "0 to 100%" } }
+        }
+      },
+      "SUPPORTED_BY_EVIDENCE": {
+        "target": "Evidence",
+        "properties": {
+          "support_strength": { "type": "FLOAT", "ui": { "order": 1, "input": "number", "label": "Support Strength", "required": true, "notes": "0 to 100%" } }
+        }
+      },
+      "SUPPORTED_BY_JUDICIAL_NOTICE": {
+        "target": "JudicialNotice",
+        "properties": {
+          "support_strength": { "type": "FLOAT", "ui": { "order": 1, "input": "number", "label": "Support Strength", "required": true, "notes": "0 to 100%" } }
+        }
+      }
+    }
+  }
+]
