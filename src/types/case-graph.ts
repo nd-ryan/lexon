@@ -41,6 +41,8 @@ export interface SchemaPropertyDef {
 
 export interface SchemaItem {
   label: string;
+  case_unique?: boolean;
+  can_create_new?: boolean;
   properties?: Record<string, SchemaPropertyDef>;
   attributes?: Record<string, string>;
   relationships?: Record<string, string | { target: string }>;

@@ -6,6 +6,9 @@ import Button from '@/components/ui/button'
 import { Pencil, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/lib/store/appStore'
 import AddNodeModal from '@/components/cases/AddNodeModal.client'
+import SelectNodeModal from '@/components/cases/SelectNodeModal.client'
+import RelationshipAction from '@/components/cases/RelationshipAction.client'
+import { analyzeRelationship } from '@/lib/relationshipHelpers'
 
 export default function CaseEditorPage() {
   const params = useParams()
@@ -13,6 +16,8 @@ export default function CaseEditorPage() {
   const schema = useAppStore(s => s.schema as Schema | null)
   const [data, setData] = useState<CaseGraph | null>(null)
   const [formData, setFormData] = useState<CaseGraph>({ nodes: [], edges: [] })
+  const [displayData, setDisplayData] = useState<any>(null)
+  const [viewConfig, setViewConfig] = useState<any>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [editingEdgeIdx, setEditingEdgeIdx] = useState<number | null>(null)
@@ -20,7 +25,19 @@ export default function CaseEditorPage() {
   const [confirmDeleteIdx, setConfirmDeleteIdx] = useState<number | null>(null)
   const [scrollHistory, setScrollHistory] = useState<number[]>([])
   const [addModalOpen, setAddModalOpen] = useState(false)
-  const [addModalType] = useState<string>('')
+  const [addModalType, setAddModalType] = useState<string>('')
+  const [addModalContext, setAddModalContext] = useState<{
+    parentId?: string
+    relationship: string
+    direction: 'outgoing' | 'incoming'
+  } | null>(null)
+  const [selectModalOpen, setSelectModalOpen] = useState(false)
+  const [selectModalType, setSelectModalType] = useState<string>('')
+  const [selectModalContext, setSelectModalContext] = useState<{
+    parentId?: string
+    relationship: string
+    direction: 'outgoing' | 'incoming'
+  } | null>(null)
   // Local edit widgets commit on blur to avoid full re-render per keystroke
   const [activeHoldingId, setActiveHoldingId] = useState<string | null>(null)
   const [expandedArgs, setExpandedArgs] = useState<Set<string>>(new Set())
@@ -43,10 +60,18 @@ export default function CaseEditorPage() {
 
   useEffect(() => {
     (async () => {
-      const res = await fetch(`/api/cases/${id}`)
-      const d = await res.json()
-      setData(d.case)
-      setFormData(d.case?.extracted || {})
+      // Fetch both raw and display data
+      const [rawRes, displayRes] = await Promise.all([
+        fetch(`/api/cases/${id}`),
+        fetch(`/api/cases/${id}/display`)
+      ])
+      const rawData = await rawRes.json()
+      const display = await displayRes.json()
+      
+      setData(rawData.case)
+      setFormData(rawData.case?.extracted || {})
+      setDisplayData(display.success ? display.data : null)
+      setViewConfig(display.success ? display.viewConfig : null)
     })()
   }, [id])
 
@@ -56,6 +81,12 @@ export default function CaseEditorPage() {
       const res = await fetch(`/api/cases/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(formData) })
       const d = await res.json()
       setData(d.case)
+      
+      // Refetch display data after save
+      const displayRes = await fetch(`/api/cases/${id}/display`)
+      const display = await displayRes.json()
+      setDisplayData(display.success ? display.data : null)
+      setViewConfig(display.success ? display.viewConfig : null)
     } catch (e: any) {
       setError(e?.message || 'Failed to save')
     } finally {
@@ -73,146 +104,63 @@ export default function CaseEditorPage() {
     return spaced.charAt(0).toUpperCase() + spaced.slice(1)
   }
 
-  // Build node lookup to show labels and names for edge endpoints
+  // Build node lookup for editing operations
   const nodesArray = useMemo<GraphNode[]>(() => (Array.isArray(formData?.nodes) ? formData.nodes : []), [formData])
   const edgesArray = useMemo<GraphEdge[]>(() => (Array.isArray(formData?.edges) ? formData.edges : []), [formData])
   
-  // Build relationship map from schema to determine direction
-  const relationshipMap = useMemo(() => {
-    if (!schema || !Array.isArray(schema)) return {}
-    const map: Record<string, { from: string; to: string; label: string }> = {}
-    
-    schema.forEach((labelDef) => {
-      const sourceLabel = labelDef?.label
-      if (!sourceLabel) return
-      
-      const relationships = labelDef?.relationships || {}
-      Object.entries(relationships).forEach(([relLabel, relDef]) => {
-        const targetLabel = typeof relDef === 'string' ? relDef : (relDef as { target?: string })?.target
-        if (targetLabel) {
-          // Create a key that uniquely identifies this relationship
-          const key = `${sourceLabel}->${relLabel}->${targetLabel}`
-          map[key] = { from: sourceLabel, to: targetLabel, label: relLabel }
-        }
-      })
-    })
-    
-    return map
-  }, [schema])
+  // Extract holdings structure from view config
+  const holdingsStructure = useMemo(() => {
+    return viewConfig?.holdings?.structure || {}
+  }, [viewConfig])
   
-  // Helper to find relationship label between two node types from schema
-  const findRelationship = (fromLabel: string, toLabel: string): string | null => {
-    const matches = Object.values(relationshipMap).filter(
-      (rel) => rel.from === fromLabel && rel.to === toLabel
-    )
-    return matches.length > 0 ? matches[0].label : null
-  }
-  
-  // Helper to find nodes by label
-  const getNodesByLabel = (label: string): GraphNode[] => 
-    nodesArray.filter((n) => n?.label === label)
-  
-  
-  // Schema-aware helper to get related nodes
-  const getRelatedNodesByType = (nodeTempId: string, nodeLabel: string, targetLabel: string): GraphNode[] => {
-    // Find the relationship from schema
-    const relLabel = findRelationship(nodeLabel, targetLabel)
-    if (!relLabel) return []
-    
-    // Get edges using this relationship
-    const edges = edgesArray.filter((e) => 
-      e?.from === nodeTempId && e?.label === relLabel
-    )
-    return edges.map((e) => nodesArray.find((n) => n?.temp_id === e?.to)!).filter(Boolean)
-  }
-  
-  // Schema-aware helper for reverse relationships (incoming edges)
-  const getRelatedNodesByTypeReverse = (nodeTempId: string, sourceLabel: string, nodeLabel: string): GraphNode[] => {
-    // Find the relationship from schema (sourceLabel -> nodeLabel)
-    const relLabel = findRelationship(sourceLabel, nodeLabel)
-    if (!relLabel) return []
-    
-    // Get edges using this relationship (coming TO this node)
-    const edges = edgesArray.filter((e) => 
-      e?.to === nodeTempId && e?.label === relLabel
-    )
-    return edges.map((e) => nodesArray.find((n) => n?.temp_id === e?.from)!).filter(Boolean)
-  }
-  
-  // Organize data by Holdings
   const holdingsData = useMemo(() => {
-    const holdings = getNodesByLabel('Holding')
-    
-    return holdings.map((holding) => {
-      const holdingId = holding?.temp_id
-      
-      // Get Ruling for this Holding (Ruling -> Holding)
-      const rulings = getRelatedNodesByTypeReverse(holdingId, 'Ruling', 'Holding')
-      const ruling = rulings[0] // Should be one Ruling per Holding
-      
-      // Get ReliefTypes from Ruling (Ruling -> ReliefType)
-      const reliefTypes = ruling ? getRelatedNodesByType(ruling.temp_id, 'Ruling', 'ReliefType') : []
-      
-      // Get Issue for this Holding (Holding -> Issue)
-      const issues = getRelatedNodesByType(holdingId, 'Holding', 'Issue')
-      const issue = issues[0] // Should be one Issue per Holding
-      
-      // Get Doctrines, Policies, FactPatterns from Issue
-      const doctrines = issue ? getRelatedNodesByType(issue.temp_id, 'Issue', 'Doctrine') : []
-      const policies = issue ? getRelatedNodesByType(issue.temp_id, 'Issue', 'Policy') : []
-      const factPatterns = issue ? getRelatedNodesByType(issue.temp_id, 'Issue', 'FactPattern') : []
-      
-      // Get Arguments for this Holding (Argument -> Holding)
-      const argumentNodes = getRelatedNodesByTypeReverse(holdingId, 'Argument', 'Holding')
-      
-      // For each Argument, get Laws and Facts
-      const argumentsWithDetails = argumentNodes.map((arg) => {
-        const laws = getRelatedNodesByType(arg.temp_id, 'Argument', 'Law')
-        const facts = getRelatedNodesByType(arg.temp_id, 'Argument', 'Fact')
-        
-        // For each Fact, get Witnesses, Evidence, JudicialNotice
-        const factsWithSupport = facts.map((fact) => {
-          const witnesses = getRelatedNodesByType(fact.temp_id, 'Fact', 'Witness')
-          const evidence = getRelatedNodesByType(fact.temp_id, 'Fact', 'Evidence')
-          const judicialNotice = getRelatedNodesByType(fact.temp_id, 'Fact', 'JudicialNotice')
-          
-          return {
-            node: fact,
-            witnesses,
-            evidence,
-            judicialNotice
-          }
-        })
-        
-        return {
-          node: arg,
-          laws,
-          facts: factsWithSupport
-        }
-      })
-      
-      return {
-        holding,
-        ruling,
-        reliefTypes,
-        issue,
-        doctrines,
-        policies,
-        factPatterns,
-        arguments: argumentsWithDetails
+    return displayData?.holdings || []
+  }, [displayData])
+  
+  // Helper: Get nested field value from structured data
+  const getNestedValue = (obj: any, key: string): any => {
+    if (!obj) return null
+    // Try direct key first
+    if (obj[key] !== undefined) return obj[key]
+    // Try finding a node with this key
+    for (const k of Object.keys(obj)) {
+      const val = obj[k]
+      if (val && typeof val === 'object' && !Array.isArray(val) && val.temp_id) {
+        // This is likely a node, check if key matches
+        if (k === key) return val
       }
-    })
-  }, [nodesArray, edgesArray])
+    }
+    return null
+  }
+  
+  // Helper: Get all nested collections from structured data
+  const getNestedCollections = (obj: any, structureKeys: string[]): Record<string, any[]> => {
+    const collections: Record<string, any[]> = {}
+    for (const key of structureKeys) {
+      const val = obj[key]
+      if (Array.isArray(val)) {
+        collections[key] = val
+      } else if (val && typeof val === 'object') {
+        // Single item, treat as array of one
+        collections[key] = [val]
+      }
+    }
+    return collections
+  }
   
   // Detect shared Issues across multiple Holdings
   const sharedIssues = useMemo(() => {
     const issueUsage: Record<string, string[]> = {} // issue temp_id -> holding temp_ids
     
     holdingsData.forEach((h: any) => {
-      if (h.issue) {
-        const issueId = h.issue.temp_id
+      const issue = h.issue
+      if (issue && issue.temp_id) {
+        const issueId = issue.temp_id
+        const holdingId = h.holding?.temp_id
+        if (holdingId) {
         if (!issueUsage[issueId]) issueUsage[issueId] = []
-        issueUsage[issueId].push(h.holding.temp_id)
+          issueUsage[issueId].push(holdingId)
+        }
       }
     })
     
@@ -595,12 +543,12 @@ export default function CaseEditorPage() {
     )
   }
 
-  // Get Case, Proceeding, Parties for top section
-  const caseNode = getNodesByLabel('Case')[0]
-  const proceedingNodes = getNodesByLabel('Proceeding')
-  const partyNodes = getNodesByLabel('Party')
-  const forumNodes = getNodesByLabel('Forum')
-  const jurisdictionNodes = getNodesByLabel('Jurisdiction')
+  // Get Case, Proceeding, Parties for top section from backend-structured data
+  const caseNode = displayData?.case
+  const proceedingNodes = displayData?.proceedings || []
+  const partyNodes = displayData?.parties || []
+  const forumNodes = displayData?.forums || []
+  const jurisdictionNodes = displayData?.jurisdictions || []
   
   // Scroll to holding
   const scrollToHolding = (holdingId: string) => {
@@ -616,7 +564,7 @@ export default function CaseEditorPage() {
     if (holdingId) setActiveHoldingId(holdingId)
     const el = document.getElementById(`node-${nodeId}`)
     if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' })
     }
   }
 
@@ -649,6 +597,89 @@ export default function CaseEditorPage() {
     })
     setDeletingNodeId(null)
     setViewingConnectionsNodeId(null)
+  }
+
+  // Handler for adding a new node
+  const handleAddNode = (
+    nodeType: string, 
+    relationship: string, 
+    direction: 'outgoing' | 'incoming',
+    parentId?: string
+  ) => {
+    setAddModalType(nodeType)
+    setAddModalContext({ parentId, relationship, direction })
+    setAddModalOpen(true)
+  }
+
+  // Get parent node label for modal context
+  const getParentNodeLabel = (parentId: string | undefined): string => {
+    if (!parentId) return ''
+    const parentNode = nodesArray.find(n => n.temp_id === parentId)
+    return parentNode?.label || 'Node'
+  }
+
+  // Helper to get parent node for a top-level config entry
+  const getParentNodeFromConfig = (configKey: string): any => {
+    const config = viewConfig?.topLevel?.[configKey]
+    const fromLabel = config?.from
+    
+    if (!fromLabel) {
+      // No "from" field means it's directly on Case
+      return caseNode
+    }
+    
+    // Map label to actual node
+    switch (fromLabel) {
+      case 'Case':
+        return caseNode
+      case 'Proceeding':
+        return proceedingNodes[0]
+      case 'Forum':
+        return forumNodes[0]
+      case 'Jurisdiction':
+        return jurisdictionNodes[0]
+      default:
+        return caseNode
+    }
+  }
+
+  // Handler for selecting an existing catalog node
+  const handleSelectNode = (
+    nodeType: string, 
+    relationship: string, 
+    direction: 'outgoing' | 'incoming',
+    parentId?: string
+  ) => {
+    setSelectModalType(nodeType)
+    setSelectModalContext({ parentId, relationship, direction })
+    setSelectModalOpen(true)
+  }
+
+  // Get nodes available for selection (filter by type from existing nodes)
+  const getAvailableNodesForSelection = (nodeType: string): GraphNode[] => {
+    return nodesArray.filter(n => n.label === nodeType)
+  }
+
+  // Handle submission from select modal
+  const handleSelectNodeSubmit = (selectedNodeId: string) => {
+    if (!selectModalContext) return
+
+    const { parentId, relationship, direction } = selectModalContext
+
+    // Create edge between parent and selected node
+    const newEdge: GraphEdge = {
+      from: direction === 'outgoing' ? (parentId || '') : selectedNodeId,
+      to: direction === 'outgoing' ? selectedNodeId : (parentId || ''),
+      label: relationship
+    }
+
+    setFormData((prev: any) => {
+      const edges = Array.isArray(prev?.edges) ? [...prev.edges, newEdge] : [newEdge]
+      return { ...prev, edges }
+    })
+
+    setSelectModalOpen(false)
+    setSelectModalContext(null)
   }
 
   // Node Action Menu Component
@@ -737,6 +768,127 @@ export default function CaseEditorPage() {
     })
   }
 
+  // Section header with optional action button in top-right
+  const SectionHeader = ({
+    title,
+    actionButton,
+    className = ''
+  }: {
+    title: string
+    actionButton?: React.ReactNode
+    className?: string
+  }) => {
+    if (!actionButton) return null
+    
+    return (
+      <div className={`flex items-center justify-between mb-3 ${className}`}>
+        <h3 className="text-sm font-semibold text-gray-700">{title}</h3>
+        <div>{actionButton}</div>
+      </div>
+    )
+  }
+
+  // Unified node card styling
+  const NodeCard = ({ 
+    node, 
+    label, 
+    index, 
+    depth = 0, 
+    badge,
+    children 
+  }: { 
+    node: any; 
+    label: string; 
+    index?: number; 
+    depth?: number; 
+    badge?: React.ReactNode;
+    children?: React.ReactNode 
+  }) => {
+    const indentClass = depth === 0 ? '' : depth === 1 ? 'ml-6' : depth === 2 ? 'ml-12' : 'ml-18'
+    const displayLabel = index !== undefined ? `${label} ${index + 1}` : label
+    
+    // Different backgrounds for nodes with children to show containment
+    const hasChildren = !!children
+    const bgClass = hasChildren 
+      ? (depth === 0 ? 'bg-blue-50' : depth === 1 ? 'bg-teal-50' : depth === 2 ? 'bg-gray-50' : 'bg-green-50')
+      : 'bg-white'
+    
+    return (
+      <div id={`node-${node.temp_id}`} className={`${bgClass} rounded-lg border border-gray-300 p-4 shadow-sm ${indentClass}`}>
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <div className="text-sm font-semibold text-gray-900">{displayLabel}</div>
+            {badge}
+          </div>
+          <NodeActionMenu nodeId={node.temp_id} />
+        </div>
+        <ObjectFields 
+          obj={node.properties || {}} 
+          path={['nodes', nodesArray.indexOf(node), 'properties']} 
+        />
+        {children}
+      </div>
+    )
+  }
+
+  // Dynamic renderer for nested structures (sidebar)
+  const renderNestedStructureSidebar = (
+    data: any,
+    structureConfig: Record<string, any>,
+    holdingId?: string,
+    depth: number = 0
+  ): React.ReactElement[] => {
+    const elements: React.ReactElement[] = []
+    
+    for (const [key, config] of Object.entries(structureConfig)) {
+      if (config.self || key === 'holding') continue // Skip self-references
+      
+      const value = data[key]
+      if (!value) continue
+      
+      const items = Array.isArray(value) ? value : [value]
+      const isCollapsible = ['arguments', 'facts'].includes(key)
+      
+      items.forEach((item: any, idx: number) => {
+        if (!item || !item.temp_id) return
+        
+        const expanded = isCollapsible && 
+          (key === 'arguments' ? expandedArgs.has(item.temp_id) : expandedFacts.has(item.temp_id))
+        
+        const toggleFn = key === 'arguments' ? toggleArg : toggleFact
+        
+        elements.push(
+          <div key={`${key}-${item.temp_id}`} className="space-y-1">
+            <div className="flex items-center gap-1">
+              {isCollapsible && (
+                <div
+                  onClick={() => toggleFn(item.temp_id)}
+                  className="px-1 cursor-pointer text-gray-500 hover:text-gray-700"
+                >
+                  <span className="text-xs">{expanded ? '▼' : '▶'}</span>
+                </div>
+              )}
+              <div
+                onClick={() => scrollToNodeById(item.temp_id, holdingId)}
+                className="flex-1 px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-600 cursor-pointer"
+              >
+                {formatLabel(key === 'arguments' ? 'argument' : key === 'facts' ? 'fact' : item.label || key)} {idx + 1}
+              </div>
+            </div>
+            
+            {(expanded || !isCollapsible) && config.include && (
+              <div className="pl-5 space-y-1">
+                {renderNestedStructureSidebar(item, config.include, holdingId, depth + 1)}
+              </div>
+            )}
+          </div>
+        )
+      })
+    }
+    
+    return elements
+  }
+
   return (
     <div className="min-h-screen flex">
       {/* Sidebar Navigation */}
@@ -772,15 +924,6 @@ export default function CaseEditorPage() {
                   Forum {idx + 1}
                 </div>
               ))}
-              {jurisdictionNodes.map((juris: any, idx: number) => (
-                <div
-                  key={juris.temp_id}
-                  onClick={() => scrollToNodeById(juris.temp_id)}
-                  className="px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-600 cursor-pointer"
-                >
-                  Jurisdiction {idx + 1}
-                </div>
-              ))}
               {partyNodes.map((party: any, idx: number) => (
                 <div
                   key={party.temp_id}
@@ -799,14 +942,17 @@ export default function CaseEditorPage() {
             </h2>
             <div className="space-y-3">
               {holdingsData.map((h: any, idx: number) => {
-                const name = pickNodeName(h.holding) || `Holding ${idx + 1}`
-                const isActive = activeHoldingId === h.holding.temp_id
+                const holding = h.holding
+                if (!holding) return null
+                
+                const name = pickNodeName(holding) || `Holding ${idx + 1}`
+                const isActive = activeHoldingId === holding.temp_id
                 
                 return (
-                  <div key={h.holding.temp_id} className="space-y-1.5">
+                  <div key={holding.temp_id} className="space-y-1.5">
                     {/* Holding */}
                     <div
-                      onClick={() => scrollToHolding(h.holding.temp_id)}
+                      onClick={() => scrollToHolding(holding.temp_id)}
                       className={`px-2 py-1.5 rounded text-xs cursor-pointer ${
                         isActive ? 'bg-blue-100 text-blue-900 font-medium' : 'hover:bg-gray-100 text-gray-700'
                       }`}
@@ -814,229 +960,27 @@ export default function CaseEditorPage() {
                       <div className="truncate">{name}</div>
                     </div>
                     
-                    {/* Always show content */}
+                    {/* Dynamic content based on structure config */}
                     <div className="pl-4 space-y-1.5 border-l border-gray-300 ml-2">
-                        {/* Holding Details */}
                         <div
-                          onClick={() => scrollToNodeById(h.holding.temp_id, h.holding.temp_id)}
+                        onClick={() => scrollToNodeById(holding.temp_id, holding.temp_id)}
                           className="px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-600 cursor-pointer"
                         >
                           Holding Details
                         </div>
                         
-                        {/* Ruling and Relief Types */}
-                        {h.ruling && (
-                          <div className="space-y-1">
-                            <div
-                              onClick={() => scrollToNodeById(h.ruling.temp_id, h.holding.temp_id)}
-                              className="px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-600 cursor-pointer"
-                            >
-                              Ruling
+                      {holdingsStructure && renderNestedStructureSidebar(h, holdingsStructure, holding.temp_id)}
                             </div>
-                            {h.reliefTypes.length > 0 && (
-                              <div className="pl-4 space-y-1">
-                                {h.reliefTypes.map((relief: any, rIdx: number) => (
-                                  <div
-                                    key={relief.temp_id}
-                                    onClick={() => scrollToNodeById(relief.temp_id, h.holding.temp_id)}
-                                    className="px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-500 cursor-pointer"
-                                  >
-                                    Relief Type {rIdx + 1}
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                        
-                        {/* Issue and its sub-nodes */}
-                        {h.issue && (
-                          <div className="space-y-1">
-                            <div
-                              onClick={() => scrollToNodeById(h.issue.temp_id, h.holding.temp_id)}
-                              className="px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-600 cursor-pointer"
-                            >
-                              Issue
-                            </div>
-                            <div className="pl-4 space-y-1">
-                              {h.doctrines.length > 0 && (
-                                <div className="space-y-1">
-                                  <div className="text-xs font-semibold text-gray-600 px-2">Doctrines</div>
-                                  {h.doctrines.map((doc: any, docIdx: number) => (
-                                    <div
-                                      key={doc.temp_id}
-                                      onClick={() => scrollToNodeById(doc.temp_id, h.holding.temp_id)}
-                                      className="px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-500 cursor-pointer"
-                                    >
-                                      Doctrine {docIdx + 1}
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                              {h.policies.length > 0 && (
-                                <div className="space-y-1">
-                                  <div className="text-xs font-semibold text-gray-600 px-2">Policies</div>
-                                  {h.policies.map((pol: any, polIdx: number) => (
-                                    <div
-                                      key={pol.temp_id}
-                                      onClick={() => scrollToNodeById(pol.temp_id, h.holding.temp_id)}
-                                      className="px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-500 cursor-pointer"
-                                    >
-                                      Policy {polIdx + 1}
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                              {h.factPatterns.length > 0 && (
-                                <div className="space-y-1">
-                                  <div className="text-xs font-semibold text-gray-600 px-2">Fact Patterns</div>
-                                  {h.factPatterns.map((fp: any, fpIdx: number) => (
-                                    <div
-                                      key={fp.temp_id}
-                                      onClick={() => scrollToNodeById(fp.temp_id, h.holding.temp_id)}
-                                      className="px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-500 cursor-pointer"
-                                    >
-                                      Fact Pattern {fpIdx + 1}
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        )}
-                        
-                        {/* Arguments */}
-                        {h.arguments.map((argData: any, argIdx: number) => {
-                          const isArgExpanded = expandedArgs.has(argData.node.temp_id)
-                          
-                          return (
-                          <div key={argData.node.temp_id} className="space-y-1">
-                            <div className="flex items-center gap-1">
-                              <div
-                                onClick={() => toggleArg(argData.node.temp_id)}
-                                className="px-1 cursor-pointer text-gray-500 hover:text-gray-700"
-                              >
-                                <span className="text-xs">{isArgExpanded ? '▼' : '▶'}</span>
-                              </div>
-                              <div
-                                onClick={() => scrollToNodeById(argData.node.temp_id, h.holding.temp_id)}
-                                className="flex-1 px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-600 cursor-pointer"
-                              >
-                                Argument {argIdx + 1}
-                              </div>
-                            </div>
-                            
-                            {/* Show content if expanded */}
-                            {isArgExpanded && (
-                              <div className="pl-5 space-y-1">
-                                {/* Laws under this argument */}
-                                {argData.laws.length > 0 && (
-                                  <div className="space-y-1">
-                                    {argData.laws.map((law: any, lawIdx: number) => (
-                                      <div
-                                        key={law.temp_id}
-                                        onClick={() => scrollToNodeById(law.temp_id, h.holding.temp_id)}
-                                        className="px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-500 cursor-pointer"
-                                      >
-                                        Law {lawIdx + 1}
-                                      </div>
-                                    ))}
-                                  </div>
-                                )}
-                                
-                                {/* Facts under this argument */}
-                                {argData.facts.length > 0 && (
-                                  <div className="space-y-1">
-                                    {argData.facts.map((factData: any, factIdx: number) => {
-                                      const isFactExpanded = expandedFacts.has(factData.node.temp_id)
-                                      
-                                      return (
-                                      <div key={factData.node.temp_id} className="space-y-1">
-                                        <div className="flex items-center gap-1">
-                                          <div
-                                            onClick={() => toggleFact(factData.node.temp_id)}
-                                            className="px-1 cursor-pointer text-gray-500 hover:text-gray-700"
-                                          >
-                                            <span className="text-xs">{isFactExpanded ? '▼' : '▶'}</span>
-                                          </div>
-                                          <div
-                                            onClick={() => scrollToNodeById(factData.node.temp_id, h.holding.temp_id)}
-                                            className="flex-1 px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-500 cursor-pointer"
-                                          >
-                                            Fact {factIdx + 1}
-                                          </div>
-                                        </div>
-                                        
-                                        {/* Show fact content if expanded */}
-                                        {isFactExpanded && (
-                                          <div className="pl-5 space-y-1">
-                                            {/* Witnesses under this fact */}
-                                            {factData.witnesses.length > 0 && (
-                                              <div className="space-y-1">
-                                                {factData.witnesses.map((wit: any) => (
-                                                  <div
-                                                    key={wit.temp_id}
-                                                    onClick={() => scrollToNodeById(wit.temp_id, h.holding.temp_id)}
-                                                    className="px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-400 cursor-pointer"
-                                                  >
-                                                    Witness
-                                                  </div>
-                                                ))}
-                                              </div>
-                                            )}
-                                            
-                                            {/* Evidence under this fact */}
-                                            {factData.evidence.length > 0 && (
-                                              <div className="space-y-1">
-                                                {factData.evidence.map((ev: any, evIdx: number) => (
-                                                  <div
-                                                    key={ev.temp_id}
-                                                    onClick={() => scrollToNodeById(ev.temp_id, h.holding.temp_id)}
-                                                    className="px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-400 cursor-pointer"
-                                                  >
-                                                    Evidence {evIdx + 1}
-                                                  </div>
-                                                ))}
-                                              </div>
-                                            )}
-                                            
-                                            {/* Judicial Notice under this fact */}
-                                            {factData.judicialNotice.length > 0 && (
-                                              <div className="space-y-1">
-                                                {factData.judicialNotice.map((jn: any, jnIdx: number) => (
-                                                  <div
-                                                    key={jn.temp_id}
-                                                    onClick={() => scrollToNodeById(jn.temp_id, h.holding.temp_id)}
-                                                    className="px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-400 cursor-pointer"
-                                                  >
-                                                    Judicial Notice {jnIdx + 1}
-                                                  </div>
-                                                ))}
-                                              </div>
-                                            )}
-                                          </div>
-                                        )}
                                       </div>
                                       )
                                     })}
                                   </div>
-                                )}
                               </div>
-                            )}
-                          </div>
-                          )
-                        })}
-                      </div>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
         </div>
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 flex flex-col bg-gray-50">
         <div className="p-6 space-y-6 text-xs flex-1 overflow-y-auto">
           <h1 className="text-2xl font-semibold tracking-tight">Edit Case</h1>
         {error && (
@@ -1044,102 +988,144 @@ export default function CaseEditorPage() {
         )}
 
           {/* Top Section: Case, Proceeding, Parties */}
-          <div className="space-y-6">
-            <div className="border-b pb-4">
-              <h2 className="text-lg font-semibold text-gray-900 mb-3">Case Overview</h2>
+          <div className="space-y-4">
+            <div className="border-b pb-6">
+              <h2 className="text-lg font-semibold text-gray-900 mb-4">Case Overview</h2>
               
-              {/* Case Details */}
-              {caseNode && (
-                <div id={`node-${caseNode.temp_id}`} className="bg-white rounded-lg border p-4 mb-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="text-sm font-semibold text-gray-700">Case</div>
-                    <NodeActionMenu nodeId={caseNode.temp_id} />
-                  </div>
-                  <ObjectFields 
-                    obj={caseNode.properties || {}} 
-                    path={['nodes', nodesArray.indexOf(caseNode), 'properties']} 
-                  />
-                </div>
-              )}
-              
-              {/* Proceeding Details */}
-              {proceedingNodes.length > 0 && (
-                <div className="bg-white rounded-lg border p-4 mb-4">
-                  <div className="text-sm font-semibold text-gray-700 mb-2">Proceeding</div>
-                  {proceedingNodes.map((proc: any) => (
-                    <div key={proc.temp_id} id={`node-${proc.temp_id}`} className="mb-3 last:mb-0 bg-gray-50 rounded p-3 relative">
-                      <div className="absolute top-2 right-2">
-                        <NodeActionMenu nodeId={proc.temp_id} />
-                      </div>
-                      <ObjectFields 
-                        obj={proc.properties || {}} 
-                        path={['nodes', nodesArray.indexOf(proc), 'properties']} 
+              <div className="space-y-6">
+                {/* Case Details */}
+                {caseNode && <NodeCard node={caseNode} label="Case" depth={0} />}
+                
+                {/* Proceedings Section */}
+                {(() => {
+                  const parentNode = getParentNodeFromConfig('proceedings')
+                  const parentLabel = viewConfig?.topLevel?.proceedings?.from || 'Case'
+                  const state = analyzeRelationship(parentNode, 'proceedings', viewConfig?.topLevel || {}, schema, displayData)
+                  if (proceedingNodes.length === 0 && state) {
+                    return (
+                      <RelationshipAction
+                        state={state}
+                        parentNodeLabel={parentLabel}
+                        position="centered"
+                        onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, parentNode?.temp_id)}
+                        onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, parentNode?.temp_id)}
                       />
-                    </div>
-                  ))}
-                </div>
-              )}
-              
-              {/* Forum & Jurisdiction */}
-              {(forumNodes.length > 0 || jurisdictionNodes.length > 0) && (
-                <div className="bg-white rounded-lg border p-4 mb-4">
-                  <div className="text-sm font-semibold text-gray-700 mb-2">Forum & Jurisdiction</div>
-                  {forumNodes.map((forum: any) => (
-                    <div key={forum.temp_id} id={`node-${forum.temp_id}`} className="mb-3 bg-gray-50 rounded p-3 relative">
-                      <div className="flex items-center justify-between mb-1">
-                        <div className="text-xs font-medium text-gray-600">Forum</div>
-                        <NodeActionMenu nodeId={forum.temp_id} />
-                      </div>
-                      <ObjectFields 
-                        obj={forum.properties || {}} 
-                        path={['nodes', nodesArray.indexOf(forum), 'properties']} 
+                    )
+                  }
+                  return (
+                    <div>
+                      <SectionHeader
+                        title="Proceedings"
+                        actionButton={state && (
+                          <RelationshipAction
+                            state={state}
+                            parentNodeLabel={parentLabel}
+                            position="inline"
+                            onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, parentNode?.temp_id)}
+                            onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, parentNode?.temp_id)}
+                          />
+                        )}
                       />
-                    </div>
-                  ))}
-                  {jurisdictionNodes.map((jur: any) => (
-                    <div key={jur.temp_id} id={`node-${jur.temp_id}`} className="mb-3 last:mb-0 bg-gray-50 rounded p-3 relative">
-                      <div className="flex items-center justify-between mb-1">
-                        <div className="text-xs font-medium text-gray-600">Jurisdiction</div>
-                        <NodeActionMenu nodeId={jur.temp_id} />
+                      <div className="space-y-4">
+                        {proceedingNodes.map((proc: any, idx: number) => (
+                          <NodeCard key={proc.temp_id} node={proc} label="Proceeding" index={idx} depth={0} />
+                        ))}
                       </div>
-                      <ObjectFields 
-                        obj={jur.properties || {}} 
-                        path={['nodes', nodesArray.indexOf(jur), 'properties']} 
+                    </div>
+                  )
+                })()}
+                
+                {/* Forums Section */}
+                {(() => {
+                  const parentNode = getParentNodeFromConfig('forums')
+                  const parentLabel = viewConfig?.topLevel?.forums?.from || 'Proceeding'
+                  const state = analyzeRelationship(parentNode, 'forums', viewConfig?.topLevel || {}, schema, displayData)
+                  if (forumNodes.length === 0 && state) {
+                    return (
+                      <RelationshipAction
+                        state={state}
+                        parentNodeLabel={parentLabel}
+                        position="centered"
+                        onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, parentNode?.temp_id)}
+                        onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, parentNode?.temp_id)}
                       />
-                    </div>
-                  ))}
-                </div>
-              )}
-              
-              {/* Parties */}
-              {partyNodes.length > 0 && (
-                <div className="bg-white rounded-lg border p-4">
-                  <div className="text-sm font-semibold text-gray-700 mb-4">
-                    Parties ({partyNodes.length})
-                  </div>
-                  <div className="space-y-4">
-                    {partyNodes.map((party: any, partyIdx: number) => (
-                      <div key={party.temp_id} id={`node-${party.temp_id}`} className={`bg-gray-50 rounded p-2 pl-3 border-l-2 border-gray-200 relative ${partyIdx > 0 ? 'mt-4 pt-4 border-t border-gray-200' : ''}`}>
-                        <div className="flex items-start justify-between mb-1">
-                          <div className="text-[9px] font-bold text-gray-400 uppercase tracking-wide">
-                            Party {partyIdx + 1}
-                          </div>
-                          <NodeActionMenu nodeId={party.temp_id} />
-                        </div>
-                        <ObjectFields 
-                          obj={party.properties || {}} 
-                          path={['nodes', nodesArray.indexOf(party), 'properties']} 
-                        />
+                    )
+                  }
+                  return (
+                    <div>
+                      <SectionHeader
+                        title="Forums"
+                        actionButton={state && (
+                          <RelationshipAction
+                            state={state}
+                            parentNodeLabel={parentLabel}
+                            position="inline"
+                            onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, parentNode?.temp_id)}
+                            onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, parentNode?.temp_id)}
+                          />
+                        )}
+                      />
+                      <div className="space-y-4">
+                        {forumNodes.map((forum: any, idx: number) => (
+                          <NodeCard key={forum.temp_id} node={forum} label="Forum" index={idx} depth={0} />
+                        ))}
                       </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+                    </div>
+                  )
+                })()}
+                
+                {/* Parties Section */}
+                {(() => {
+                  const parentNode = getParentNodeFromConfig('parties')
+                  const parentLabel = viewConfig?.topLevel?.parties?.from || 'Proceeding'
+                  const state = analyzeRelationship(parentNode, 'parties', viewConfig?.topLevel || {}, schema, displayData)
+                  if (partyNodes.length === 0 && state) {
+                    return (
+                      <RelationshipAction
+                        state={state}
+                        parentNodeLabel={parentLabel}
+                        position="centered"
+                        onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, parentNode?.temp_id)}
+                        onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, parentNode?.temp_id)}
+                      />
+                    )
+                  }
+                  return (
+                    <div>
+                      <SectionHeader
+                        title="Parties"
+                        actionButton={state && (
+                          <RelationshipAction
+                            state={state}
+                            parentNodeLabel={parentLabel}
+                            position="inline"
+                            onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, parentNode?.temp_id)}
+                            onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, parentNode?.temp_id)}
+                          />
+                        )}
+                      />
+                      <div className="space-y-4">
+                        {partyNodes.map((party: any, idx: number) => (
+                          <NodeCard key={party.temp_id} node={party} label="Party" index={idx} depth={0} />
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })()}
+              </div>
             </div>
 
             {/* Holdings Sections */}
             {holdingsData.map((holdingData: any, idx: number) => {
-              const { holding, ruling, reliefTypes, issue, doctrines, policies, factPatterns, arguments: args } = holdingData
+              const holding = holdingData.holding
+              const ruling = holdingData.ruling
+              const reliefTypes = holdingData.ruling?.reliefTypes || []
+              const issue = holdingData.issue
+              const doctrines = holdingData.issue?.doctrines || []
+              const policies = holdingData.issue?.policies || []
+              const factPatterns = holdingData.issue?.factPatterns || []
+              const args = holdingData.arguments || []
+              
               const holdingName = pickNodeName(holding) || `Holding ${idx + 1}`
               const isShared = issue && sharedIssues[issue.temp_id]
               
@@ -1156,340 +1142,377 @@ export default function CaseEditorPage() {
                   
                   {/* Holding Details */}
           <div className="space-y-4">
-                    <div id={`node-${holding.temp_id}`} className="bg-white rounded-lg border p-4">
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="text-sm font-semibold text-gray-700">Holding Details</div>
-                        <NodeActionMenu nodeId={holding.temp_id} />
-                      </div>
-                      <ObjectFields 
-                        obj={holding.properties || {}} 
-                        path={['nodes', nodesArray.indexOf(holding), 'properties']} 
-                      />
-                    </div>
+                    <NodeCard node={holding} label="Holding Details" depth={0} />
                     
                     {/* Ruling */}
                     {ruling && (
-                      <div id={`node-${ruling.temp_id}`} className="bg-white rounded-lg border p-4">
-                        <div className="flex items-center justify-between mb-2">
-                          <div className="text-sm font-semibold text-gray-700">Ruling</div>
-                          <NodeActionMenu nodeId={ruling.temp_id} />
-                        </div>
-                        <ObjectFields 
-                          obj={ruling.properties || {}} 
-                          path={['nodes', nodesArray.indexOf(ruling), 'properties']} 
-                        />
-                        
+                      <NodeCard node={ruling} label="Ruling" depth={0}>
                         {/* Relief Types */}
-                        {reliefTypes.length > 0 && (
-                          <div className="mt-3 pl-4 border-l-2 border-blue-200">
-                            <div className="text-xs font-semibold text-gray-600 mb-3">
-                              Relief Types ({reliefTypes.length})
-                            </div>
-                            <div className="space-y-3">
-                              {reliefTypes.map((relief: any, relIdx: number) => (
-                                <div key={relief.temp_id} id={`node-${relief.temp_id}`} className={`bg-gray-50 rounded p-2 text-xs relative ${relIdx > 0 ? 'mt-3 pt-3 border-t border-gray-200' : ''}`}>
-                                  <div className="flex items-start justify-between mb-1">
-                                    <div className="text-[9px] font-bold text-gray-400 uppercase tracking-wide">
-                                      Relief Type {relIdx + 1}
-                                    </div>
-                                    <NodeActionMenu nodeId={relief.temp_id} />
-                                  </div>
-                                  <ObjectFields 
-                                    obj={relief.properties || {}} 
-                                    path={['nodes', nodesArray.indexOf(relief), 'properties']} 
+                        {(() => {
+                          const rulingStructure = holdingsStructure?.ruling?.include || {}
+                          const state = analyzeRelationship(ruling, 'reliefTypes', rulingStructure, schema, holdingData.ruling)
+                          return (
+                            <div className="mt-4">
+                              <SectionHeader
+                                title="Relief Types"
+                                actionButton={state && (
+                                  <RelationshipAction
+                                    state={state}
+                                    parentNodeLabel="Ruling"
+                                    position="inline"
+                                    onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, ruling.temp_id)}
+                                    onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, ruling.temp_id)}
                                   />
-                                </div>
-                              ))}
+                                )}
+                              />
+                              <div className="space-y-4">
+                                {reliefTypes.map((relief: any, relIdx: number) => (
+                                  <NodeCard key={relief.temp_id} node={relief} label="Relief Type" index={relIdx} depth={1} />
+                                ))}
+                              </div>
                             </div>
-                          </div>
-                        )}
-                      </div>
+                          )
+                        })()}
+                      </NodeCard>
                     )}
+                    {/* Add Ruling button if no ruling exists */}
+                    {!ruling && (() => {
+                      const state = analyzeRelationship(holding, 'ruling', holdingsStructure || {}, schema, holdingData)
+                      if (!state) return null
+                      return (
+                        <RelationshipAction
+                          state={state}
+                          parentNodeLabel="Holding"
+                          position="centered"
+                          onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, holding.temp_id)}
+                          onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, holding.temp_id)}
+                        />
+                      )
+                    })()}
                     
                     {/* Issue */}
                     {issue && (
-                      <div id={`node-${issue.temp_id}`} className={`bg-white rounded-lg border p-4 ${isShared ? 'border-amber-300 bg-amber-50/30' : ''}`}>
-                        <div className="flex items-center justify-between mb-2">
-                          <div className="flex items-center gap-2">
-                            <div className="text-sm font-semibold text-gray-700">Issue</div>
-                            {isShared && (
+                      <NodeCard 
+                        node={issue} 
+                        label="Issue" 
+                        depth={0}
+                        badge={isShared && (
                               <div className="text-[10px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full">
                                 Shared across {sharedIssues[issue.temp_id].length} holdings
                               </div>
                             )}
-                          </div>
-                          <NodeActionMenu nodeId={issue.temp_id} />
-                        </div>
-                        <ObjectFields 
-                          obj={issue.properties || {}} 
-                          path={['nodes', nodesArray.indexOf(issue), 'properties']} 
-                        />
-                        
+                      >
                         {/* Doctrines, Policies, Fact Patterns */}
-                        <div className="mt-3 space-y-3">
-                          {doctrines.length > 0 && (
-                            <div className="pl-4 border-l-2 border-purple-200">
-                              <div className="text-xs font-semibold text-gray-600 mb-3">
-                                Doctrines ({doctrines.length})
-                              </div>
-                              <div className="space-y-3">
-                                {doctrines.map((doc: any, docIdx: number) => (
-                                  <div key={doc.temp_id} id={`node-${doc.temp_id}`} className={`bg-gray-50 rounded p-2 text-xs relative ${docIdx > 0 ? 'mt-3 pt-3 border-t border-gray-200' : ''}`}>
-                                    <div className="flex items-start justify-between mb-1">
-                                      <div className="text-[9px] font-bold text-gray-400 uppercase tracking-wide">
-                                        Doctrine {docIdx + 1}
-                                      </div>
-                                      <NodeActionMenu nodeId={doc.temp_id} />
-                                    </div>
-                                    <ObjectFields 
-                                      obj={doc.properties || {}} 
-                                      path={['nodes', nodesArray.indexOf(doc), 'properties']} 
+                        <div className="mt-4 space-y-6">
+                          {/* Doctrines Section */}
+                          {(() => {
+                            const issueStructure = holdingsStructure?.issue?.include || {}
+                            const state = analyzeRelationship(issue, 'doctrines', issueStructure, schema, holdingData.issue)
+                            return (
+                              <div>
+                                <SectionHeader
+                                  title="Doctrines"
+                                  actionButton={state && (
+                                    <RelationshipAction
+                                      state={state}
+                                      parentNodeLabel="Issue"
+                                      position="inline"
+                                      onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, issue.temp_id)}
+                                      onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, issue.temp_id)}
                                     />
-                                  </div>
-                                ))}
+                                  )}
+                                />
+                                <div className="space-y-4">
+                                  {doctrines.map((doc: any, docIdx: number) => (
+                                    <NodeCard key={doc.temp_id} node={doc} label="Doctrine" index={docIdx} depth={1} />
+                                  ))}
+                                </div>
                               </div>
-                            </div>
-                          )}
+                            )
+                          })()}
                           
-                          {policies.length > 0 && (
-                            <div className="pl-4 border-l-2 border-green-200">
-                              <div className="text-xs font-semibold text-gray-600 mb-3">
-                                Policies ({policies.length})
-                              </div>
-                              <div className="space-y-3">
-                                {policies.map((pol: any, polIdx: number) => (
-                                  <div key={pol.temp_id} id={`node-${pol.temp_id}`} className={`bg-gray-50 rounded p-2 text-xs relative ${polIdx > 0 ? 'mt-3 pt-3 border-t border-gray-200' : ''}`}>
-                                    <div className="flex items-start justify-between mb-1">
-                                      <div className="text-[9px] font-bold text-gray-400 uppercase tracking-wide">
-                                        Policy {polIdx + 1}
-                                      </div>
-                                      <NodeActionMenu nodeId={pol.temp_id} />
-                                    </div>
-                                    <ObjectFields 
-                                      obj={pol.properties || {}} 
-                                      path={['nodes', nodesArray.indexOf(pol), 'properties']} 
+                          {/* Policies Section */}
+                          {(() => {
+                            const issueStructure = holdingsStructure?.issue?.include || {}
+                            const state = analyzeRelationship(issue, 'policies', issueStructure, schema, holdingData.issue)
+                            return (
+                              <div>
+                                <SectionHeader
+                                  title="Policies"
+                                  actionButton={state && (
+                                    <RelationshipAction
+                                      state={state}
+                                      parentNodeLabel="Issue"
+                                      position="inline"
+                                      onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, issue.temp_id)}
+                                      onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, issue.temp_id)}
                                     />
-                                  </div>
-                                ))}
+                                  )}
+                                />
+                                <div className="space-y-4">
+                                  {policies.map((pol: any, polIdx: number) => (
+                                    <NodeCard key={pol.temp_id} node={pol} label="Policy" index={polIdx} depth={1} />
+                                  ))}
+                                </div>
                               </div>
-                            </div>
-                          )}
+                            )
+                          })()}
                           
-                          {factPatterns.length > 0 && (
-                            <div className="pl-4 border-l-2 border-indigo-200">
-                              <div className="text-xs font-semibold text-gray-600 mb-3">
-                                Fact Patterns ({factPatterns.length})
-                              </div>
-                              <div className="space-y-3">
-                                {factPatterns.map((fp: any, fpIdx: number) => (
-                                  <div key={fp.temp_id} id={`node-${fp.temp_id}`} className={`bg-gray-50 rounded p-2 text-xs relative ${fpIdx > 0 ? 'mt-3 pt-3 border-t border-gray-200' : ''}`}>
-                                    <div className="flex items-start justify-between mb-1">
-                                      <div className="text-[9px] font-bold text-gray-400 uppercase tracking-wide">
-                                        Fact Pattern {fpIdx + 1}
-                                      </div>
-                                      <NodeActionMenu nodeId={fp.temp_id} />
-                                    </div>
-                                    <ObjectFields 
-                                      obj={fp.properties || {}} 
-                                      path={['nodes', nodesArray.indexOf(fp), 'properties']} 
+                          {/* Fact Patterns Section */}
+                          {(() => {
+                            const issueStructure = holdingsStructure?.issue?.include || {}
+                            const state = analyzeRelationship(issue, 'factPatterns', issueStructure, schema, holdingData.issue)
+                            return (
+                              <div>
+                                <SectionHeader
+                                  title="Fact Patterns"
+                                  actionButton={state && (
+                                    <RelationshipAction
+                                      state={state}
+                                      parentNodeLabel="Issue"
+                                      position="inline"
+                                      onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, issue.temp_id)}
+                                      onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, issue.temp_id)}
                                     />
-                                  </div>
-                                ))}
+                                  )}
+                                />
+                                <div className="space-y-4">
+                                  {factPatterns.map((fp: any, fpIdx: number) => (
+                                    <NodeCard key={fp.temp_id} node={fp} label="Fact Pattern" index={fpIdx} depth={1} />
+                                  ))}
+                                </div>
                               </div>
-                            </div>
-                          )}
+                            )
+                          })()}
                         </div>
-                      </div>
+                      </NodeCard>
                     )}
+                    {/* Add Issue button if no issue exists */}
+                    {!issue && (() => {
+                      const state = analyzeRelationship(holding, 'issue', holdingsStructure || {}, schema, holdingData)
+                      if (!state) return null
+                      return (
+                        <RelationshipAction
+                          state={state}
+                          parentNodeLabel="Holding"
+                          position="centered"
+                          onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, holding.temp_id)}
+                          onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, holding.temp_id)}
+                        />
+                      )
+                    })()}
                     
                     {/* Arguments */}
                     {args.length > 0 && (
-                      <div className="mt-6 pt-6 border-t-2 border-gray-200 space-y-5">
-                        <div className="text-sm font-semibold text-gray-700 mb-4">
-                          Arguments ({args.length})
-                        </div>
+                      <div className="mt-6 pt-6 border-t-2 border-gray-200 space-y-4">
                         {args.map((argData: any, argIdx: number) => {
-                          const { node: arg, laws, facts } = argData
+                          // Backend returns: { arguments: node, laws: [...], facts: [...] }
+                          const arg = argData.arguments || argData
+                          const laws = argData.laws || []
+                          const facts = argData.facts || []
                           
                         return (
-                            <div key={arg.temp_id} id={`node-${arg.temp_id}`} className="bg-white rounded-lg border p-4 relative">
-                              <div className="flex items-start justify-between mb-3">
-                                <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">
-                                  Arg {argIdx + 1}
-                                </div>
-                                <NodeActionMenu nodeId={arg.temp_id} />
-                              </div>
-                              <ObjectFields 
-                                obj={arg.properties || {}} 
-                                path={['nodes', nodesArray.indexOf(arg), 'properties']} 
-                              />
-                              
-                              {/* Laws */}
-                              {laws.length > 0 && (
-                                <div className="mt-3 pl-4 border-l-2 border-red-200">
-                                  <div className="text-xs font-semibold text-gray-600 mb-3">
-                                    Laws ({laws.length})
-                                  </div>
-                                  <div className="space-y-3">
-                                    {laws.map((law: any, lawIdx: number) => (
-                                      <div key={law.temp_id} id={`node-${law.temp_id}`} className={`bg-gray-50 rounded p-2 text-xs relative ${lawIdx > 0 ? 'mt-3 pt-3 border-t border-gray-200' : ''}`}>
-                                        <div className="flex items-start justify-between mb-1">
-                                          <div className="text-[9px] font-bold text-gray-400 uppercase tracking-wide">
-                                            Law {lawIdx + 1}
-                                          </div>
-                                          <NodeActionMenu nodeId={law.temp_id} />
-                                        </div>
-                                        <ObjectFields 
-                                          obj={law.properties || {}} 
-                                          path={['nodes', nodesArray.indexOf(law), 'properties']} 
+                          <NodeCard key={arg.temp_id} node={arg} label="Argument" index={argIdx} depth={0}>
+                            <div className="mt-4 space-y-6">
+                              {/* Laws Section */}
+                              {(() => {
+                                const argStructure = holdingsStructure?.arguments?.include || {}
+                                const state = analyzeRelationship(arg, 'laws', argStructure, schema, argData)
+                                return (
+                                  <div>
+                                    <SectionHeader
+                                      title="Laws"
+                                      actionButton={state && (
+                                        <RelationshipAction
+                                          state={state}
+                                          parentNodeLabel="Argument"
+                                          position="inline"
+                                          onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, arg.temp_id)}
+                                          onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, arg.temp_id)}
                                         />
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-                              
-                              {/* Facts */}
-                              {facts.length > 0 && (
-                                <div className="mt-3 pl-4 border-l-2 border-blue-200">
-                                  <div className="text-xs font-semibold text-gray-600 mb-3">
-                                    Facts ({facts.length})
-                                  </div>
-                                  <div className="space-y-4">
-                                    {facts.map((factData: any, factIdx: number) => {
-                                      const { node: fact, witnesses, evidence, judicialNotice } = factData
-                                      
-                        return (
-                                        <div key={fact.temp_id} id={`node-${fact.temp_id}`} className={`bg-gray-50 rounded p-2 relative ${factIdx > 0 ? 'mt-4 pt-3 border-t border-gray-200' : ''}`}>
-                                          <div className="flex items-start justify-between mb-1">
-                                            <div className="text-[9px] font-bold text-gray-400 uppercase tracking-wide">
-                                              Fact {factIdx + 1}
-                                            </div>
-                                            <NodeActionMenu nodeId={fact.temp_id} />
-                                          </div>
-                                          <ObjectFields 
-                                            obj={fact.properties || {}} 
-                                            path={['nodes', nodesArray.indexOf(fact), 'properties']} 
-                                          />
-                                          
-                                          {/* Witnesses */}
-                                          {witnesses.length > 0 && (
-                                            <div className="mt-2 pl-3 border-l border-gray-300">
-                                              <div className="text-[10px] font-semibold text-gray-500 mb-2">
-                                                Witnesses ({witnesses.length})
-                                      </div>
-                                              <div className="space-y-2">
-                                                {witnesses.map((wit: any, witIdx: number) => (
-                                                  <div key={wit.temp_id} id={`node-${wit.temp_id}`} className={`bg-white rounded p-2 text-[10px] relative ${witIdx > 0 ? 'mt-2 pt-2 border-t border-gray-200' : ''}`}>
-                                                    <div className="flex items-start justify-between mb-0.5">
-                                                      <div className="text-[8px] font-bold text-gray-400 uppercase tracking-wide">
-                                                        Witness {witIdx + 1}
-                                                      </div>
-                                                      <NodeActionMenu nodeId={wit.temp_id} />
-                                                    </div>
-                                                    <ObjectFields 
-                                                      obj={wit.properties || {}} 
-                                                      path={['nodes', nodesArray.indexOf(wit), 'properties']} 
-                                                    />
-                                      </div>
-                                                ))}
+                                      )}
+                                    />
+                                    <div className="space-y-4">
+                                      {laws.map((law: any, lawIdx: number) => (
+                                        <NodeCard key={law.temp_id} node={law} label="Law" index={lawIdx} depth={1} />
+                                      ))}
                                     </div>
+                                  </div>
+                                )
+                              })()}
+                              
+                              {/* Facts Section */}
+                              {(() => {
+                                const argStructure = holdingsStructure?.arguments?.include || {}
+                                const state = analyzeRelationship(arg, 'facts', argStructure, schema, argData)
+                                return (
+                                  <div>
+                                    <SectionHeader
+                                      title="Facts"
+                                      actionButton={state && (
+                                        <RelationshipAction
+                                          state={state}
+                                          parentNodeLabel="Argument"
+                                          position="inline"
+                                          onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, arg.temp_id)}
+                                          onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, arg.temp_id)}
+                                        />
+                                      )}
+                                    />
+                                    <div className="space-y-4">
+                                      {/* Facts with nested support */}
+                                      {facts.map((factData: any, factIdx: number) => {
+                                const fact = factData.facts || factData
+                                const witnesses = factData.witnesses || []
+                                const evidence = factData.evidence || []
+                                const judicialNotice = factData.judicialNotice || []
+                                
+                                return (
+                                  <NodeCard key={fact.temp_id} node={fact} label="Fact" index={factIdx} depth={1}>
+                                    <div className="mt-4 space-y-6">
+                                      {/* Witnesses Section */}
+                                      {(() => {
+                                        const factStructure = holdingsStructure?.arguments?.include?.facts?.include || {}
+                                        const state = analyzeRelationship(fact, 'witnesses', factStructure, schema, factData)
+                                        return (
+                                          <div>
+                                            <SectionHeader
+                                              title="Witnesses"
+                                              actionButton={state && (
+                                                <RelationshipAction
+                                                  state={state}
+                                                  parentNodeLabel="Fact"
+                                                  position="inline"
+                                                  onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, fact.temp_id)}
+                                                  onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, fact.temp_id)}
+                                                />
+                                              )}
+                                            />
+                                            <div className="space-y-4">
+                                              {witnesses.map((wit: any, witIdx: number) => (
+                                                <NodeCard key={wit.temp_id} node={wit} label="Witness" index={witIdx} depth={2} />
+                                              ))}
                                             </div>
-                                          )}
-                                          
-                                          {/* Evidence */}
-                                          {evidence.length > 0 && (
-                                            <div className="mt-2 pl-3 border-l border-gray-300">
-                                              <div className="text-[10px] font-semibold text-gray-500 mb-2">
-                                                Evidence ({evidence.length})
-                                              </div>
-                                              <div className="space-y-2">
-                                                {evidence.map((ev: any, evIdx: number) => (
-                                                  <div key={ev.temp_id} id={`node-${ev.temp_id}`} className={`bg-white rounded p-2 text-[10px] relative ${evIdx > 0 ? 'mt-2 pt-2 border-t border-gray-200' : ''}`}>
-                                                    <div className="flex items-start justify-between mb-0.5">
-                                                      <div className="text-[8px] font-bold text-gray-400 uppercase tracking-wide">
-                                                        Evidence {evIdx + 1}
-                                                      </div>
-                                                      <NodeActionMenu nodeId={ev.temp_id} />
-                                                    </div>
-                                                    <ObjectFields 
-                                                      obj={ev.properties || {}} 
-                                                      path={['nodes', nodesArray.indexOf(ev), 'properties']} 
-                                                    />
-                                                  </div>
-                                                ))}
-                                              </div>
+                                          </div>
+                                        )
+                                      })()}
+                                      
+                                      {/* Evidence Section */}
+                                      {(() => {
+                                        const factStructure = holdingsStructure?.arguments?.include?.facts?.include || {}
+                                        const state = analyzeRelationship(fact, 'evidence', factStructure, schema, factData)
+                                        return (
+                                          <div>
+                                            <SectionHeader
+                                              title="Evidence"
+                                              actionButton={state && (
+                                                <RelationshipAction
+                                                  state={state}
+                                                  parentNodeLabel="Fact"
+                                                  position="inline"
+                                                  onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, fact.temp_id)}
+                                                  onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, fact.temp_id)}
+                                                />
+                                              )}
+                                            />
+                                            <div className="space-y-4">
+                                              {evidence.map((ev: any, evIdx: number) => (
+                                                <NodeCard key={ev.temp_id} node={ev} label="Evidence" index={evIdx} depth={2} />
+                                              ))}
                                             </div>
-                                          )}
-                                          
-                                          {/* Judicial Notice */}
-                                          {judicialNotice.length > 0 && (
-                                            <div className="mt-2 pl-3 border-l border-gray-300">
-                                              <div className="text-[10px] font-semibold text-gray-500 mb-2">
-                                                Judicial Notice ({judicialNotice.length})
-                                              </div>
-                                              <div className="space-y-2">
-                                                {judicialNotice.map((jn: any, jnIdx: number) => (
-                                                  <div key={jn.temp_id} id={`node-${jn.temp_id}`} className={`bg-white rounded p-2 text-[10px] relative ${jnIdx > 0 ? 'mt-2 pt-2 border-t border-gray-200' : ''}`}>
-                                                    <div className="flex items-start justify-between mb-0.5">
-                                                      <div className="text-[8px] font-bold text-gray-400 uppercase tracking-wide">
-                                                        Judicial Notice {jnIdx + 1}
-                                                      </div>
-                                                      <NodeActionMenu nodeId={jn.temp_id} />
-                                                    </div>
-                                                    <ObjectFields 
-                                                      obj={jn.properties || {}} 
-                                                      path={['nodes', nodesArray.indexOf(jn), 'properties']} 
-                                                    />
-                                                  </div>
-                                                ))}
-                                              </div>
-                              </div>
-                            )}
-                          </div>
+                                          </div>
+                                        )
+                                      })()}
+                                      
+                                      {/* Judicial Notice Section */}
+                                      {(() => {
+                                        const factStructure = holdingsStructure?.arguments?.include?.facts?.include || {}
+                                        const state = analyzeRelationship(fact, 'judicialNotice', factStructure, schema, factData)
+                                        return (
+                                          <div>
+                                            <SectionHeader
+                                              title="Judicial Notice"
+                                              actionButton={state && (
+                                                <RelationshipAction
+                                                  state={state}
+                                                  parentNodeLabel="Fact"
+                                                  position="inline"
+                                                  onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, fact.temp_id)}
+                                                  onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, fact.temp_id)}
+                                                />
+                                              )}
+                                            />
+                                            <div className="space-y-4">
+                                              {judicialNotice.map((jn: any, jnIdx: number) => (
+                                                <NodeCard key={jn.temp_id} node={jn} label="Judicial Notice" index={jnIdx} depth={2} />
+                                              ))}
+                                            </div>
+                                          </div>
+                                        )
+                                      })()}
+                                    </div>
+                                  </NodeCard>
+                                )
+                              })}
+                            </div>
+                                  </div>
+                                )
+                              })()}
+                            </div>
+                          </NodeCard>
                         )
                       })}
-                                  </div>
-                    </div>
-                  )}
+                      </div>
+                    )}
+                    {/* Add Argument button */}
+                    {(() => {
+                      const state = analyzeRelationship(holding, 'arguments', holdingsStructure || {}, schema, holdingData)
+                      if (!state) return null
+                      return (
+                        <div className={args.length > 0 ? "mt-3" : ""}>
+                          <RelationshipAction
+                            state={state}
+                            parentNodeLabel="Holding"
+                            position={args.length === 0 ? 'centered' : 'inline'}
+                            onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, holding.temp_id)}
+                            onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, holding.temp_id)}
+                          />
+                        </div>
+                      )
+                    })()}
+                  </div>
                 </div>
               )
             })}
           </div>
-        )}
-          </div>
-                </div>
-              )
-            })}
-          </div>
-      </div>
+        </div>
 
         {/* Footer Save Button */}
-      <div className="sticky bottom-0 z-10 border-t bg-white/80 backdrop-blur">
-        <div className="mx-auto max-w-6xl px-6 py-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              {scrollHistory.length > 0 && (
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    if (typeof window === 'undefined') return
-                    setScrollHistory(prev => {
-                      const next = [...prev]
-                      const last = next.pop()
-                      if (typeof last === 'number') {
-                        window.scrollTo({ top: last, behavior: 'smooth' })
-                      }
-                      return next
-                    })
-                  }}
-                >
-                  Back
-                </Button>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              <Button onClick={onSave} disabled={saving}>{saving ? 'Saving...' : 'Save'}</Button>
+        <div className="sticky bottom-0 z-10 border-t bg-white/80 backdrop-blur">
+          <div className="mx-auto max-w-6xl px-6 py-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                {scrollHistory.length > 0 && (
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      if (typeof window === 'undefined') return
+                      setScrollHistory(prev => {
+                        const next = [...prev]
+                        const last = next.pop()
+                        if (typeof last === 'number') {
+                          window.scrollTo({ top: last, behavior: 'smooth' })
+                        }
+                        return next
+                      })
+                    }}
+                  >
+                    Back
+                  </Button>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button onClick={onSave} disabled={saving}>{saving ? 'Saving...' : 'Save'}</Button>
               </div>
             </div>
           </div>
@@ -1745,20 +1768,61 @@ export default function CaseEditorPage() {
         nodeType={addModalType}
         schema={schema}
         existingNodes={nodesArray}
-        onCancel={() => setAddModalOpen(false)}
+        parentContext={addModalContext?.parentId ? {
+          parentId: addModalContext.parentId,
+          parentLabel: getParentNodeLabel(addModalContext.parentId),
+          relationship: addModalContext.relationship,
+          direction: addModalContext.direction
+        } : null}
+        onCancel={() => {
+          setAddModalOpen(false)
+          setAddModalContext(null)
+        }}
         onSubmit={({ node, edges }) => {
           setFormData((prev: any) => {
             const next = prev ? { ...prev } : {}
             const nodes = Array.isArray(next.nodes) ? [...next.nodes] : []
             nodes.push(node)
             const nextEdges = Array.isArray(next.edges) ? [...next.edges] : []
+            
+            // Add edges from the modal
             edges.forEach((e: any) => nextEdges.push(e))
+            
+            // Add edge to parent if context is provided
+            if (addModalContext?.parentId && addModalContext?.relationship) {
+              const parentEdge: GraphEdge = {
+                from: addModalContext.direction === 'outgoing' 
+                  ? addModalContext.parentId 
+                  : node.temp_id,
+                to: addModalContext.direction === 'outgoing' 
+                  ? node.temp_id 
+                  : addModalContext.parentId,
+                label: addModalContext.relationship
+              }
+              nextEdges.push(parentEdge)
+            }
+            
             next.nodes = nodes
             if (nextEdges.length > 0) next.edges = nextEdges
             return next
           })
           setAddModalOpen(false)
+          setAddModalContext(null)
         }}
+      />
+      
+      {/* Select node modal */}
+      <SelectNodeModal
+        open={selectModalOpen}
+        nodeType={selectModalType}
+        availableNodes={getAvailableNodesForSelection(selectModalType)}
+        allNodes={nodesArray}
+        allEdges={edgesArray}
+        onCancel={() => {
+          setSelectModalOpen(false)
+          setSelectModalContext(null)
+        }}
+        onSubmit={handleSelectNodeSubmit}
       />
     </div>
   )

@@ -8,11 +8,17 @@ interface AddNodeModalProps {
   nodeType: string
   schema: Schema | null
   existingNodes: GraphNode[]
+  parentContext?: {
+    parentId: string
+    parentLabel: string
+    relationship: string
+    direction: 'outgoing' | 'incoming'
+  } | null
   onCancel: () => void
   onSubmit: (payload: { node: GraphNode; edges: GraphEdge[] }) => void
 }
 
-export default function AddNodeModal({ open, nodeType, schema, existingNodes, onCancel, onSubmit }: AddNodeModalProps) {
+export default function AddNodeModal({ open, nodeType, schema, existingNodes, parentContext, onCancel, onSubmit }: AddNodeModalProps) {
   const schemaArray: SchemaItem[] = useMemo(() => {
     if (!schema) return []
     if (Array.isArray(schema)) return schema as SchemaItem[]
@@ -303,35 +309,59 @@ export default function AddNodeModal({ open, nodeType, schema, existingNodes, on
         </div>
 
         {/* Relationships */}
-        <div className="mt-3 space-y-1.5">
-          <div className="text-xs font-semibold text-gray-700">Relationships</div>
-          {Object.keys(relationshipsMap).length === 0 && (
-            <div className="text-xs text-gray-500">No relationships defined from this node type.</div>
-          )}
-          {relSelections.map((sel, idx) => {
-            const hasMapping = !!sel.relLabel
-            return (
-              <div key={idx} className="flex items-center gap-2">
-                <select
-                  className="w-80 max-w-full rounded-md border border-gray-300 bg-white px-2 py-1 text-xs"
-                  style={{ textOverflow: 'ellipsis', whiteSpace: 'nowrap', overflow: 'hidden' }}
-                  value={sel.targetTempId}
-                  onChange={e => onSelectTargetNode(idx, e.target.value)}
-                >
-                  <option value="">Select node</option>
-                  {allNodeOptions.map(o => (
-                    <option key={o.id} value={o.id}>{o.display}</option>
-                  ))}
-                </select>
-                <div className={`text-xs ${hasMapping ? 'text-gray-700' : 'text-red-600'}`}>
-                  {sel.targetTempId ? (hasMapping ? sel.relLabel : 'No schema relationship for this pair') : 'Select a node'}
-                </div>
-                <button type="button" className="rounded border px-2 py-1 text-xs" onClick={() => removeRelationshipRow(idx)}>Remove</button>
+        {parentContext ? (
+          // When context is provided, only show the auto-created relationship
+          <div className="mt-3 space-y-1.5">
+            <div className="text-xs font-semibold text-gray-700">Relationship</div>
+            <div className="bg-blue-50 border border-blue-200 rounded-md px-3 py-2 text-xs">
+              <div className="font-medium text-blue-900 mb-1">Auto-created</div>
+              <div className="text-blue-700">
+                {parentContext.direction === 'incoming' 
+                  ? `← Connected from ${parentContext.parentLabel} via ${parentContext.relationship}`
+                  : `→ Connected to ${parentContext.parentLabel} via ${parentContext.relationship}`
+                }
               </div>
-            )
-          })}
-          <button type="button" className="rounded border px-2 py-1 text-xs" onClick={addRelationshipRow}>Add relationship</button>
-        </div>
+            </div>
+          </div>
+        ) : (
+          // When no context, show relationship picker (for standalone node creation)
+          <div className="mt-3 space-y-1.5">
+            <div className="text-xs font-semibold text-gray-700">Relationships</div>
+            
+            {Object.keys(relationshipsMap).length === 0 && (
+              <div className="text-xs text-gray-500">No relationships defined from this node type.</div>
+            )}
+            
+            {relSelections.map((sel, idx) => {
+              const hasMapping = !!sel.relLabel
+              return (
+                <div key={idx} className="flex items-center gap-2">
+                  <select
+                    className="w-80 max-w-full rounded-md border border-gray-300 bg-white px-2 py-1 text-xs"
+                    style={{ textOverflow: 'ellipsis', whiteSpace: 'nowrap', overflow: 'hidden' }}
+                    value={sel.targetTempId}
+                    onChange={e => onSelectTargetNode(idx, e.target.value)}
+                  >
+                    <option value="">Select node</option>
+                    {allNodeOptions.map(o => (
+                      <option key={o.id} value={o.id}>{o.display}</option>
+                    ))}
+                  </select>
+                  <div className={`text-xs ${hasMapping ? 'text-gray-700' : 'text-red-600'}`}>
+                    {sel.targetTempId ? (hasMapping ? sel.relLabel : 'No schema relationship for this pair') : 'Select a node'}
+                  </div>
+                  <button type="button" className="rounded border px-2 py-1 text-xs" onClick={() => removeRelationshipRow(idx)}>Remove</button>
+                </div>
+              )
+            })}
+            
+            {Object.keys(relationshipsMap).length > 0 && (
+              <button type="button" className="rounded border px-2 py-1 text-xs" onClick={addRelationshipRow}>
+                Add relationship
+              </button>
+            )}
+          </div>
+        )}
 
         </div>
         {/* Actions */}

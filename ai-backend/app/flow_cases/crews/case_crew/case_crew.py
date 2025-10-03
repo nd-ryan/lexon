@@ -8,6 +8,33 @@ from app.models.case_graph import CaseGraph
 
 @CrewBase
 class CaseCrew:
+    """
+    Crew methods for case extraction flow.
+    
+    FLOW V2 PHASE MAPPING (case_extract_flow_v2.py):
+    - Phase 1: Foundation (Case, Proceeding, Issue) 
+      → uses phase1_extract_agent + phase1_extract_single/multi_node_task
+    - Phase 2: Forum & Jurisdiction 
+      → uses phase5_select_existing_agent/task
+    - Phase 3: Parties 
+      → uses phase8_party_agent/task
+    - Phase 4: Issue Concepts (Doctrine/Policy/FactPattern) 
+      → uses phase7_issue_related_agent/task
+    - Phase 5: Holdings (NEW) 
+      → uses phase1_extract_agent + phase1_extract_single_node_task
+    - Phase 6: Ruling & Arguments (NEW) 
+      → uses phase1_extract_agent + phase1_extract_single/multi_node_task
+    - Phase 7: Laws 
+      → uses phase6_law_agent/task
+    - Phase 8: ReliefType 
+      → uses phase5_select_existing_agent/task
+    - Phase 9: Facts 
+      → uses phase2_extract_agent + phase2_extract_facts_task
+    - Phase 10: Evidence & Witnesses 
+      → uses phase2_extract_agent + phase3_extract_supports_task
+    
+    Note: Method names reflect original phase numbers for backward compatibility.
+    """
     agents: List[BaseAgent]
     tasks: List[Task]
 
@@ -24,6 +51,14 @@ class CaseCrew:
 
     @agent
     def phase1_extract_agent(self) -> Agent:
+        """
+        General-purpose extraction agent.
+        
+        Used in Flow V2 by:
+        - Phase 1: Case, Proceeding, Issue extraction
+        - Phase 5: Holdings extraction (NEW)
+        - Phase 6: Ruling & Arguments extraction (NEW)
+        """
         llm = LLM(model="gpt-4.1", temperature=0)
         return Agent(
             config=self.agents_config['phase1_extract_agent'],  # type: ignore[index]
@@ -33,6 +68,13 @@ class CaseCrew:
 
     @agent
     def phase2_extract_agent(self) -> Agent:
+        """
+        Relationship extraction agent.
+        
+        Used in Flow V2 by:
+        - Phase 9: Facts extraction
+        - Phase 10: Evidence & Witnesses extraction
+        """
         llm = LLM(model="gpt-4.1", temperature=0)
         return Agent(
             config=self.agents_config['phase2_extract_agent'],  # type: ignore[index]
@@ -41,8 +83,16 @@ class CaseCrew:
         )
 
 
-    # Dynamic, per-node Phase 1 task with per-label instructions/examples and schema props
+    # Dynamic, per-node extraction task with per-label instructions/examples and schema props
     def phase1_extract_single_node_task(self, description: str, output_model: Type[BaseModel]) -> Task:
+        """
+        Extract a single node instance with validated properties.
+        
+        Used in Flow V2 by:
+        - Phase 1: Case, Proceeding (single instances)
+        - Phase 5: Holdings (one per Issue)
+        - Phase 6: Ruling (one per Holding, with dedup)
+        """
         cfg = {
             "description": description,
             "expected_output": "JSON of properties only for the requested label"
@@ -53,8 +103,15 @@ class CaseCrew:
             output_pydantic=output_model
         )
 
-    # Dynamic, multi-node Phase 1 task for labels that can occur multiple times
+    # Dynamic, multi-node extraction task for labels that can occur multiple times
     def phase1_extract_multi_nodes_task(self, description: str, output_model: Type[BaseModel]) -> Task:
+        """
+        Extract multiple node instances (list) with validated properties.
+        
+        Used in Flow V2 by:
+        - Phase 1: Issue (multiple per case)
+        - Phase 6: Arguments (multiple per Holding)
+        """
         cfg = {
             "description": description,
             "expected_output": "A JSON object { items: [ { ...properties... }, ... ] }"

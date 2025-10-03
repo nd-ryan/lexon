@@ -124,6 +124,42 @@ def get_case(case_id: str, db: Session = Depends(get_db)):
     return {"success": True, "case": data}
 
 
+@router.get("/{case_id}/display")
+def get_case_display(case_id: str, view: str = "holdingsCentric", db: Session = Depends(get_db)):
+    """Get structured view of case data optimized for display"""
+    case_data = case_repo.get_case(db.connection(), case_id)
+    if not case_data:
+        raise HTTPException(404, "Not found")
+    
+    extracted = case_data.get("extracted")
+    if not extracted:
+        raise HTTPException(400, "Case has no extracted data")
+    
+    try:
+        from app.lib.case_view_builder import build_case_display_view, load_views_config
+        structured = build_case_display_view(extracted, view)
+        views_config = load_views_config()
+        view_config = views_config.get(view, {})
+        
+        return {
+            "success": True,
+            "view": view,
+            "viewConfig": view_config,
+            "data": structured,
+            "metadata": {
+                "case_id": case_data.get("id"),
+                "filename": case_data.get("filename"),
+                "status": case_data.get("status"),
+                "updated_at": case_data.get("updated_at")
+            }
+        }
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.exception(f"Failed to build display view for case {case_id}")
+        raise HTTPException(500, f"Failed to build view: {str(e)}")
+
+
 @router.put("/{case_id}")
 def update_case(case_id: str, payload: dict, db: Session = Depends(get_db)):
     user_id = "editor"  # TODO: integrate auth user

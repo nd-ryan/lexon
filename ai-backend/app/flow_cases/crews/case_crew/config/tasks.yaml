@@ -33,19 +33,22 @@ phase5_select_existing_task:
     Inputs will be provided in the instructions as JSON blocks:
     - RULING_JSON: { ...properties... } (the single generated Ruling node's properties)
     - CASE_TEXT: raw case text
-    - CATALOGS: { label: [ { name?, type?, description?, text? }, ... ] }
+    - CATALOGS: { label: [ { forum_id?, relief_type_id?, name?, type?, description?, ...other fields... }, ... ] }
 
     Steps:
     1) Based on RULING_JSON, select the most appropriate ReliefType from the ReliefType catalog.
     2) Based on CASE_TEXT, select the most appropriate Forum from the Forum catalog.
-    3) Return JSON as { "selected": { "ReliefType": [values...], "Forum": [values...] } } where each value is:
-       - 'name' when the label has a name property;
-       - 'type' when ReliefType uses a type property;
-       - otherwise 'description' if present; otherwise 'text'.
+    3) Return JSON as { "selected": { "ReliefType": [IDs...], "Forum": [IDs...] } } where each value is the ID field:
+       - For Forum: return the 'forum_id' value from the catalog entry
+       - For ReliefType: return the 'relief_type_id' value from the catalog entry
+       - ONLY return the ID value, NOT the name or description
 
-    Constraints:
-    - Only return names present in the catalogs and supported by the case text.
-    - Do not invent new values or use general knowledge.
+    Constraints (STRICTLY ENFORCED):
+    - YOU MUST ONLY RETURN IDs (forum_id, relief_type_id) THAT EXIST IN THE PROVIDED CATALOGS
+    - DO NOT create, invent, or return any other values (names, descriptions, etc.)
+    - Return ONLY the ID field values as they appear in the catalog entries
+    - If no appropriate match exists in the catalog, return an empty array []
+    - NEVER use general knowledge - ONLY select from the catalog IDs provided below
 
     RULING_JSON:
     {RULING_JSON}
