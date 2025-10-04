@@ -26,8 +26,15 @@ export default function SignUpPage() {
   }, [status, router]);
 
   useEffect(() => {
-    // Temporarily disable access to sign-up page
-    router.replace('/auth/signin');
+    // Check if registration is enabled, redirect if not
+    fetch('/api/features')
+      .then(res => res.json())
+      .then(data => {
+        if (!data.registrationEnabled) {
+          router.replace('/auth/signin');
+        }
+      })
+      .catch(() => router.replace('/auth/signin'))
   }, [router]);
 
   const handleSubmit = async (e: React.FormEvent) => {

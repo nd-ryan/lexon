@@ -2,9 +2,19 @@
 
 import { useSession, signOut } from 'next-auth/react'
 import Link from 'next/link'
+import { useState, useEffect } from 'react'
 
 export default function UserNav() {
   const { data: session, status } = useSession()
+  const [registrationEnabled, setRegistrationEnabled] = useState(false)
+
+  useEffect(() => {
+    // Fetch feature flags from API
+    fetch('/api/features')
+      .then(res => res.json())
+      .then(data => setRegistrationEnabled(data.registrationEnabled))
+      .catch(() => setRegistrationEnabled(false))
+  }, [])
 
   if (status === 'loading') {
     return <div>Loading...</div>
@@ -19,27 +29,24 @@ export default function UserNav() {
         >
           Sign In
         </Link>
-        <Link 
-          href="/auth/signup"
-          className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 rounded-md text-sm font-medium"
-        >
-          Sign Up
-        </Link>
+        {registrationEnabled && (
+          <Link 
+            href="/auth/signup"
+            className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 rounded-md text-sm font-medium"
+          >
+            Sign Up
+          </Link>
+        )}
       </div>
     )
   }
 
   return (
-    <div className="flex items-center space-x-4">
-      <span className="text-gray-700">
-        Welcome, {session.user?.name || session.user?.email}
-      </span>
-      <button
-        onClick={() => signOut({ callbackUrl: '/' })}
-        className="text-gray-700 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium cursor-pointer"
-      >
-        Sign Out
-      </button>
-    </div>
+    <button
+      onClick={() => signOut({ callbackUrl: '/' })}
+      className="text-gray-700 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium cursor-pointer"
+    >
+      Sign Out
+    </button>
   )
 }
