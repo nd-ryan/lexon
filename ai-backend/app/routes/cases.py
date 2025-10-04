@@ -17,32 +17,11 @@ router = APIRouter(prefix="/cases", dependencies=[Depends(get_api_key)])
 @router.post("/upload")
 async def upload_case(file: UploadFile = File(...), db: Session = Depends(get_db)):
     """Start async case extraction job and return job_id for progress tracking."""
-    tmp_path = None
     try:
         file_bytes = await file.read()
+        file_extension = os.path.splitext(file.filename)[1] or '.docx'
         
-        # Create a more persistent temporary file path
-        import tempfile
-        import os
-        temp_dir = tempfile.gettempdir()
-        temp_filename = f"case_extraction_{uuid.uuid4().hex}{os.path.splitext(file.filename)[1] or '.docx'}"
-        tmp_path = os.path.join(temp_dir, temp_filename)
-        
-        # Write file to the persistent path
-        with open(tmp_path, 'wb') as tmp:
-            tmp.write(file_bytes)
-        
-        logger.info(f"Created temporary file: {tmp_path}, size: {len(file_bytes)} bytes")
-        
-        # Verify file was written correctly
-        if not os.path.exists(tmp_path):
-            raise Exception(f"Failed to create temporary file: {tmp_path}")
-        
-        actual_size = os.path.getsize(tmp_path)
-        if actual_size != len(file_bytes):
-            raise Exception(f"File size mismatch: expected {len(file_bytes)}, got {actual_size}")
-        
-        logger.info(f"Temporary file verified: {tmp_path}, size: {actual_size} bytes")
+        logger.info(f"Received file upload: {file.filename}, size: {len(file_bytes)} bytes")
 
         # Create case record
         case_id = case_repo.create_case(db.connection(), file.filename)
@@ -51,27 +30,35 @@ async def upload_case(file: UploadFile = File(...), db: Session = Depends(get_db
         # Generate job ID for tracking
         job_id = str(uuid.uuid4())
 
+        # Store file content in Redis temporarily (expires in 1 hour)
+        # This ensures the worker on any instance can access it
+        from app.lib.queue import redis_conn
+        redis_key = f"file_upload:{job_id}"
+        redis_conn.setex(
+            redis_key,
+            3600,  # 1 hour TTL
+            file_bytes
+        )
+        
+        logger.info(f"Stored file content in Redis: {redis_key}, size: {len(file_bytes)} bytes")
+
         # Queue the extraction job
         from app.lib.queue import case_extraction_queue as q
         from app.jobs.case_extraction_job import run_case_extraction
         
-        # Enqueue with explicit args to avoid passing RQ params to the function
+        # Pass job_id and extension instead of file path
+        # Worker will retrieve content from Redis
         job = q.enqueue(
             run_case_extraction,
-            args=(tmp_path, file.filename, case_id, job_id),
-            job_id=job_id,  # Set as RQ job ID for tracking
-            job_timeout='30m',  # 30 minute timeout (use job_timeout, not timeout)
+            args=(job_id, file.filename, file_extension, case_id),
+            job_id=job_id,
+            job_timeout='30m',
         )
 
         logger.info(f"Queued case extraction job {job_id} for case {case_id}")
         return {"success": True, "caseId": case_id, "jobId": job_id}
     except Exception as e:
         logger.exception("Failed to queue case upload")
-        if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.unlink(tmp_path)
-            except Exception:
-                pass
         raise HTTPException(status_code=500, detail=str(e))
 
 

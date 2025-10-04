@@ -58,21 +58,43 @@ def publish_error(job_id: str, error: str):
         logger.error(f"Failed to publish error: {e}")
 
 
-def run_case_extraction(tmp_path: str, filename: str, case_id: str, job_id: str):
+def run_case_extraction(job_id: str, filename: str, file_extension: str, case_id: str):
     """Run case extraction flow and publish progress updates."""
     logger.info(f"Starting case extraction job {job_id} for case {case_id}")
     logger.info(f"Redis connection: {redis_conn}")
-    logger.info(f"Temporary file path: {tmp_path}")
     
-    # Check if file exists before starting
-    if not os.path.exists(tmp_path):
-        error_msg = f"Temporary file not found: {tmp_path}"
+    # Retrieve file content from Redis
+    redis_key = f"file_upload:{job_id}"
+    file_bytes = redis_conn.get(redis_key)
+    
+    if not file_bytes:
+        error_msg = f"File content not found in Redis: {redis_key}"
         logger.error(error_msg)
         publish_error(job_id, error_msg)
         return
     
-    file_size = os.path.getsize(tmp_path)
-    logger.info(f"Temporary file exists, size: {file_size} bytes")
+    logger.info(f"Retrieved file content from Redis: {len(file_bytes)} bytes")
+    
+    # Create temporary file on this worker instance
+    import tempfile
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=file_extension, prefix=f"case_extraction_{job_id}_")
+    try:
+        with os.fdopen(tmp_fd, 'wb') as tmp_file:
+            tmp_file.write(file_bytes)
+        logger.info(f"Created local temp file: {tmp_path}, size: {len(file_bytes)} bytes")
+    except Exception as e:
+        os.close(tmp_fd)
+        error_msg = f"Failed to create temp file: {e}"
+        logger.error(error_msg)
+        publish_error(job_id, error_msg)
+        return
+    
+    # Delete from Redis now that we have it locally
+    try:
+        redis_conn.delete(redis_key)
+        logger.info(f"Deleted file content from Redis: {redis_key}")
+    except Exception as e:
+        logger.warning(f"Failed to delete Redis key {redis_key}: {e}")
     
     try:
         publish_progress(job_id, f"Starting extraction for {filename}", "init", 0)
@@ -96,15 +118,6 @@ def run_case_extraction(tmp_path: str, filename: str, case_id: str, job_id: str)
         flow.state.progress_callback = lambda msg, phase, pct: publish_progress(job_id, msg, phase, pct)
         
         publish_progress(job_id, "Reading document and preparing schema", "phase0", 10)
-        
-        # Double-check file exists before flow execution
-        if not os.path.exists(tmp_path):
-            error_msg = f"Temporary file disappeared before flow execution: {tmp_path}"
-            logger.error(error_msg)
-            publish_error(job_id, error_msg)
-            return
-        
-        logger.info(f"File still exists before flow execution, size: {os.path.getsize(tmp_path)} bytes")
         
         # Run flow asynchronously (CrewAI flows support async)
         async def run_async_flow():
