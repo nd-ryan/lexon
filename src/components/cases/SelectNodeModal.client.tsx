@@ -26,21 +26,30 @@ export default function SelectNodeModal({
   const [searchTerm, setSearchTerm] = useState<string>('')
   const [jurisdictionName, setJurisdictionName] = useState<string>('')
   
-  // When Forum is selected, look up its Jurisdiction to display (but not create edge)
+  // When Forum is selected, extract embedded Jurisdiction from catalog data
   const handleForumSelection = (forumId: string) => {
-    if (nodeType === 'Forum' && allEdges && allNodes) {
-      // Find PART_OF edge from this Forum to Jurisdiction
-      const jurisdictionEdge = allEdges.find(
-        e => e.from === forumId && e.label === 'PART_OF'
-      )
+    if (nodeType === 'Forum') {
+      const selectedForum = availableNodes.find(n => n.temp_id === forumId)
       
-      if (jurisdictionEdge?.to) {
-        // Look up jurisdiction name
-        const jurisdiction = allNodes.find(n => n.temp_id === jurisdictionEdge.to)
-        if (jurisdiction) {
-          const props = jurisdiction.properties as Record<string, unknown>
-          const name = props?.name as string || 'Unknown Jurisdiction'
-          setJurisdictionName(name)
+      // First try to get jurisdiction from embedded catalog data
+      if (selectedForum?.related?.jurisdiction) {
+        const jName = selectedForum.related.jurisdiction.properties?.name as string || 'Unknown'
+        setJurisdictionName(jName)
+      } else if (allEdges && allNodes) {
+        // Fallback: look up via edges (for nodes already in case)
+        const jurisdictionEdge = allEdges.find(
+          e => e.from === forumId && e.label === 'PART_OF'
+        )
+        
+        if (jurisdictionEdge?.to) {
+          const jurisdiction = allNodes.find(n => n.temp_id === jurisdictionEdge.to)
+          if (jurisdiction) {
+            const props = jurisdiction.properties as Record<string, unknown>
+            const name = props?.name as string || 'Unknown Jurisdiction'
+            setJurisdictionName(name)
+          }
+        } else {
+          setJurisdictionName('')
         }
       } else {
         setJurisdictionName('')

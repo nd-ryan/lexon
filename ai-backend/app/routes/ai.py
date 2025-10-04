@@ -72,6 +72,73 @@ async def get_property_mappings():
         logger.error(f"Failed to derive property mappings: {e}")
         raise HTTPException(status_code=500, detail="Failed to derive property mappings")
 
+@router.get("/catalog/{label}")
+async def get_catalog_nodes(label: str):
+    """Fetch all nodes of a specific label from Neo4j catalog.
+    
+    Used for selecting existing catalog nodes (where can_create_new=false).
+    For Forum: includes related Jurisdiction data.
+    For ReliefType and Jurisdiction: returns nodes directly.
+    """
+    try:
+        from app.lib.neo4j_client import neo4j_client
+        
+        nodes = []
+        
+        if label == "Forum":
+            # Fetch Forums WITH their Jurisdictions
+            query = """
+            MATCH (f:Forum)-[:PART_OF]->(j:Jurisdiction)
+            RETURN f, j
+            LIMIT 1000
+            """
+            result = neo4j_client.execute_query(query)
+            
+            for record in result:
+                forum_data = record.get('f', {})
+                jurisdiction_data = record.get('j', {})
+                
+                # Create enriched Forum node with embedded Jurisdiction info
+                forum_id = forum_data.get('forum_id') or forum_data.get('id') or str(id(forum_data))
+                jurisdiction_id = jurisdiction_data.get('jurisdiction_id') or jurisdiction_data.get('id') or str(id(jurisdiction_data))
+                
+                nodes.append({
+                    'temp_id': str(forum_id),
+                    'label': 'Forum',
+                    'properties': forum_data,
+                    'related': {
+                        'jurisdiction': {
+                            'temp_id': str(jurisdiction_id),
+                            'label': 'Jurisdiction',
+                            'properties': jurisdiction_data
+                        }
+                    }
+                })
+        else:
+            # For other catalog types (ReliefType, Jurisdiction), just fetch the nodes
+            query = f"MATCH (n:`{label}`) RETURN n LIMIT 1000"
+            result = neo4j_client.execute_query(query)
+            
+            for record in result:
+                node_data = record.get('n', {})
+                # Try different ID properties
+                temp_id = (
+                    node_data.get(f'{label.lower()}_id') or 
+                    node_data.get('id') or 
+                    str(id(node_data))
+                )
+                
+                nodes.append({
+                    'temp_id': str(temp_id),
+                    'label': label,
+                    'properties': node_data
+                })
+        
+        return {"success": True, "nodes": nodes}
+    except Exception as e:
+        logger.error(f"Failed to fetch catalog nodes for {label}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch catalog nodes: {str(e)}")
+
 @router.get("/node/enriched")
 async def get_enriched_node(label: str, id_value: str):
     """Fetch a single enriched node by label and id_value.

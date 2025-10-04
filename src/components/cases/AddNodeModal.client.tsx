@@ -74,6 +74,9 @@ export default function AddNodeModal({ open, nodeType, schema, existingNodes, pa
   const [properties, setProperties] = useState<Record<string, any>>({})
   const [relSelections, setRelSelections] = useState<Array<{ targetTempId: string; relLabel: string | null }>>([])
   const [errors, setErrors] = useState<Record<string, string>>({})
+  const [mode, setMode] = useState<'new' | 'existing'>('new')
+  const [searchTerm, setSearchTerm] = useState<string>('')
+  const [selectedExistingId, setSelectedExistingId] = useState<string>('')
 
   // Determine which attributes to show:
   // Prefer properties seen in existing nodes of the same type; fallback to schema attributes.
@@ -110,6 +113,9 @@ export default function AddNodeModal({ open, nodeType, schema, existingNodes, pa
   useEffect(() => {
     // Initialize fields when modal opens or type changes
     if (!open) return
+    setMode('new')
+    setSearchTerm('')
+    setSelectedExistingId('')
     const init: Record<string, any> = {}
     visibleAttributeKeys.forEach((key) => {
       const fieldCfg = Array.isArray(uiFieldMeta) ? uiFieldMeta.find((f: any) => f.key === key) : undefined
@@ -189,6 +195,25 @@ export default function AddNodeModal({ open, nodeType, schema, existingNodes, pa
     return arr
   }, [nodeOptionsByType])
 
+  const sameTypeExistingOptions = useMemo(() => {
+    const wanted = (nodeType || '').toLowerCase()
+    const opts = (existingNodes || []).filter(n => String(n?.label || '').toLowerCase() === wanted)
+      .map(n => {
+        const id = String(n?.temp_id || '')
+        const props = (n?.properties ?? {}) as Record<string, unknown>
+        const candidates = ['name', 'title', 'text', 'case_name']
+        let name = id
+        for (const key of candidates) {
+          const v = props[key]
+          if (typeof v === 'string' && v.trim()) { name = v.trim(); break }
+        }
+        return { id, name }
+      })
+    if (!searchTerm.trim()) return opts
+    const lower = searchTerm.toLowerCase()
+    return opts.filter(o => o.name.toLowerCase().includes(lower) || o.id.toLowerCase().includes(lower))
+  }, [existingNodes, nodeType, searchTerm])
+
   if (!open) return null
 
   return (
@@ -202,7 +227,58 @@ export default function AddNodeModal({ open, nodeType, schema, existingNodes, pa
           </div>
         </div>
         <div className="flex-1 overflow-y-auto px-4 py-3 text-sm" style={{ minHeight: 0, maxHeight: '100%' }}>
+        {/* Mode Switch */}
+        <div className="mb-3">
+          <div className="inline-flex rounded-md border overflow-hidden">
+            <button
+              type="button"
+              className={`px-3 py-1 text-xs ${mode === 'new' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700'} hover:brightness-95`}
+              onClick={() => setMode('new')}
+            >
+              Create new
+            </button>
+            <button
+              type="button"
+              className={`px-3 py-1 text-xs border-l ${mode === 'existing' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700'} hover:brightness-95`}
+              onClick={() => setMode('existing')}
+            >
+              Use existing
+            </button>
+          </div>
+        </div>
+
+        {/* Existing selector */}
+        {mode === 'existing' && (
+          <div className="space-y-2 mb-4">
+            <div className="text-xs font-semibold text-gray-700">Select existing {nodeType}</div>
+            <input
+              type="text"
+              placeholder="Search by name or ID..."
+              value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
+              className="w-full rounded-md border border-gray-300 bg-white px-2 py-1 text-xs"
+            />
+            <div className="max-h-56 overflow-y-auto space-y-1">
+              {sameTypeExistingOptions.length === 0 ? (
+                <div className="text-xs text-gray-500 py-4 text-center">No matching nodes</div>
+              ) : (
+                sameTypeExistingOptions.map(o => (
+                  <div
+                    key={o.id}
+                    onClick={() => setSelectedExistingId(o.id)}
+                    className={`p-2 rounded border cursor-pointer text-xs ${selectedExistingId === o.id ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'}`}
+                  >
+                    <div className="font-medium">{o.name}</div>
+                    <div className="text-[11px] text-gray-500">ID: {o.id}</div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Properties */}
+        {mode === 'new' && (
         <div className="space-y-1.5">
           <div className="text-xs font-semibold text-gray-700">Properties</div>
           {Object.keys(attributes).length === 0 && (
@@ -307,6 +383,7 @@ export default function AddNodeModal({ open, nodeType, schema, existingNodes, pa
             )
           })}
         </div>
+        )}
 
         {/* Relationships */}
         {parentContext ? (
@@ -372,7 +449,18 @@ export default function AddNodeModal({ open, nodeType, schema, existingNodes, pa
               type="button"
               className="rounded bg-blue-600 text-white text-center px-3 py-1 min-w-[84px] hover:brightness-95"
               onClick={() => {
-              // Basic validation
+              if (mode === 'existing') {
+                if (!selectedExistingId) return
+                const existing = existingNodes.find(n => String(n?.temp_id) === String(selectedExistingId))
+                if (!existing) return
+                const edges = relSelections
+                  .filter(sel => sel.targetTempId && sel.relLabel)
+                  .map<GraphEdge>(sel => ({ from: existing.temp_id, to: sel.targetTempId, label: sel.relLabel! }))
+                onSubmit({ node: existing, edges })
+                return
+              }
+
+              // Basic validation for new node
               const nextErr: Record<string, string> = {}
               const fieldsForValidation: any[] = Array.isArray(uiFieldMeta) ? uiFieldMeta : []
               fieldsForValidation.forEach((f: any) => {

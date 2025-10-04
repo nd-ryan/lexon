@@ -2,6 +2,7 @@ export interface GraphNode {
   temp_id: string;
   label: string;
   properties?: Record<string, unknown>;
+  related?: Record<string, GraphNode>; // For catalog nodes with embedded relationships (e.g., Forum -> Jurisdiction)
 }
 
 export interface GraphEdge {

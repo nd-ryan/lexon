@@ -10,13 +10,32 @@ import SelectNodeModal from '@/components/cases/SelectNodeModal.client'
 import RelationshipAction from '@/components/cases/RelationshipAction.client'
 import { analyzeRelationship } from '@/lib/relationshipHelpers'
 
+// Unified node/edge types with status tracking
+type NodeStatus = 'active' | 'deleted' | 'orphaned'
+
+interface UnifiedNode extends GraphNode {
+  status: NodeStatus
+  source: 'initial' | 'user-created'
+}
+
+interface UnifiedEdge extends GraphEdge {
+  status: 'active' | 'deleted'
+}
+
 export default function CaseEditorPage() {
   const params = useParams()
   const id = params?.id as string
   const schema = useAppStore(s => s.schema as Schema | null)
+  const catalogNodes = useAppStore(s => s.catalogNodes)
   const [data, setData] = useState<CaseGraph | null>(null)
-  const [formData, setFormData] = useState<CaseGraph>({ nodes: [], edges: [] })
-  const [displayData, setDisplayData] = useState<any>(null)
+  
+  // Unified state: single source of truth for all nodes and edges
+  const [graphState, setGraphState] = useState<{
+    nodes: UnifiedNode[]
+    edges: UnifiedEdge[]
+  }>({ nodes: [], edges: [] })
+  
+  // displayData removed as a stateful dependency; we derive UI solely from graphState + viewConfig
   const [viewConfig, setViewConfig] = useState<any>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -44,6 +63,7 @@ export default function CaseEditorPage() {
   const [expandedFacts, setExpandedFacts] = useState<Set<string>>(new Set())
   const [viewingConnectionsNodeId, setViewingConnectionsNodeId] = useState<string | null>(null)
   const [deletingNodeId, setDeletingNodeId] = useState<string | null>(null)
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
 
   useEffect(() => {
     // Debug: track when edit modal state changes
@@ -69,24 +89,102 @@ export default function CaseEditorPage() {
       const display = await displayRes.json()
       
       setData(rawData.case)
-      setFormData(rawData.case?.extracted || {})
-      setDisplayData(display.success ? display.data : null)
       setViewConfig(display.success ? display.viewConfig : null)
+      
+      // Use raw extracted graph directly - no need to extract from display!
+      const extracted = rawData.case?.extracted || { nodes: [], edges: [] }
+      
+      setGraphState({
+        nodes: extracted.nodes.map((n: any) => ({ 
+          ...n, 
+          status: 'active' as const, 
+          source: 'initial' as const 
+        })),
+        edges: extracted.edges.map((e: any) => ({ 
+          ...e, 
+          status: 'active' as const 
+        }))
+      })
+      
+      setHasUnsavedChanges(false)
     })()
   }, [id])
 
   const onSave = async () => {
     try {
       setSaving(true); setError('')
-      const res = await fetch(`/api/cases/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(formData) })
+      
+      // Determine which nodes should be permanently deleted
+      const activeEdges = graphState.edges.filter(e => e.status === 'active')
+      const nodesToDelete = new Set<string>()
+      
+      // Mark deleted nodes
+      graphState.nodes.forEach(n => {
+        if (n.status === 'deleted') {
+          nodesToDelete.add(n.temp_id)
+        }
+      })
+      
+      // Mark orphaned nodes that have no active parents
+      graphState.nodes.forEach(n => {
+        if (n.status === 'orphaned') {
+          const hasActiveParent = activeEdges.some(e => 
+            e.to === n.temp_id && 
+            !nodesToDelete.has(e.from) &&
+            graphState.nodes.find(p => p.temp_id === e.from && p.status === 'active')
+          )
+          if (!hasActiveParent) {
+            nodesToDelete.add(n.temp_id)
+          }
+        }
+      })
+      
+      // Build final payload with only active nodes and edges
+      const finalData = {
+        nodes: graphState.nodes
+          .filter(n => n.status === 'active')
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          .map(({ status, source, ...node }) => node), // Strip metadata
+        edges: graphState.edges
+          .filter(e => 
+            e.status === 'active' && 
+            !nodesToDelete.has(e.from) && 
+            !nodesToDelete.has(e.to)
+          )
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          .map(({ status, ...edge }) => edge) // Strip metadata
+      }
+      
+      const res = await fetch(`/api/cases/${id}`, { 
+        method: 'PUT', 
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify(finalData) 
+      })
+      
       const d = await res.json()
       setData(d.case)
       
-      // Refetch display data after save
+      // Refetch display data after save for updated viewConfig
       const displayRes = await fetch(`/api/cases/${id}/display`)
       const display = await displayRes.json()
-      setDisplayData(display.success ? display.data : null)
       setViewConfig(display.success ? display.viewConfig : null)
+      
+      // Rebuild unified state from fresh raw data
+      const extracted = d.case?.extracted || { nodes: [], edges: [] }
+      
+      setGraphState({
+        nodes: extracted.nodes.map((n: any) => ({ 
+          ...n, 
+          status: 'active' as const, 
+          source: 'initial' as const 
+        })),
+        edges: extracted.edges.map((e: any) => ({ 
+          ...e, 
+          status: 'active' as const 
+        }))
+      })
+      
+      setHasUnsavedChanges(false)
     } catch (e: any) {
       setError(e?.message || 'Failed to save')
     } finally {
@@ -104,49 +202,86 @@ export default function CaseEditorPage() {
     return spaced.charAt(0).toUpperCase() + spaced.slice(1)
   }
 
-  // Build node lookup for editing operations
-  const nodesArray = useMemo<GraphNode[]>(() => (Array.isArray(formData?.nodes) ? formData.nodes : []), [formData])
-  const edgesArray = useMemo<GraphEdge[]>(() => (Array.isArray(formData?.edges) ? formData.edges : []), [formData])
+  // Get active nodes for display (excludes deleted and orphaned)
+  const nodesArray = useMemo<GraphNode[]>(() => {
+    return graphState.nodes
+      .filter(n => n.status === 'active')
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      .map(({ status, source, ...node }) => node) // Strip metadata
+  }, [graphState])
+  
+  // Unfiltered nodes array for modals (includes orphaned nodes but excludes deleted)
+  const nodesArrayForModals = useMemo<GraphNode[]>(() => {
+    return graphState.nodes
+      .filter(n => n.status !== 'deleted')
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      .map(({ status, source, ...node }) => node) // Strip metadata
+  }, [graphState])
+  
+  // Get active edges
+  const edgesArray = useMemo<GraphEdge[]>(() => {
+    return graphState.edges
+      .filter(e => e.status === 'active')
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      .map(({ status, ...edge }) => edge) // Strip metadata
+  }, [graphState])
   
   // Extract holdings structure from view config
   const holdingsStructure = useMemo(() => {
     return viewConfig?.holdings?.structure || {}
   }, [viewConfig])
   
+  // Derive holdings structure purely from graphState + viewConfig
   const holdingsData = useMemo(() => {
-    return displayData?.holdings || []
-  }, [displayData])
-  
-  // Helper: Get nested field value from structured data
-  const getNestedValue = (obj: any, key: string): any => {
-    if (!obj) return null
-    // Try direct key first
-    if (obj[key] !== undefined) return obj[key]
-    // Try finding a node with this key
-    for (const k of Object.keys(obj)) {
-      const val = obj[k]
-      if (val && typeof val === 'object' && !Array.isArray(val) && val.temp_id) {
-        // This is likely a node, check if key matches
-        if (k === key) return val
-      }
+    const holdingNodes = (nodesArray || []).filter((n: any) => n.label === 'Holding')
+    
+    const buildRelated = (
+      nodeId: string, 
+      relLabel: string, 
+      direction: 'outgoing' | 'incoming' = 'outgoing'
+    ) => {
+      const relEdges = direction === 'outgoing'
+        ? edgesArray.filter(e => e.from === nodeId && e.label === relLabel)
+        : edgesArray.filter(e => e.to === nodeId && e.label === relLabel)
+      return relEdges
+        .map(edge => nodesArray.find(n => n.temp_id === (direction === 'outgoing' ? edge.to : edge.from)))
+        .filter(Boolean)
     }
-    return null
-  }
-  
-  // Helper: Get all nested collections from structured data
-  const getNestedCollections = (obj: any, structureKeys: string[]): Record<string, any[]> => {
-    const collections: Record<string, any[]> = {}
-    for (const key of structureKeys) {
-      const val = obj[key]
-      if (Array.isArray(val)) {
-        collections[key] = val
-      } else if (val && typeof val === 'object') {
-        // Single item, treat as array of one
-        collections[key] = [val]
+    
+    return holdingNodes.map((holding: any) => {
+      const rulings = buildRelated(holding.temp_id, 'SETS', 'incoming')
+      const ruling = rulings[0] || null
+      
+      const issues = buildRelated(holding.temp_id, 'ON_ISSUE')
+      const issue = issues[0] || null
+      
+      const args = buildRelated(holding.temp_id, 'EVALUATED_IN', 'incoming')
+      
+      return {
+        holding,
+        ruling: ruling ? {
+          ...ruling,
+          reliefTypes: buildRelated(ruling.temp_id, 'RESULTS_IN')
+        } : null,
+        issue: issue ? {
+          ...issue,
+          doctrines: buildRelated(issue.temp_id, 'RELATES_TO_DOCTRINE'),
+          policies: buildRelated(issue.temp_id, 'RELATES_TO_POLICY'),
+          factPatterns: buildRelated(issue.temp_id, 'RELATES_TO_FACTPATTERN')
+        } : null,
+        arguments: args.map((arg: any) => ({
+          arguments: arg,
+          laws: buildRelated(arg.temp_id, 'RELIES_ON_LAW'),
+          facts: buildRelated(arg.temp_id, 'RELIES_ON_FACT').map((fact: any) => ({
+            facts: fact,
+            witnesses: buildRelated(fact.temp_id, 'SUPPORTED_BY_WITNESS'),
+            evidence: buildRelated(fact.temp_id, 'SUPPORTED_BY_EVIDENCE'),
+            judicialNotice: buildRelated(fact.temp_id, 'SUPPORTED_BY_JUDICIAL_NOTICE')
+          }))
+        }))
       }
-    }
-    return collections
-  }
+    })
+  }, [nodesArray, edgesArray])
   
   // Detect shared Issues across multiple Holdings
   const sharedIssues = useMemo(() => {
@@ -268,6 +403,36 @@ export default function CaseEditorPage() {
     return Array.from(set).sort((a, b) => a.localeCompare(b))
   }, [schemaNodeTypes, groupedNodesByType])
 
+  // Get list of truly orphaned nodes for display (nodes with no active parents)
+  const orphanedNodes = useMemo(() => {
+    const activeEdges = graphState.edges.filter(e => e.status === 'active')
+    
+    return graphState.nodes.filter(n => {
+      if (n.status !== 'orphaned') return false
+      
+      // Check if this node has ANY incoming edges from active nodes
+      const hasActiveParent = activeEdges.some(e => 
+        e.to === n.temp_id && 
+        graphState.nodes.find(parent => 
+          parent.temp_id === e.from && parent.status === 'active'
+        )
+      )
+      
+      // Only include if it has NO active parents (truly orphaned)
+      return !hasActiveParent
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    }).map(({ status, source, ...node }) => node) // Strip metadata for display
+  }, [graphState])
+
+  // Helper sets for filtering displayData nodes
+  const deletedNodeIds = useMemo(() => 
+    new Set(graphState.nodes.filter(n => n.status === 'deleted').map(n => n.temp_id)),
+    [graphState]
+  )
+  const orphanedNodeIds = useMemo(() => 
+    new Set(graphState.nodes.filter(n => n.status === 'orphaned').map(n => n.temp_id)),
+    [graphState]
+  )
 
   useEffect(() => {
     // eslint-disable-next-line no-console
@@ -281,35 +446,66 @@ export default function CaseEditorPage() {
   }, [schema, schemaNodeTypes, groupedNodesByType, allNodeTypes])
 
   const setValueAtPath = (path: (string|number)[], value: any) => {
-    setFormData((prev: any) => {
-      const clone = Array.isArray(prev) ? [...prev] : { ...prev }
-      let cursor: any = clone
-      for (let i = 0; i < path.length - 1; i++) {
-        const key = path[i]
-        const nextKey = path[i + 1]
-        const isNextIndex = typeof nextKey === 'number'
-        if (cursor[key] === undefined || cursor[key] === null) {
-          cursor[key] = isNextIndex ? [] : {}
-        } else {
-          cursor[key] = Array.isArray(cursor[key]) ? [...cursor[key]] : { ...cursor[key] }
-        }
-        cursor = cursor[key]
-      }
-      const lastKey = path[path.length - 1]
-      cursor[lastKey] = value
-      return clone
-    })
+    // Path format: ['nodes', nodeIndex, 'properties', 'propName']
+    // or ['edges', edgeIndex, 'to']
+    
+    if (path[0] === 'nodes' && typeof path[1] === 'number') {
+      const nodeIdx = path[1]
+      const activeNodes = graphState.nodes.filter(n => n.status === 'active')
+      const node = activeNodes[nodeIdx]
+      if (!node) return
+      
+      setGraphState(prev => ({
+        ...prev,
+        nodes: prev.nodes.map(n => {
+          if (n.temp_id !== node.temp_id) return n
+          
+          // Deep clone and update property
+          const updated = { ...n }
+          let cursor: any = updated
+          for (let i = 2; i < path.length - 1; i++) {
+            const key = path[i]
+            cursor[key] = Array.isArray(cursor[key]) ? [...cursor[key]] : { ...cursor[key] }
+            cursor = cursor[key]
+          }
+          const lastKey = path[path.length - 1]
+          cursor[lastKey] = value
+          
+          return updated
+        })
+      }))
+    } else if (path[0] === 'edges' && typeof path[1] === 'number') {
+      const edgeIdx = path[1]
+      const activeEdges = graphState.edges.filter(e => e.status === 'active')
+      const edge = activeEdges[edgeIdx]
+      if (!edge) return
+      
+      setGraphState(prev => ({
+        ...prev,
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        edges: prev.edges.map((e, idx) => {
+          // Find the matching edge by comparing all properties
+          if (e.from !== edge.from || e.to !== edge.to || e.label !== edge.label) return e
+          
+          // Update the property
+          const lastKey = path[path.length - 1]
+          return { ...e, [lastKey]: value }
+        })
+      }))
+    }
+    
+    setHasUnsavedChanges(true)
   }
 
 
 
   // Helper to find schema definition for a property
   const getPropertySchema = (path: (string | number)[], propName: string): any => {
-    // Determine node label from path (e.g., ['nodes', 0] -> check formData.nodes[0].label)
+    // Determine node label from path (e.g., ['nodes', 0] -> check nodesArray[0].label)
     let nodeLabel: string | undefined
     if (path[0] === 'nodes' && typeof path[1] === 'number') {
       const nodeIdx = path[1]
-      nodeLabel = formData?.nodes?.[nodeIdx]?.label
+      nodeLabel = nodesArray?.[nodeIdx]?.label
     }
     
     if (!nodeLabel || !schema) return null
@@ -321,6 +517,69 @@ export default function CaseEditorPage() {
     
     return labelDef.properties[propName]
   }
+
+  // Derive Case, Proceedings, Parties, Forums, Jurisdictions from graphState + viewConfig
+  const caseNode = useMemo(() => {
+    return (nodesArray || []).find((n: any) => n.label === 'Case') || null
+  }, [nodesArray])
+  
+  const getRelatedNodes = (
+    parentId: string | undefined,
+    relLabel: string,
+    direction: 'outgoing' | 'incoming' = 'outgoing'
+  ) => {
+    if (!parentId) return []
+    const relEdges = direction === 'outgoing'
+      ? edgesArray.filter(e => e.from === parentId && e.label === relLabel)
+      : edgesArray.filter(e => e.to === parentId && e.label === relLabel)
+    const ids = new Set<string>()
+    const results: any[] = []
+    relEdges.forEach(edge => {
+      const targetId = direction === 'outgoing' ? edge.to : edge.from
+      if (targetId && !ids.has(targetId)) {
+        const node = nodesArray.find(n => n.temp_id === targetId)
+        if (node) { ids.add(targetId); results.push(node) }
+      }
+    })
+    return results
+  }
+  
+  const proceedingNodes = useMemo(() => {
+    return caseNode ? getRelatedNodes(caseNode.temp_id, 'HAS_PROCEEDING', 'outgoing') : []
+  }, [caseNode, edgesArray, nodesArray])
+  
+  const forumNodes = useMemo(() => {
+    const seen = new Set<string>()
+    const results: any[] = []
+    proceedingNodes.forEach((proc: any) => {
+      getRelatedNodes(proc.temp_id, 'HEARD_IN', 'outgoing').forEach(n => {
+        if (!seen.has(n.temp_id)) { seen.add(n.temp_id); results.push(n) }
+      })
+    })
+    return results
+  }, [proceedingNodes, edgesArray, nodesArray])
+  
+  const partyNodes = useMemo(() => {
+    const seen = new Set<string>()
+    const results: any[] = []
+    proceedingNodes.forEach((proc: any) => {
+      getRelatedNodes(proc.temp_id, 'INVOLVES', 'outgoing').forEach(n => {
+        if (!seen.has(n.temp_id)) { seen.add(n.temp_id); results.push(n) }
+      })
+    })
+    return results
+  }, [proceedingNodes, edgesArray, nodesArray])
+  
+  const jurisdictionNodes = useMemo(() => {
+    const seen = new Set<string>()
+    const results: any[] = []
+    forumNodes.forEach((forum: any) => {
+      getRelatedNodes(forum.temp_id, 'PART_OF', 'outgoing').forEach(n => {
+        if (!seen.has(n.temp_id)) { seen.add(n.temp_id); results.push(n) }
+      })
+    })
+    return results
+  }, [forumNodes, edgesArray, nodesArray])
 
   // Early return after all hooks to keep hook order stable
   if (!data) {
@@ -542,14 +801,6 @@ export default function CaseEditorPage() {
       </div>
     )
   }
-
-  // Get Case, Proceeding, Parties for top section from backend-structured data
-  const caseNode = displayData?.case
-  const proceedingNodes = displayData?.proceedings || []
-  const partyNodes = displayData?.parties || []
-  const forumNodes = displayData?.forums || []
-  const jurisdictionNodes = displayData?.jurisdictions || []
-  
   // Scroll to holding
   const scrollToHolding = (holdingId: string) => {
     setActiveHoldingId(holdingId)
@@ -570,7 +821,7 @@ export default function CaseEditorPage() {
 
   // Get all edges related to a node (incoming and outgoing)
   const getNodeConnections = (nodeId: string) => {
-    const edges = formData?.edges || []
+    const edges = graphState.edges.filter(e => e.status === 'active')
     const outgoing = edges.map((e: any, idx: number) => ({ ...e, idx })).filter((e: any) => e.from === nodeId)
     const incoming = edges.map((e: any, idx: number) => ({ ...e, idx })).filter((e: any) => e.to === nodeId)
     return { outgoing, incoming }
@@ -578,25 +829,113 @@ export default function CaseEditorPage() {
 
   // Get node display name helper
   const getNodeDisplayName = (nodeId: string) => {
-    const node = nodesArray.find((n: any) => n.temp_id === nodeId)
+    const node = graphState.nodes.find((n: any) => n.temp_id === nodeId)
     return node ? pickNodeName(node) : nodeId
   }
 
   // Get node type label helper
   const getNodeTypeLabel = (nodeId: string): string => {
-    const node = nodesArray.find((n: any) => n.temp_id === nodeId)
+    const node = graphState.nodes.find((n: any) => n.temp_id === nodeId)
     return node?.label || 'Node'
   }
 
-  // Delete a node and all its relationships
+  // Helper: Find all descendants (children, grandchildren, etc.) of a node
+  const findDescendants = (nodeId: string, edges: any[]): string[] => {
+    const descendants: string[] = []
+    const visited = new Set<string>()
+    
+    const traverse = (currentId: string) => {
+      if (visited.has(currentId)) return
+      visited.add(currentId)
+      
+      // Find all outgoing edges from this node
+      const children = edges
+        .filter((e: any) => e.from === currentId)
+        .map((e: any) => e.to)
+      
+      children.forEach(childId => {
+        descendants.push(childId)
+        traverse(childId) // Recursively find grandchildren
+      })
+    }
+    
+    traverse(nodeId)
+    return descendants
+  }
+
+  // Delete a node and orphan its descendants (only if they have no other active parents)
   const deleteNode = (nodeId: string) => {
-    setFormData((prev: any) => {
-      const nodes = Array.isArray(prev?.nodes) ? prev.nodes.filter((n: any) => n.temp_id !== nodeId) : []
-      const edges = Array.isArray(prev?.edges) ? prev.edges.filter((e: any) => e.from !== nodeId && e.to !== nodeId) : []
-      return { ...prev, nodes, edges }
+    setGraphState(prev => {
+      // Find all descendants using complete edge list
+      const activeEdges = prev.edges.filter(e => e.status === 'active')
+      const descendants = findDescendants(nodeId, activeEdges)
+      
+      // Helper: Check if a descendant should be orphaned
+      // A descendant should only be orphaned if it has NO other active parents
+      const shouldOrphan = (descId: string): boolean => {
+        // Get all incoming edges to this descendant (excluding edges from the deleted node)
+        const incomingEdges = activeEdges.filter(
+          e => e.to === descId && e.from !== nodeId
+        )
+        
+        // Check if any of these incoming edges come from nodes that will remain active
+        // (i.e., not the deleted node and not other descendants being orphaned)
+        const hasActiveParent = incomingEdges.some(e => {
+          const parent = prev.nodes.find(n => n.temp_id === e.from)
+          return parent && parent.status === 'active' && !descendants.includes(e.from)
+        })
+        
+        return !hasActiveParent
+      }
+      
+      return {
+        nodes: prev.nodes.map(n => {
+          if (n.temp_id === nodeId) {
+            // Mark parent as deleted
+            return { ...n, status: 'deleted' as const }
+          }
+          if (descendants.includes(n.temp_id)) {
+            // Only mark as orphaned if this node has no other active parents
+            return shouldOrphan(n.temp_id)
+              ? { ...n, status: 'orphaned' as const }
+              : n  // Keep as active if it has other parents elsewhere
+          }
+          return n
+        }),
+        edges: prev.edges.map(e => {
+          // Mark edges connected to deleted node as deleted
+          if (e.from === nodeId || e.to === nodeId) {
+            return { ...e, status: 'deleted' as const }
+          }
+          return e
+        })
+      }
     })
+    
+    setHasUnsavedChanges(true)
     setDeletingNodeId(null)
     setViewingConnectionsNodeId(null)
+  }
+  
+  // Restore an orphaned node (make it active again)
+  const restoreOrphanedNode = (nodeId: string) => {
+    setGraphState(prev => ({
+      ...prev,
+      nodes: prev.nodes.map(n => 
+        n.temp_id === nodeId 
+          ? { ...n, status: 'active' as const }
+          : n
+      )
+    }))
+    setHasUnsavedChanges(true)
+  }
+  
+  // Helper: Filter out deleted and orphaned nodes from an array
+  const filterActiveNodes = (nodes: any[]): any[] => {
+    if (!Array.isArray(nodes)) return []
+    return nodes.filter((n: any) => 
+      n?.temp_id && !deletedNodeIds.has(n.temp_id) && !orphanedNodeIds.has(n.temp_id)
+    )
   }
 
   // Handler for adding a new node
@@ -655,9 +994,10 @@ export default function CaseEditorPage() {
     setSelectModalOpen(true)
   }
 
-  // Get nodes available for selection (filter by type from existing nodes)
+  // Get nodes available for selection from catalog store
   const getAvailableNodesForSelection = (nodeType: string): GraphNode[] => {
-    return nodesArray.filter(n => n.label === nodeType)
+    // Return catalog nodes from global store (for can_create_new=false types)
+    return catalogNodes[nodeType] || []
   }
 
   // Handle submission from select modal
@@ -665,28 +1005,145 @@ export default function CaseEditorPage() {
     if (!selectModalContext) return
 
     const { parentId, relationship, direction } = selectModalContext
+    
+    // Find the selected node from available catalog nodes
+    const selectedNode = getAvailableNodesForSelection(selectModalType).find(
+      n => n.temp_id === selectedNodeId
+    )
+    
+    if (!selectedNode) return
 
-    // Create edge between parent and selected node
-    const newEdge: GraphEdge = {
-      from: direction === 'outgoing' ? (parentId || '') : selectedNodeId,
-      to: direction === 'outgoing' ? selectedNodeId : (parentId || ''),
-      label: relationship
-    }
-
-    setFormData((prev: any) => {
-      const edges = Array.isArray(prev?.edges) ? [...prev.edges, newEdge] : [newEdge]
-      return { ...prev, edges }
+    setGraphState((prev) => {
+      const nodes = [...prev.nodes]
+      const edges = [...prev.edges]
+      
+      // Add the selected node if not already present
+      if (!nodes.find(n => n.temp_id === selectedNode.temp_id)) {
+        nodes.push({
+          temp_id: selectedNode.temp_id,
+          label: selectedNode.label,
+          properties: selectedNode.properties,
+          status: 'active' as const,
+          source: 'user-created' as const
+        })
+      }
+      
+      // If Forum, also add its embedded Jurisdiction
+      if (selectedNode.label === 'Forum' && selectedNode.related?.jurisdiction) {
+        const jurisdiction = selectedNode.related.jurisdiction
+        
+        // Add jurisdiction node if not already present
+        if (!nodes.find(n => n.temp_id === jurisdiction.temp_id)) {
+          nodes.push({
+            temp_id: jurisdiction.temp_id,
+            label: 'Jurisdiction',
+            properties: jurisdiction.properties,
+            status: 'active' as const,
+            source: 'user-created' as const
+          })
+        }
+        
+        // Add PART_OF edge from Forum to Jurisdiction if not present
+        const partOfExists = edges.find(
+          e => e.from === selectedNode.temp_id && 
+               e.to === jurisdiction.temp_id && 
+               e.label === 'PART_OF'
+        )
+        
+        if (!partOfExists) {
+          edges.push({
+            from: selectedNode.temp_id,
+            to: jurisdiction.temp_id,
+            label: 'PART_OF',
+            status: 'active' as const
+          })
+        }
+      }
+      
+      // Add relationship edge to parent
+      const parentEdgeExists = edges.find(
+        e => e.from === (direction === 'outgoing' ? (parentId || '') : selectedNodeId) &&
+             e.to === (direction === 'outgoing' ? selectedNodeId : (parentId || '')) &&
+             e.label === relationship
+      )
+      
+      if (!parentEdgeExists) {
+        edges.push({
+          from: direction === 'outgoing' ? (parentId || '') : selectedNodeId,
+          to: direction === 'outgoing' ? selectedNodeId : (parentId || ''),
+          label: relationship,
+          status: 'active' as const
+        })
+      }
+      
+      return { nodes, edges }
     })
 
+    // If the selected node was orphaned, restore it (since it now has a parent)
+    if (orphanedNodeIds.has(selectedNodeId)) {
+      restoreOrphanedNode(selectedNodeId)
+    }
+
+    setHasUnsavedChanges(true)
     setSelectModalOpen(false)
     setSelectModalContext(null)
   }
 
+  // Helper: Find the edge connecting parent to child
+  const findParentEdge = (parentId: string, nodeId: string) => {
+    return edgesArray.find(e => e.from === parentId && e.to === nodeId)
+  }
+
+  // Helper: Get formatted parent label
+  const getParentLabel = (parentId: string): string => {
+    const parent = nodesArray.find(n => n.temp_id === parentId)
+    return parent?.label ? formatLabel(parent.label) : 'parent'
+  }
+
+  // Helper: Check if a node should show "Unlink" instead of "Delete"
+  const shouldShowUnlink = (nodeId: string, parentId?: string): boolean => {
+    if (!parentId) return false
+    
+    const parentEdge = findParentEdge(parentId, nodeId)
+    if (!parentEdge) return false
+    
+    // Count how many incoming edges of the same relationship type this node has
+    const incomingEdgesOfType = edgesArray.filter(
+      e => e.to === nodeId && e.label === parentEdge.label
+    )
+    
+    return incomingEdgesOfType.length > 1
+  }
+
+  // Helper: Unlink a node from its parent (remove the edge only)
+  const unlinkNode = (nodeId: string, parentId: string) => {
+    const parentEdge = findParentEdge(parentId, nodeId)
+    if (!parentEdge) return
+    
+    setGraphState(prev => ({
+      ...prev,
+      edges: prev.edges.map(e => 
+        e.from === parentId && e.to === nodeId && e.label === parentEdge.label
+          ? { ...e, status: 'deleted' as const }
+          : e
+      )
+    }))
+    setHasUnsavedChanges(true)
+  }
+
   // Node Action Menu Component
-  const NodeActionMenu = ({ nodeId }: { nodeId: string }) => {
+  const NodeActionMenu = ({ 
+    nodeId, 
+    parentId
+  }: { 
+    nodeId: string
+    parentId?: string
+  }) => {
     const [menuOpen, setMenuOpen] = useState(false)
     const { outgoing, incoming } = getNodeConnections(nodeId)
     const totalConnections = outgoing.length + incoming.length
+    const showUnlink = shouldShowUnlink(nodeId, parentId)
+    const parentLabel = parentId ? getParentLabel(parentId) : ''
 
     return (
       <div className="relative">
@@ -725,16 +1182,33 @@ export default function CaseEditorPage() {
                 <span>View connections</span>
                 <span className="ml-auto text-xs text-gray-500">({totalConnections})</span>
               </button>
-              <button
-                onClick={() => {
-                  setDeletingNodeId(nodeId)
-                  setMenuOpen(false)
-                }}
-                className="w-full px-4 py-2 text-left text-sm hover:bg-red-50 text-red-600 flex items-center gap-2 cursor-pointer"
-              >
-                <Trash2 className="w-4 h-4" />
-                <span>Delete node</span>
-              </button>
+              {showUnlink ? (
+                <button
+                  onClick={() => {
+                    if (parentId) {
+                      unlinkNode(nodeId, parentId)
+                    }
+                    setMenuOpen(false)
+                  }}
+                  className="w-full px-4 py-2 text-left text-sm hover:bg-amber-50 text-amber-700 flex items-center gap-2 cursor-pointer"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
+                  </svg>
+                  <span>Unlink from {parentLabel}</span>
+                </button>
+              ) : (
+                <button
+                  onClick={() => {
+                    setDeletingNodeId(nodeId)
+                    setMenuOpen(false)
+                  }}
+                  className="w-full px-4 py-2 text-left text-sm hover:bg-red-50 text-red-600 flex items-center gap-2 cursor-pointer"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>Delete node</span>
+                </button>
+              )}
             </div>
           </>
         )}
@@ -795,14 +1269,16 @@ export default function CaseEditorPage() {
     index, 
     depth = 0, 
     badge,
-    children 
+    children,
+    parentId
   }: { 
     node: any; 
     label: string; 
     index?: number; 
     depth?: number; 
     badge?: React.ReactNode;
-    children?: React.ReactNode 
+    children?: React.ReactNode;
+    parentId?: string;
   }) => {
     const indentClass = depth === 0 ? '' : depth === 1 ? 'ml-6' : depth === 2 ? 'ml-12' : 'ml-18'
     const displayLabel = index !== undefined ? `${label} ${index + 1}` : label
@@ -820,11 +1296,14 @@ export default function CaseEditorPage() {
             <div className="text-sm font-semibold text-gray-900">{displayLabel}</div>
             {badge}
           </div>
-          <NodeActionMenu nodeId={node.temp_id} />
+          <NodeActionMenu 
+            nodeId={node.temp_id}
+            parentId={parentId}
+          />
         </div>
         <ObjectFields 
           obj={node.properties || {}} 
-          path={['nodes', nodesArray.indexOf(node), 'properties']} 
+          path={['nodes', nodesArray.findIndex(n => n.temp_id === node.temp_id), 'properties']} 
         />
         {children}
       </div>
@@ -846,33 +1325,44 @@ export default function CaseEditorPage() {
       const value = data[key]
       if (!value) continue
       
-      const items = Array.isArray(value) ? value : [value]
+      // Filter out deleted and orphaned items to prevent showing removed nodes
+      const itemsAll = Array.isArray(value) ? value : [value]
+      // Handle nested structures: arguments have {arguments: node, ...}, facts have {facts: node, ...}
+      const items = itemsAll.filter((item: any) => {
+        // Extract the actual node from nested structure
+        const node = (key === 'arguments' && item.arguments) || (key === 'facts' && item.facts) || item
+        return node && node.temp_id && 
+          !deletedNodeIds.has(node.temp_id) && 
+          !orphanedNodeIds.has(node.temp_id)
+      })
       const isCollapsible = ['arguments', 'facts'].includes(key)
       
       items.forEach((item: any, idx: number) => {
-        if (!item || !item.temp_id) return
+        // Extract the actual node from nested structure
+        const node = (key === 'arguments' && item.arguments) || (key === 'facts' && item.facts) || item
+        if (!node || !node.temp_id) return
         
         const expanded = isCollapsible && 
-          (key === 'arguments' ? expandedArgs.has(item.temp_id) : expandedFacts.has(item.temp_id))
+          (key === 'arguments' ? expandedArgs.has(node.temp_id) : expandedFacts.has(node.temp_id))
         
         const toggleFn = key === 'arguments' ? toggleArg : toggleFact
         
         elements.push(
-          <div key={`${key}-${item.temp_id}`} className="space-y-1">
+          <div key={`${key}-${node.temp_id}`} className="space-y-1">
             <div className="flex items-center gap-1">
               {isCollapsible && (
                 <div
-                  onClick={() => toggleFn(item.temp_id)}
+                  onClick={() => toggleFn(node.temp_id)}
                   className="px-1 cursor-pointer text-gray-500 hover:text-gray-700"
                 >
                   <span className="text-xs">{expanded ? '▼' : '▶'}</span>
                 </div>
               )}
               <div
-                onClick={() => scrollToNodeById(item.temp_id, holdingId)}
+                onClick={() => scrollToNodeById(node.temp_id, holdingId)}
                 className="flex-1 px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-600 cursor-pointer"
               >
-                {formatLabel(key === 'arguments' ? 'argument' : key === 'facts' ? 'fact' : item.label || key)} {idx + 1}
+                {formatLabel(key === 'arguments' ? 'argument' : key === 'facts' ? 'fact' : node.label || key)} {idx + 1}
               </div>
             </div>
             
@@ -1000,7 +1490,13 @@ export default function CaseEditorPage() {
                 {(() => {
                   const parentNode = getParentNodeFromConfig('proceedings')
                   const parentLabel = viewConfig?.topLevel?.proceedings?.from || 'Case'
-                  const state = analyzeRelationship(parentNode, 'proceedings', viewConfig?.topLevel || {}, schema, displayData)
+                  const state = analyzeRelationship(
+                    parentNode,
+                    'proceedings',
+                    viewConfig?.topLevel || {},
+                    schema,
+                    { proceedings: proceedingNodes }
+                  )
                   if (proceedingNodes.length === 0 && state) {
                     return (
                       <RelationshipAction
@@ -1039,7 +1535,14 @@ export default function CaseEditorPage() {
                 {(() => {
                   const parentNode = getParentNodeFromConfig('forums')
                   const parentLabel = viewConfig?.topLevel?.forums?.from || 'Proceeding'
-                  const state = analyzeRelationship(parentNode, 'forums', viewConfig?.topLevel || {}, schema, displayData)
+                  const forumsForParent = parentNode ? getRelatedNodes(parentNode.temp_id, 'HEARD_IN', 'outgoing') : []
+                  const state = analyzeRelationship(
+                    parentNode,
+                    'forums',
+                    viewConfig?.topLevel || {},
+                    schema,
+                    { forums: forumsForParent }
+                  )
                   if (forumNodes.length === 0 && state) {
                     return (
                       <RelationshipAction
@@ -1066,9 +1569,25 @@ export default function CaseEditorPage() {
                         )}
                       />
                       <div className="space-y-4">
-                        {forumNodes.map((forum: any, idx: number) => (
-                          <NodeCard key={forum.temp_id} node={forum} label="Forum" index={idx} depth={0} />
-                        ))}
+                        {forumNodes.map((forum: any, idx: number) => {
+                          // Find the Jurisdiction for this Forum
+                          const jurisdictionEdge = edgesArray.find(
+                            e => e.from === forum.temp_id && e.label === 'PART_OF'
+                          )
+                          const jurisdiction = jurisdictionEdge 
+                            ? jurisdictionNodes.find(j => j.temp_id === jurisdictionEdge.to)
+                            : null
+                          
+                          return (
+                            <NodeCard key={forum.temp_id} node={forum} label="Forum" index={idx} depth={0}>
+                              {jurisdiction && (
+                                <div className="mt-4">
+                                  <NodeCard node={jurisdiction} label="Jurisdiction" depth={1} />
+                                </div>
+                              )}
+                            </NodeCard>
+                          )
+                        })}
                       </div>
                     </div>
                   )
@@ -1078,7 +1597,14 @@ export default function CaseEditorPage() {
                 {(() => {
                   const parentNode = getParentNodeFromConfig('parties')
                   const parentLabel = viewConfig?.topLevel?.parties?.from || 'Proceeding'
-                  const state = analyzeRelationship(parentNode, 'parties', viewConfig?.topLevel || {}, schema, displayData)
+                  const partiesForParent = parentNode ? getRelatedNodes(parentNode.temp_id, 'INVOLVES', 'outgoing') : []
+                  const state = analyzeRelationship(
+                    parentNode,
+                    'parties',
+                    viewConfig?.topLevel || {},
+                    schema,
+                    { parties: partiesForParent }
+                  )
                   if (partyNodes.length === 0 && state) {
                     return (
                       <RelationshipAction
@@ -1118,13 +1644,24 @@ export default function CaseEditorPage() {
             {/* Holdings Sections */}
             {holdingsData.map((holdingData: any, idx: number) => {
               const holding = holdingData.holding
-              const ruling = holdingData.ruling
-              const reliefTypes = holdingData.ruling?.reliefTypes || []
-              const issue = holdingData.issue
-              const doctrines = holdingData.issue?.doctrines || []
-              const policies = holdingData.issue?.policies || []
-              const factPatterns = holdingData.issue?.factPatterns || []
-              const args = holdingData.arguments || []
+              
+              // Skip this entire holding if the holding itself is deleted/orphaned
+              if (!holding || deletedNodeIds.has(holding.temp_id) || orphanedNodeIds.has(holding.temp_id)) {
+                return null
+              }
+              
+              // Filter out deleted/orphaned ruling and issue
+              const ruling = holdingData.ruling && !deletedNodeIds.has(holdingData.ruling.temp_id) && !orphanedNodeIds.has(holdingData.ruling.temp_id) ? holdingData.ruling : null
+              const reliefTypes = filterActiveNodes(holdingData.ruling?.reliefTypes || [])
+              const issue = holdingData.issue && !deletedNodeIds.has(holdingData.issue.temp_id) && !orphanedNodeIds.has(holdingData.issue.temp_id) ? holdingData.issue : null
+              const doctrines = filterActiveNodes(holdingData.issue?.doctrines || [])
+              const policies = filterActiveNodes(holdingData.issue?.policies || [])
+              const factPatterns = filterActiveNodes(holdingData.issue?.factPatterns || [])
+              // Arguments have nested structure {arguments: node, laws: [...], facts: [...]}, filter by the nested node
+              const args = (holdingData.arguments || []).filter((argData: any) => {
+                const arg = argData.arguments || argData
+                return arg?.temp_id && !deletedNodeIds.has(arg.temp_id) && !orphanedNodeIds.has(arg.temp_id)
+              })
               
               const holdingName = pickNodeName(holding) || `Holding ${idx + 1}`
               const isShared = issue && sharedIssues[issue.temp_id]
@@ -1167,7 +1704,14 @@ export default function CaseEditorPage() {
                               />
                               <div className="space-y-4">
                                 {reliefTypes.map((relief: any, relIdx: number) => (
-                                  <NodeCard key={relief.temp_id} node={relief} label="Relief Type" index={relIdx} depth={1} />
+                                  <NodeCard 
+                                    key={relief.temp_id} 
+                                    node={relief} 
+                                    label="Relief Type" 
+                                    index={relIdx} 
+                                    depth={1}
+                                    parentId={ruling.temp_id}
+                                  />
                                 ))}
                               </div>
                             </div>
@@ -1224,7 +1768,14 @@ export default function CaseEditorPage() {
                                 />
                                 <div className="space-y-4">
                                   {doctrines.map((doc: any, docIdx: number) => (
-                                    <NodeCard key={doc.temp_id} node={doc} label="Doctrine" index={docIdx} depth={1} />
+                                    <NodeCard 
+                                      key={doc.temp_id} 
+                                      node={doc} 
+                                      label="Doctrine" 
+                                      index={docIdx} 
+                                      depth={1}
+                                      parentId={issue.temp_id}
+                                    />
                                   ))}
                                 </div>
                               </div>
@@ -1251,7 +1802,14 @@ export default function CaseEditorPage() {
                                 />
                                 <div className="space-y-4">
                                   {policies.map((pol: any, polIdx: number) => (
-                                    <NodeCard key={pol.temp_id} node={pol} label="Policy" index={polIdx} depth={1} />
+                                    <NodeCard 
+                                      key={pol.temp_id} 
+                                      node={pol} 
+                                      label="Policy" 
+                                      index={polIdx} 
+                                      depth={1}
+                                      parentId={issue.temp_id}
+                                    />
                                   ))}
                                 </div>
                               </div>
@@ -1278,7 +1836,14 @@ export default function CaseEditorPage() {
                                 />
                                 <div className="space-y-4">
                                   {factPatterns.map((fp: any, fpIdx: number) => (
-                                    <NodeCard key={fp.temp_id} node={fp} label="Fact Pattern" index={fpIdx} depth={1} />
+                                    <NodeCard 
+                                      key={fp.temp_id} 
+                                      node={fp} 
+                                      label="Fact Pattern" 
+                                      index={fpIdx} 
+                                      depth={1}
+                                      parentId={issue.temp_id}
+                                    />
                                   ))}
                                 </div>
                               </div>
@@ -1308,8 +1873,12 @@ export default function CaseEditorPage() {
                         {args.map((argData: any, argIdx: number) => {
                           // Backend returns: { arguments: node, laws: [...], facts: [...] }
                           const arg = argData.arguments || argData
-                          const laws = argData.laws || []
-                          const facts = argData.facts || []
+                          const laws = filterActiveNodes(argData.laws || [])
+                          // Facts have nested structure {facts: node, witnesses: [...], evidence: [...], judicialNotice: [...]}, filter by nested node
+                          const facts = (argData.facts || []).filter((factData: any) => {
+                            const fact = factData.facts || factData
+                            return fact?.temp_id && !deletedNodeIds.has(fact.temp_id) && !orphanedNodeIds.has(fact.temp_id)
+                          })
                           
                         return (
                           <NodeCard key={arg.temp_id} node={arg} label="Argument" index={argIdx} depth={0}>
@@ -1334,7 +1903,14 @@ export default function CaseEditorPage() {
                                     />
                                     <div className="space-y-4">
                                       {laws.map((law: any, lawIdx: number) => (
-                                        <NodeCard key={law.temp_id} node={law} label="Law" index={lawIdx} depth={1} />
+                                        <NodeCard 
+                                          key={law.temp_id} 
+                                          node={law} 
+                                          label="Law" 
+                                          index={lawIdx} 
+                                          depth={1}
+                                          parentId={arg.temp_id}
+                                        />
                                       ))}
                                     </div>
                                   </div>
@@ -1363,12 +1939,19 @@ export default function CaseEditorPage() {
                                       {/* Facts with nested support */}
                                       {facts.map((factData: any, factIdx: number) => {
                                 const fact = factData.facts || factData
-                                const witnesses = factData.witnesses || []
-                                const evidence = factData.evidence || []
-                                const judicialNotice = factData.judicialNotice || []
+                                const witnesses = filterActiveNodes(factData.witnesses || [])
+                                const evidence = filterActiveNodes(factData.evidence || [])
+                                const judicialNotice = filterActiveNodes(factData.judicialNotice || [])
                                 
                                 return (
-                                  <NodeCard key={fact.temp_id} node={fact} label="Fact" index={factIdx} depth={1}>
+                                  <NodeCard 
+                                    key={fact.temp_id} 
+                                    node={fact} 
+                                    label="Fact" 
+                                    index={factIdx} 
+                                    depth={1}
+                                    parentId={arg.temp_id}
+                                  >
                                     <div className="mt-4 space-y-6">
                                       {/* Witnesses Section */}
                                       {(() => {
@@ -1390,7 +1973,14 @@ export default function CaseEditorPage() {
                                             />
                                             <div className="space-y-4">
                                               {witnesses.map((wit: any, witIdx: number) => (
-                                                <NodeCard key={wit.temp_id} node={wit} label="Witness" index={witIdx} depth={2} />
+                                                <NodeCard 
+                                                  key={wit.temp_id} 
+                                                  node={wit} 
+                                                  label="Witness" 
+                                                  index={witIdx} 
+                                                  depth={2}
+                                                  parentId={fact.temp_id}
+                                                />
                                               ))}
                                             </div>
                                           </div>
@@ -1417,7 +2007,14 @@ export default function CaseEditorPage() {
                                             />
                                             <div className="space-y-4">
                                               {evidence.map((ev: any, evIdx: number) => (
-                                                <NodeCard key={ev.temp_id} node={ev} label="Evidence" index={evIdx} depth={2} />
+                                                <NodeCard 
+                                                  key={ev.temp_id} 
+                                                  node={ev} 
+                                                  label="Evidence" 
+                                                  index={evIdx} 
+                                                  depth={2}
+                                                  parentId={fact.temp_id}
+                                                />
                                               ))}
                                             </div>
                                           </div>
@@ -1444,7 +2041,14 @@ export default function CaseEditorPage() {
                                             />
                                             <div className="space-y-4">
                                               {judicialNotice.map((jn: any, jnIdx: number) => (
-                                                <NodeCard key={jn.temp_id} node={jn} label="Judicial Notice" index={jnIdx} depth={2} />
+                                                <NodeCard 
+                                                  key={jn.temp_id} 
+                                                  node={jn} 
+                                                  label="Judicial Notice" 
+                                                  index={jnIdx} 
+                                                  depth={2}
+                                                  parentId={fact.temp_id}
+                                                />
                                               ))}
                                             </div>
                                           </div>
@@ -1484,6 +2088,55 @@ export default function CaseEditorPage() {
                 </div>
               )
             })}
+            
+            {/* Orphaned Nodes Section */}
+            {orphanedNodes.length > 0 && (
+              <div className="mt-8 border-t-4 border-red-200 pt-6">
+                <div className="mb-4">
+                  <h2 className="text-lg font-semibold text-red-700">
+                    Orphaned Nodes ({orphanedNodes.length})
+                  </h2>
+                  <p className="text-xs text-gray-600 mt-1">
+                    These nodes were disconnected when their parent was deleted. They will be permanently deleted when you save unless you reassign them.
+                  </p>
+                  <p className="text-xs text-gray-600 mt-1">
+                    To keep a node, use the Add buttons above to connect it to an appropriate parent (you can add new or select an existing node in the modal).
+                  </p>
+                </div>
+                
+                <div className="space-y-3">
+                  {orphanedNodes.map((node: any) => {
+                    const nodeLabel = node.label || 'Unknown'
+                    const nodeName = pickNodeName(node) || node.temp_id
+                    const { outgoing, incoming } = getNodeConnections(node.temp_id)
+                    
+                    return (
+                      <div key={node.temp_id} className="bg-red-50 border border-red-200 rounded-lg p-4">
+                        <div className="flex items-start justify-between mb-2">
+                          <div>
+                            <div className="text-sm font-semibold text-gray-900">
+                              [{nodeLabel}] {nodeName}
+                            </div>
+                            <div className="text-xs text-gray-600 mt-1">
+                              {incoming.length} incoming · {outgoing.length} outgoing connections
+                            </div>
+                          </div>
+                        </div>
+                        
+                        {/* Show a preview of properties */}
+                        <div className="mt-2 text-xs text-gray-700">
+                          {Object.entries(node.properties || {}).slice(0, 2).map(([key, value]) => (
+                            <div key={key} className="truncate">
+                              <span className="font-medium">{formatLabel(key)}:</span> {String(value).slice(0, 100)}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -1511,7 +2164,23 @@ export default function CaseEditorPage() {
                   </Button>
                 )}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-3">
+                {hasUnsavedChanges && (
+                  <div className="flex items-center gap-2 text-amber-600 text-sm">
+                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                    </svg>
+                    <span className="font-medium">Unsaved changes</span>
+                  </div>
+                )}
+                {orphanedNodes.length > 0 && (
+                  <div className="flex items-center gap-2 text-red-600 text-sm">
+                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                    </svg>
+                    <span className="font-medium">{orphanedNodes.length} orphaned node{orphanedNodes.length !== 1 ? 's' : ''} will be deleted</span>
+                  </div>
+                )}
                 <Button onClick={onSave} disabled={saving}>{saving ? 'Saving...' : 'Save'}</Button>
               </div>
             </div>
@@ -1521,11 +2190,11 @@ export default function CaseEditorPage() {
 
       {/* View Node Connections Modal */}
       {viewingConnectionsNodeId && (() => {
-        const node = nodesArray.find((n: any) => n.temp_id === viewingConnectionsNodeId)
+        const node = graphState.nodes.find((n: any) => n.temp_id === viewingConnectionsNodeId)
         if (!node) return null
         const { outgoing, incoming } = getNodeConnections(viewingConnectionsNodeId)
         const nodeLabel = node.label || 'Node'
-        const nodeName = getNodeDisplayName(viewingConnectionsNodeId)
+        const nodeName = pickNodeName(node) || viewingConnectionsNodeId
 
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ position: 'fixed', inset: 0, zIndex: 9999 }}>
@@ -1650,12 +2319,20 @@ export default function CaseEditorPage() {
 
       {/* Delete Node Confirmation */}
       {deletingNodeId && (() => {
-        const node = nodesArray.find((n: any) => n.temp_id === deletingNodeId)
+        const node = graphState.nodes.find((n: any) => n.temp_id === deletingNodeId)
         if (!node) return null
         const nodeLabel = node.label || 'Node'
-        const nodeName = getNodeDisplayName(deletingNodeId)
+        const nodeName = pickNodeName(node) || deletingNodeId
         const { outgoing, incoming } = getNodeConnections(deletingNodeId)
         const totalConnections = outgoing.length + incoming.length
+        
+        // Find all descendants that will be orphaned
+        const edges = graphState.edges.filter(e => e.status === 'active')
+        const descendants = findDescendants(deletingNodeId, edges)
+        const descendantNodes = descendants.map(id => {
+          const n = graphState.nodes.find((node: any) => node.temp_id === id)
+          return n ? { id, label: n.label || 'Node', name: pickNodeName(n) || id } : null
+        }).filter(Boolean)
 
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ position: 'fixed', inset: 0, zIndex: 10000 }}>
@@ -1665,8 +2342,31 @@ export default function CaseEditorPage() {
               <div className="text-sm text-gray-700 mb-2">
                 Are you sure you want to delete <span className="font-medium">{nodeLabel}: {nodeName}</span>?
               </div>
-              <div className="text-xs text-gray-600 mb-4">
-                This will also delete {totalConnections} connection{totalConnections !== 1 ? 's' : ''}. This action cannot be undone.
+              <div className="text-xs text-gray-600 mb-2">
+                This will delete {totalConnections} connection{totalConnections !== 1 ? 's' : ''}.
+              </div>
+              {descendantNodes.length > 0 && (
+                <div className="text-xs bg-amber-50 border border-amber-200 rounded px-2 py-1.5 mb-2">
+                  <div className="font-semibold text-amber-800 mb-1">
+                    {descendantNodes.length} child node{descendantNodes.length !== 1 ? 's' : ''} will be orphaned:
+                  </div>
+                  <div className="ml-2 space-y-0.5 max-h-24 overflow-y-auto">
+                    {descendantNodes.slice(0, 5).map((desc: any) => (
+                      <div key={desc.id} className="text-amber-700">
+                        • [{desc.label}] {String(desc.name).slice(0, 40)}
+                      </div>
+                    ))}
+                    {descendantNodes.length > 5 && (
+                      <div className="text-amber-700 italic">... and {descendantNodes.length - 5} more</div>
+                    )}
+                  </div>
+                  <div className="mt-1 text-amber-700">
+                    These nodes will be available for reassignment before saving.
+                  </div>
+                </div>
+              )}
+              <div className="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded px-2 py-1.5 mb-4">
+                <strong>Note:</strong> The deletion will be persisted when you save the case.
               </div>
               <div className="flex items-center justify-end gap-2">
                 <button
@@ -1708,13 +2408,13 @@ export default function CaseEditorPage() {
             <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
               <button
                 type="button"
-                className="rounded border px-3 py-1 min-w-[84px]"
+                className="rounded border px-3 py-1 min-w-[84px] cursor-pointer"
                 onClick={() => setEditingEdgeIdx(null)}
               >
                 Cancel
               </button>
               <div
-                className="rounded bg-blue-600 text-white text-center px-3 py-1 min-w-[84px] transition-colors hover:brightness-95"
+                className="rounded bg-blue-600 text-white text-center px-3 py-1 min-w-[84px] transition-colors hover:brightness-95 cursor-pointer"
                 onClick={() => {
                   if (editingEdgeIdx !== null) {
                     setValueAtPath(['edges', editingEdgeIdx, 'to'], editToValue)
@@ -1739,20 +2439,35 @@ export default function CaseEditorPage() {
             <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
               <button
                 type="button"
-                className="rounded border px-3 py-1 min-w-[84px]"
+                className="rounded border px-3 py-1 min-w-[84px] cursor-pointer"
                 onClick={() => setConfirmDeleteIdx(null)}
               >
                 Cancel
               </button>
               <button
                 type="button"
-                className="rounded !bg-red-600 text-white px-3 py-1 min-w-[84px] transition-colors hover:brightness-95"
+                className="rounded !bg-red-600 text-white px-3 py-1 min-w-[84px] transition-colors hover:brightness-95 cursor-pointer"
                 onClick={() => {
                   const idx = confirmDeleteIdx
-                  setFormData((prev: any) => {
-                    const next = Array.isArray(prev?.edges) ? { ...prev, edges: prev.edges.filter((_: any, i: number) => i !== idx) } : prev
-                    return next
+                  setGraphState((prev) => {
+                    const activeEdges = prev.edges.filter(e => e.status === 'active')
+                    // Find the edge at the given index in active edges
+                    const edgeToDelete = activeEdges[idx!]
+                    if (!edgeToDelete) return prev
+                    
+                    // Mark that edge as deleted in the full edges array
+                    return {
+                      ...prev,
+                      edges: prev.edges.map(e => 
+                        e.from === edgeToDelete.from && 
+                        e.to === edgeToDelete.to && 
+                        e.label === edgeToDelete.label
+                          ? { ...e, status: 'deleted' as const }
+                          : e
+                      )
+                    }
                   })
+                  setHasUnsavedChanges(true)
                   setConfirmDeleteIdx(null)
                 }}
               >
@@ -1767,7 +2482,7 @@ export default function CaseEditorPage() {
         open={addModalOpen}
         nodeType={addModalType}
         schema={schema}
-        existingNodes={nodesArray}
+        existingNodes={nodesArrayForModals}
         parentContext={addModalContext?.parentId ? {
           parentId: addModalContext.parentId,
           parentLabel: getParentNodeLabel(addModalContext.parentId),
@@ -1779,33 +2494,50 @@ export default function CaseEditorPage() {
           setAddModalContext(null)
         }}
         onSubmit={({ node, edges }) => {
-          setFormData((prev: any) => {
-            const next = prev ? { ...prev } : {}
-            const nodes = Array.isArray(next.nodes) ? [...next.nodes] : []
-            nodes.push(node)
-            const nextEdges = Array.isArray(next.edges) ? [...next.edges] : []
-            
+          setGraphState((prev) => {
+            const nodes = [...prev.nodes]
+            const nextEdges = [...prev.edges]
+
+            // Ensure node exists and is active (avoid duplicates; revive orphaned/deleted)
+            const existingIndex = nodes.findIndex(n => n.temp_id === node.temp_id)
+            if (existingIndex >= 0) {
+              const existing = nodes[existingIndex]
+              if (existing.status !== 'active') {
+                nodes[existingIndex] = { ...existing, status: 'active' as const }
+              }
+            } else {
+              nodes.push({
+                ...node,
+                status: 'active' as const,
+                source: 'user-created' as const
+              })
+            }
+
+            // Helper to add or reactivate an edge
+            const ensureActiveEdge = (from: string, to: string, label: string) => {
+              const idx = nextEdges.findIndex(e => e.from === from && e.to === to && e.label === label)
+              if (idx >= 0) {
+                if (nextEdges[idx].status !== 'active') {
+                  nextEdges[idx] = { ...nextEdges[idx], status: 'active' as const }
+                }
+              } else {
+                nextEdges.push({ from, to, label, status: 'active' as const })
+              }
+            }
+
             // Add edges from the modal
-            edges.forEach((e: any) => nextEdges.push(e))
-            
+            edges.forEach((e: any) => ensureActiveEdge(e.from, e.to, e.label))
+
             // Add edge to parent if context is provided
             if (addModalContext?.parentId && addModalContext?.relationship) {
-              const parentEdge: GraphEdge = {
-                from: addModalContext.direction === 'outgoing' 
-                  ? addModalContext.parentId 
-                  : node.temp_id,
-                to: addModalContext.direction === 'outgoing' 
-                  ? node.temp_id 
-                  : addModalContext.parentId,
-                label: addModalContext.relationship
-              }
-              nextEdges.push(parentEdge)
+              const from = addModalContext.direction === 'outgoing' ? addModalContext.parentId : node.temp_id
+              const to = addModalContext.direction === 'outgoing' ? node.temp_id : addModalContext.parentId
+              ensureActiveEdge(from || '', to || '', addModalContext.relationship)
             }
-            
-            next.nodes = nodes
-            if (nextEdges.length > 0) next.edges = nextEdges
-            return next
+
+            return { nodes, edges: nextEdges }
           })
+          setHasUnsavedChanges(true)
           setAddModalOpen(false)
           setAddModalContext(null)
         }}
@@ -1816,7 +2548,7 @@ export default function CaseEditorPage() {
         open={selectModalOpen}
         nodeType={selectModalType}
         availableNodes={getAvailableNodesForSelection(selectModalType)}
-        allNodes={nodesArray}
+        allNodes={nodesArrayForModals}
         allEdges={edgesArray}
         onCancel={() => {
           setSelectModalOpen(false)

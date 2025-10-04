@@ -2,7 +2,7 @@
  * Helpers for analyzing relationships and determining what actions are available
  */
 
-import type { Schema, GraphNode } from '@/types/case-graph'
+import type { Schema } from '@/types/case-graph'
 
 export interface RelationshipState {
   key: string                    // e.g., "ruling", "arguments", "doctrines"

@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from app.lib.security import get_api_key
 from app.lib.db import get_db
 from app.lib.case_repo import case_repo
+from app.lib.property_filter import filter_case_data, filter_display_data
 import tempfile
 import os
 import logging
@@ -121,6 +122,12 @@ def get_case(case_id: str, db: Session = Depends(get_db)):
     data = case_repo.get_case(db.connection(), case_id)
     if not data:
         raise HTTPException(404, "Not found")
+    
+    # Filter hidden properties from extracted data before returning
+    extracted = data.get("extracted")
+    if extracted:
+        data["extracted"] = filter_case_data(extracted)
+    
     return {"success": True, "case": data}
 
 
@@ -141,11 +148,14 @@ def get_case_display(case_id: str, view: str = "holdingsCentric", db: Session = 
         views_config = load_views_config()
         view_config = views_config.get(view, {})
         
+        # Filter hidden properties from structured display data
+        filtered_structured = filter_display_data(structured)
+        
         return {
             "success": True,
             "view": view,
             "viewConfig": view_config,
-            "data": structured,
+            "data": filtered_structured,
             "metadata": {
                 "case_id": case_data.get("id"),
                 "filename": case_data.get("filename"),
