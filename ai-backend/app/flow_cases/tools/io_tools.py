@@ -26,9 +26,21 @@ def read_document(file_path: str, filename: str) -> Dict[str, Any]:
       { ok: bool, text?: str, meta?: {...}, error?: str }
     """
     try:
-        if not os.path.exists(file_path):
-            return {"ok": False, "error": f"File not found: {file_path}"}
-
+        # Add retry logic for file access in case of timing issues
+        import time
+        max_retries = 3
+        retry_delay = 0.5
+        
+        for attempt in range(max_retries):
+            if os.path.exists(file_path):
+                break
+            if attempt < max_retries - 1:
+                logger.warning(f"File not found on attempt {attempt + 1}, retrying in {retry_delay}s: {file_path}")
+                time.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+            else:
+                return {"ok": False, "error": f"File not found after {max_retries} attempts: {file_path}"}
+        
         ext = os.path.splitext(filename or file_path)[1].lower()
         text: str = ""
 

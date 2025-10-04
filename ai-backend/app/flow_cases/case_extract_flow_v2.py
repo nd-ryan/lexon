@@ -89,6 +89,20 @@ class CaseExtractFlow(Flow[CaseExtractState]):
         # Read document once and store text
         try:
             logger.info(f"Reading document: file_path='{self.state.file_path}', filename='{self.state.filename}'")
+            
+            # Add file existence check with detailed logging
+            import os
+            if not os.path.exists(self.state.file_path):
+                error_msg = f"File not found: {self.state.file_path}"
+                logger.error(error_msg)
+                logger.error(f"Current working directory: {os.getcwd()}")
+                logger.error(f"Directory contents: {os.listdir(os.path.dirname(self.state.file_path) if os.path.dirname(self.state.file_path) else '.')}")
+                self.state.document_text = ""
+                return ctx
+            
+            file_size = os.path.getsize(self.state.file_path)
+            logger.info(f"File exists, size: {file_size} bytes")
+            
             doc_res = read_document(self.state.file_path, self.state.filename)
             logger.info(f"Document read result type: {type(doc_res)}, is_dict: {isinstance(doc_res, dict)}")
             if isinstance(doc_res, dict):

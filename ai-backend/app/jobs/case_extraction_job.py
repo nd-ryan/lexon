@@ -62,6 +62,17 @@ def run_case_extraction(tmp_path: str, filename: str, case_id: str, job_id: str)
     """Run case extraction flow and publish progress updates."""
     logger.info(f"Starting case extraction job {job_id} for case {case_id}")
     logger.info(f"Redis connection: {redis_conn}")
+    logger.info(f"Temporary file path: {tmp_path}")
+    
+    # Check if file exists before starting
+    if not os.path.exists(tmp_path):
+        error_msg = f"Temporary file not found: {tmp_path}"
+        logger.error(error_msg)
+        publish_error(job_id, error_msg)
+        return
+    
+    file_size = os.path.getsize(tmp_path)
+    logger.info(f"Temporary file exists, size: {file_size} bytes")
     
     try:
         publish_progress(job_id, f"Starting extraction for {filename}", "init", 0)
@@ -85,6 +96,15 @@ def run_case_extraction(tmp_path: str, filename: str, case_id: str, job_id: str)
         flow.state.progress_callback = lambda msg, phase, pct: publish_progress(job_id, msg, phase, pct)
         
         publish_progress(job_id, "Reading document and preparing schema", "phase0", 10)
+        
+        # Double-check file exists before flow execution
+        if not os.path.exists(tmp_path):
+            error_msg = f"Temporary file disappeared before flow execution: {tmp_path}"
+            logger.error(error_msg)
+            publish_error(job_id, error_msg)
+            return
+        
+        logger.info(f"File still exists before flow execution, size: {os.path.getsize(tmp_path)} bytes")
         
         # Run flow asynchronously (CrewAI flows support async)
         async def run_async_flow():

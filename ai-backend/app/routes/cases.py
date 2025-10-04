@@ -20,9 +20,29 @@ async def upload_case(file: UploadFile = File(...), db: Session = Depends(get_db
     tmp_path = None
     try:
         file_bytes = await file.read()
-        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1] or ".docx") as tmp:
+        
+        # Create a more persistent temporary file path
+        import tempfile
+        import os
+        temp_dir = tempfile.gettempdir()
+        temp_filename = f"case_extraction_{uuid.uuid4().hex}{os.path.splitext(file.filename)[1] or '.docx'}"
+        tmp_path = os.path.join(temp_dir, temp_filename)
+        
+        # Write file to the persistent path
+        with open(tmp_path, 'wb') as tmp:
             tmp.write(file_bytes)
-            tmp_path = tmp.name
+        
+        logger.info(f"Created temporary file: {tmp_path}, size: {len(file_bytes)} bytes")
+        
+        # Verify file was written correctly
+        if not os.path.exists(tmp_path):
+            raise Exception(f"Failed to create temporary file: {tmp_path}")
+        
+        actual_size = os.path.getsize(tmp_path)
+        if actual_size != len(file_bytes):
+            raise Exception(f"File size mismatch: expected {len(file_bytes)}, got {actual_size}")
+        
+        logger.info(f"Temporary file verified: {tmp_path}, size: {actual_size} bytes")
 
         # Create case record
         case_id = case_repo.create_case(db.connection(), file.filename)
