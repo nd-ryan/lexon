@@ -11,6 +11,6 @@ export const features = {
    * Whether user registration is enabled
    * Set to true to allow new user sign-ups
    */
-  registrationEnabled: true,
+  registrationEnabled: false,
 } as const
 
