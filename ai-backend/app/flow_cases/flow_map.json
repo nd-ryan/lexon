@@ -83,7 +83,7 @@
     "label": "Evidence",
     "case_unique": true,
     "can_create_new": true,
-    "instructions": "List key pieces of evidence the court relied upon. Use the evidence type and summarize its content or relevance in description; indicate whether it was admitted.",
+    "instructions": "Extract the evidence that supports each Fact. In order to assign to the fact, the evidence must be explicitly linked to the Fact in the case text. Use the evidence type and summarize its content or relevance in description; indicate whether it was admitted.",
     "examples": [
       { "type": "Email chain", "description": "Internal messages showing knowledge of scheduling delays.", "admitted": "YES" },
       { "type": "Dashcam video", "description": "Footage contradicting officer's account of the traffic stop.", "admitted": "YES" }
@@ -95,10 +95,10 @@
     "label": "Witness",
     "case_unique": true,
     "can_create_new": true,
-    "instructions": "Identify each witness referenced by the court. Use the person's name and type; briefly summarize testimony and whether the witness was admitted.",
+    "instructions": "Extract the witness(es) that supports each Fact. In order to assign to the fact, the witness must be explicitly linked to the Fact in the case text. Use the person's name and type; briefly summarize testimony and whether the witness was admitted.",
     "examples": [
-      { "name": "Dr. Elena Park", "type": "expert", "testimony_summary": "Orthopedic expert opined injuries consistent with repetitive strain.", "expert": true, "expert_type": "economics", "admitted": "YES" },
-      { "name": "Officer Luis Moreno", "type": "layperson", "testimony_summary": "Described chain of custody for seized laptop.", "expert": false, "admitted": "YES" }
+      { "name": "Dr. Elena Park", "type": "expert", "testimony_summary": "Orthopedic expert opined injuries consistent with repetitive strain.", "expert_type": "economics", "admitted": "YES" },
+      { "name": "Officer Luis Moreno", "type": "layperson", "testimony_summary": "Described chain of custody for seized laptop.", "admitted": "YES" }
     ],
     "phase": 10,
     "relationships": {}

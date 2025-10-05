@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, Suspense } from 'react'
+import { useEffect, useState, useRef, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 
 function UploadProgressContent() {
@@ -13,6 +13,8 @@ function UploadProgressContent() {
   const [progress, setProgress] = useState<number>(0)
   const [error, setError] = useState<string>('')
   const [complete, setComplete] = useState(false)
+  const [reconnecting, setReconnecting] = useState(false)
+  const eventSourceRef = useRef<EventSource | null>(null)
 
   useEffect(() => {
     if (!jobId) {
@@ -24,11 +26,15 @@ function UploadProgressContent() {
     
     // Use Next.js API proxy which handles FastAPI authentication
     const eventSource = new EventSource(`/api/cases/upload/progress/${jobId}`)
+    eventSourceRef.current = eventSource
     
     console.log('EventSource created, readyState:', eventSource.readyState)
     
     eventSource.onopen = () => {
       console.log('EventSource connection opened')
+      setReconnecting(false)
+      // clear any transient error state upon successful reconnect
+      setError('')
     }
 
     eventSource.onmessage = (event) => {
@@ -53,6 +59,7 @@ function UploadProgressContent() {
             router.push(`/cases/${caseId || data.caseId}`)
           }, 2000)
         } else if (data.type === 'error') {
+          // Treat backend-declared error as fatal for this job
           setError(data.message || 'An error occurred')
           setProgress(0)
           eventSource.close()
@@ -70,12 +77,23 @@ function UploadProgressContent() {
       console.error('EventSource error:', err)
       console.error('EventSource readyState:', eventSource.readyState)
       console.error('EventSource URL:', eventSource.url)
-      setError('Connection lost. Please refresh the page.')
-      eventSource.close()
+      
+      // readyState: 0 = CONNECTING, 1 = OPEN, 2 = CLOSED
+      // If CLOSED (2), browser won't auto-reconnect - connection failed permanently
+      if (eventSource.readyState === 2) {
+        console.error('EventSource closed permanently')
+        setError('Connection failed. Please refresh the page to retry.')
+        return
+      }
+      
+      // For CONNECTING (0) state, browser will auto-reconnect
+      setReconnecting(true)
+      setStatus('Connection lost. Reconnecting...')
     }
 
     return () => {
-      eventSource.close()
+      try { eventSource.close() } catch {}
+      eventSourceRef.current = null
     }
   }, [jobId, caseId, router])
 
@@ -87,12 +105,6 @@ function UploadProgressContent() {
         <div className="bg-red-50 border border-red-200 rounded p-4 text-red-700">
           <p className="font-semibold">Error</p>
           <p>{error}</p>
-          <button
-            onClick={() => router.push('/cases/upload')}
-            className="mt-4 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
-          >
-            Try Again
-          </button>
         </div>
       ) : (
         <div className="space-y-4">
@@ -100,6 +112,12 @@ function UploadProgressContent() {
             <p className="text-sm text-blue-600 font-medium mb-2">Status: {phase.toUpperCase()}</p>
             <p className="text-gray-800">{status}</p>
           </div>
+
+          {reconnecting && (
+            <div className="bg-yellow-50 border border-yellow-200 rounded p-3 text-yellow-800">
+              Reconnecting to progress stream...
+            </div>
+          )}
           
           <div className="w-full bg-gray-200 rounded-full h-4 overflow-hidden">
             <div

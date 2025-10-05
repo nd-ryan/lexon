@@ -38,6 +38,10 @@ class CaseCrew:
     agents: List[BaseAgent]
     tasks: List[Task]
 
+    # LLM model configuration
+    LLM_MODEL = "gpt-4.1"
+    LLM_TEMPERATURE = 0
+
     agents_config = 'config/agents.yaml'
     tasks_config = 'config/tasks.yaml'
 
@@ -59,7 +63,7 @@ class CaseCrew:
         - Phase 5: Holdings extraction (NEW)
         - Phase 6: Ruling & Arguments extraction (NEW)
         """
-        llm = LLM(model="gpt-4.1", temperature=0)
+        llm = LLM(model=self.LLM_MODEL, temperature=self.LLM_TEMPERATURE)
         return Agent(
             config=self.agents_config['phase1_extract_agent'],  # type: ignore[index]
             tools=self.tools,
@@ -75,7 +79,7 @@ class CaseCrew:
         - Phase 9: Facts extraction
         - Phase 10: Evidence & Witnesses extraction
         """
-        llm = LLM(model="gpt-4.1", temperature=0)
+        llm = LLM(model=self.LLM_MODEL, temperature=self.LLM_TEMPERATURE)
         return Agent(
             config=self.agents_config['phase2_extract_agent'],  # type: ignore[index]
             tools=self.tools,
@@ -143,13 +147,28 @@ class CaseCrew:
             config=cfg,
             agent=self.phase2_extract_agent(),
         )
-        
+    
+    # Batch extraction tasks with Pydantic output models
+    def batch_extract_task(self, description: str, output_model: Type[BaseModel]) -> Task:
+        """
+        Generic batch extraction task with Pydantic output model.
+        Used for Phase 5, 6, 9, 10 batch operations.
+        """
+        cfg = {
+            "description": description,
+            "expected_output": f"JSON matching the {output_model.__name__} schema"
+        }
+        return Task(
+            config=cfg,
+            agent=self.phase1_extract_agent(),
+            output_pydantic=output_model
+        )
 
     
 
     @agent
     def phase5_select_existing_agent(self) -> Agent:
-        llm = LLM(model="gpt-4.1", temperature=0)
+        llm = LLM(model=self.LLM_MODEL, temperature=self.LLM_TEMPERATURE)
         return Agent(
             config=self.agents_config['phase5_select_existing_agent'],  # type: ignore[index]
             tools=[],
@@ -174,7 +193,7 @@ class CaseCrew:
 
     @agent
     def phase3_relationships_agent(self) -> Agent:
-        llm = LLM(model="gpt-4.1", temperature=0)
+        llm = LLM(model=self.LLM_MODEL, temperature=self.LLM_TEMPERATURE)
         return Agent(
             config=self.agents_config['phase3_relationships_agent'],  # type: ignore[index]
             tools=[],
@@ -199,7 +218,7 @@ class CaseCrew:
 
     @agent
     def phase6_law_agent(self) -> Agent:
-        llm = LLM(model="gpt-4.1", temperature=0)
+        llm = LLM(model=self.LLM_MODEL, temperature=self.LLM_TEMPERATURE)
         return Agent(
             config=self.agents_config['phase6_law_agent'],  # type: ignore[index]
             tools=[],
@@ -224,7 +243,7 @@ class CaseCrew:
 
     @agent
     def phase7_issue_related_agent(self) -> Agent:
-        llm = LLM(model="gpt-4.1", temperature=0)
+        llm = LLM(model=self.LLM_MODEL, temperature=self.LLM_TEMPERATURE)
         return Agent(
             config=self.agents_config['phase7_issue_related_agent'],  # type: ignore[index]
             tools=[],
@@ -249,7 +268,7 @@ class CaseCrew:
 
     @agent
     def phase8_party_agent(self) -> Agent:
-        llm = LLM(model="gpt-4.1", temperature=0)
+        llm = LLM(model=self.LLM_MODEL, temperature=self.LLM_TEMPERATURE)
         return Agent(
             config=self.agents_config['phase8_party_agent'],  # type: ignore[index]
             tools=[],

@@ -9,10 +9,27 @@ from app.models.case_graph import CaseGraph
 from app.lib.logging_config import setup_logger
 from app.lib.neo4j_client import neo4j_client
 import json
+import os
 from datetime import datetime
 
 
 logger = setup_logger("case-extract-flow-v2")
+
+
+def _load_flow_config() -> Dict[str, Any]:
+    """Load flow runtime configuration from flow_config.json"""
+    try:
+        config_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "flow_config.json"))
+        with open(config_path, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning(f"Failed to load flow_config.json: {e}; using fallback defaults")
+        return {
+            "batch_sizes": {
+                "phase9_arguments": 999,
+                "phase10_facts": 10
+            }
+        }
 
 
 class CaseExtractState(BaseModel):
@@ -38,6 +55,60 @@ class CaseExtractState(BaseModel):
     document_text: str = ""
     nodes_accumulated: List[Dict[str, Any]] | None = None
     edges_accumulated: List[Dict[str, Any]] | None = None
+
+
+# Pydantic models for batch extraction responses
+class HoldingResult(BaseModel):
+    """Result for a single issue's holding extraction"""
+    issue_temp_id: str
+    holding: Optional[Dict[str, Any]] = None  # Holding properties
+
+
+class HoldingBatchResponse(BaseModel):
+    """Response for Phase 5: Holdings extraction from multiple issues"""
+    results: List[HoldingResult]
+
+
+class RulingAndArgumentsResult(BaseModel):
+    """Result for a single holding's ruling and arguments extraction"""
+    holding_temp_id: str
+    ruling: Optional[Dict[str, Any]] = None  # Ruling properties
+    arguments: List[Dict[str, Any]] = []  # List of Argument properties
+
+
+class RulingAndArgumentsBatchResponse(BaseModel):
+    """Response for Phase 6: Ruling and Arguments extraction from multiple holdings"""
+    results: List[RulingAndArgumentsResult]
+
+
+class FactResult(BaseModel):
+    """Result for a single argument's fact extraction"""
+    argument_temp_id: str
+    facts: List[Dict[str, Any]] = []  # Each can have temp_id (reuse) or fact (new)
+
+
+class FactBatchResponse(BaseModel):
+    """Response for Phase 9: Facts extraction from multiple arguments"""
+    results: List[FactResult]
+
+
+class WitnessOrEvidenceItem(BaseModel):
+    """A witness or evidence item that can be reused or newly created"""
+    temp_id: Optional[str] = None  # For reusing existing
+    node: Optional[Dict[str, Any]] = None  # For creating new
+    support_strength: Optional[int] = None
+
+
+class SupportResult(BaseModel):
+    """Result for a single fact's witnesses and evidence extraction"""
+    fact_temp_id: str
+    witnesses: List[WitnessOrEvidenceItem] = []
+    evidence: List[WitnessOrEvidenceItem] = []
+
+
+class SupportBatchResponse(BaseModel):
+    """Response for Phase 10: Witnesses and Evidence extraction from multiple facts"""
+    results: List[SupportResult]
 
 
 class CaseExtractFlow(Flow[CaseExtractState]):
@@ -193,6 +264,11 @@ class CaseExtractFlow(Flow[CaseExtractState]):
     def phase1_extract_foundation(self, ctx: Dict[str, Any]) -> Dict[str, Any]:
         # Phase 1: extract Case, Proceeding, Issue nodes and create edges between them
         logger.info(f"Phase 1 (foundation): starting for file {self.state.filename}")
+        if self.state.progress_callback:
+            try:
+                self.state.progress_callback("Phase 1 in progress: Extracting foundation nodes", "phase1", 10)
+            except Exception as e:
+                logger.warning(f"Failed to publish progress: {e}")
         tools = []
 
         # Load flow_map to determine ordering and instructions/examples
@@ -289,8 +365,8 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 )
 
                 # Decide single vs multi extraction
-                # In Phase 1: Issue can have multiple instances
-                allow_multiple = label in {"Issue"}
+                # In Phase 1: Issue can have multiple instances; Proceeding typically single but allow multi for edge cases
+                allow_multiple = label in {"Issue", "Proceeding"}
                 if allow_multiple:
                     multi_desc = (
                         "Analyse the document text (provided below) and extract ALL distinct nodes for the label '" + label + "'.\n\n"
@@ -464,12 +540,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
         except Exception:
             logger.info("Phase 1 (foundation): completed")
         
-        # Publish progress if callback is set
-        if self.state.progress_callback:
-            try:
-                self.state.progress_callback("Phase 1 complete: Extracted foundation nodes", "phase1", 10)
-            except Exception as e:
-                logger.warning(f"Failed to publish progress: {e}")
+        # No end-of-phase progress callback; start-of-phase now announces in-progress
         
         return {"status": "phase1_done"}
 
@@ -478,6 +549,11 @@ class CaseExtractFlow(Flow[CaseExtractState]):
     def phase2_assign_forum_jurisdiction(self, _: Dict[str, Any]) -> Dict[str, Any]:
         # Phase 2: select Forum and programmatically fetch Jurisdiction; create edges to Proceeding
         logger.info("Phase 2: assigning Forum and Jurisdiction")
+        if self.state.progress_callback:
+            try:
+                self.state.progress_callback("Phase 2 in progress: Assigning forum and jurisdiction", "phase2", 20)
+            except Exception as e:
+                logger.warning(f"Failed to publish progress: {e}")
         try:
             from .crews.case_crew.case_crew import CaseCrew as _CaseCrew
             # Build catalog for Forum only (no ReliefType in this phase)
@@ -626,11 +702,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             except Exception:
                 logger.info("Phase 2: Forum and Jurisdiction completed")
             
-            if self.state.progress_callback:
-                try:
-                    self.state.progress_callback("Phase 2 complete: Assigned forum and jurisdiction", "phase2", 20)
-                except Exception as e:
-                    logger.warning(f"Failed to publish progress: {e}")
+            # No end-of-phase progress callback; start-of-phase announces in-progress
             
             return {"status": "phase2_done"}
         except Exception as e:
@@ -641,6 +713,11 @@ class CaseExtractFlow(Flow[CaseExtractState]):
     def phase3_extract_parties(self, _: Dict[str, Any]) -> Dict[str, Any]:
         # Phase 3: extract/dedupe Parties and create Proceeding->Party edges with roles
         logger.info("Phase 3: extracting and deduplicating Parties; assigning roles")
+        if self.state.progress_callback:
+            try:
+                self.state.progress_callback("Phase 3 in progress: Extracting parties and assigning roles", "phase3", 30)
+            except Exception as e:
+                logger.warning(f"Failed to publish progress: {e}")
         try:
             from .crews.case_crew.case_crew import CaseCrew as _CaseCrew
             # Party catalog can be extremely large; skip preloading and use fuzzy lookup per generated name
@@ -810,11 +887,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             except Exception:
                 logger.info("Phase 3: party extraction/dedup and relationships completed")
             
-            if self.state.progress_callback:
-                try:
-                    self.state.progress_callback("Phase 3 complete: Extracted and linked parties", "phase3", 30)
-                except Exception as e:
-                    logger.warning(f"Failed to publish progress: {e}")
+            # No end-of-phase progress callback; start-of-phase announces in-progress
             
             return {"status": "phase3_done"}
         except Exception as e:
@@ -825,6 +898,11 @@ class CaseExtractFlow(Flow[CaseExtractState]):
     def phase4_assign_issue_concepts(self, _: Dict[str, Any]) -> Dict[str, Any]:
         # Phase 4: per Issue, select/generate Doctrine, Policy, FactPattern with dedup and create edges
         logger.info("Phase 4: assigning Doctrine/Policy/FactPattern per Issue with catalog dedup")
+        if self.state.progress_callback:
+            try:
+                self.state.progress_callback("Phase 4 in progress: Assigning issue concepts", "phase4", 40)
+            except Exception as e:
+                logger.warning(f"Failed to publish progress: {e}")
         try:
             from .crews.case_crew.case_crew import CaseCrew as _CaseCrew
             issues = [
@@ -1023,11 +1101,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             except Exception:
                 logger.info("Phase 4: issue-related assignment completed")
             
-            if self.state.progress_callback:
-                try:
-                    self.state.progress_callback("Phase 4 complete: Assigned issue concepts", "phase4", 40)
-                except Exception as e:
-                    logger.warning(f"Failed to publish progress: {e}")
+            # No end-of-phase progress callback; start-of-phase announces in-progress
             
             return {"status": "phase4_done"}
         except Exception as e:
@@ -1036,14 +1110,24 @@ class CaseExtractFlow(Flow[CaseExtractState]):
 
     @listen(phase4_assign_issue_concepts)
     def phase5_create_holdings(self, _: Dict[str, Any]) -> Dict[str, Any]:
-        # Phase 5: for each Issue, create ONE Holding and link Issue → Holding
-        logger.info("Phase 5: creating Holdings per Issue (one-to-one)")
+        # Phase 5: for each Issue batch, create ONE Holding per Issue and link Holding → Issue
+        logger.info("Phase 5: creating Holdings per Issue (batched)")
+        if self.state.progress_callback:
+            try:
+                self.state.progress_callback("Phase 5 in progress: Creating holdings per issue", "phase5", 45)
+            except Exception as e:
+                logger.warning(f"Failed to publish progress: {e}")
         try:
             from .crews.case_crew.case_crew import CaseCrew as _CaseCrew
             
+            # Load config and apply batch size
+            flow_config = _load_flow_config()
+            batch_size = flow_config.get("batch_sizes", {}).get("phase5_issues", 999)
+            # Allow env override
+            batch_size = int(os.getenv("PHASE5_ISSUE_BATCH_SIZE", str(batch_size)))
+            
             # Load flow_map for Holding instructions
             try:
-                import os
                 flow_map_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "flow_map.json"))
                 with open(flow_map_path, "r") as f:
                     flow_map = json.load(f)
@@ -1074,6 +1158,8 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 logger.info("Phase 5: no Issue nodes present; skipping Holdings")
                 return {"status": "phase5_skipped"}
             
+            logger.info(f"Phase 5: processing {len(issues)} issues in batches of {batch_size}")
+            
             crew = _CaseCrew(
                 self.state.file_path,
                 self.state.filename,
@@ -1086,85 +1172,107 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             holdings_created = 0
             edges_created = 0
             
-            # For each Issue, create ONE Holding
-            for issue_node in issues:
+            # Process issues in batches
+            for batch_start in range(0, len(issues), batch_size):
+                batch_end = min(batch_start + batch_size, len(issues))
+                batch = issues[batch_start:batch_end]
+                
                 try:
-                    issue_temp_id = issue_node.get("temp_id")
-                    issue_props = issue_node.get("properties") or {}
-                    issue_ctx_json = json.dumps(issue_props, ensure_ascii=False)
+                    logger.info(f"Phase 5: processing issue batch {batch_start // batch_size + 1} (issues {batch_start + 1}-{batch_end} of {len(issues)})")
                     
-                    # Compose task: create Holding for THIS Issue
+                    # Build issues payload for this batch
+                    issues_payload = {
+                        "issues": [
+                            {"temp_id": n.get("temp_id"), "properties": n.get("properties") or {}}
+                            for n in batch if isinstance(n, dict)
+                        ]
+                    }
+                    
+                    # Compose batch task: create Holding for each Issue
                     desc = (
-                        "Read the document text (provided below) and create a Holding for the following Issue.\n\n"
-                        "CRITICAL: Extract information ONLY from the provided case text. State the court's holding for THIS specific issue only.\n\n"
+                        "Read the document text (provided below) and create a Holding for each Issue.\n\n"
+                        "CRITICAL: Extract information ONLY from the provided case text. State the court's holding for each specific issue.\n\n"
                         "CASE_TEXT:\n" + (self.state.document_text or "") + "\n\n"
-                        "Issue (properties JSON):\n" + issue_ctx_json + "\n\n"
+                        "ISSUES_JSON:\n" + json.dumps(issues_payload, ensure_ascii=False) + "\n\n"
                         "Guidance:\n"
-                        "- State the court's holding as a clear, outcome-determinative rule or answer to THIS specific legal question.\n"
-                        "- Avoid reasoning; focus on the bottom-line legal conclusion for this issue.\n"
-                        "- Return ONLY JSON matching the schema properties for Holding.\n"
-                        "- Extract from the case text provided above.\n\n"
+                        "- State the court's holding as a clear, outcome-determinative rule or answer to each specific legal question.\n"
+                        "- Avoid reasoning; focus on the bottom-line legal conclusion for each issue.\n"
+                        "- Return JSON as: { results: [ { issue_temp_id: string, holding: <Holding properties> }, ... ] }.\n"
+                        "- Each holding MUST correspond to its issue and MUST be extracted from the case text above.\n"
+                        "- Match the Holding schema properties exactly.\n\n"
                         "INSTRUCTIONS (from flow map):\n" + instructions + "\n\n"
                         "EXAMPLES (illustrative, may be partial):\n" + examples_json + "\n\n"
                         "SCHEMA PROPERTIES for 'Holding':\n" + holding_spec_text + "\n\n"
                     )
                     
-                    dyn_task = crew.phase1_extract_single_node_task(desc, holding_model)  # type: ignore[arg-type]
+                    # Use batch_extract_task with Pydantic output
+                    task = crew.batch_extract_task(desc, HoldingBatchResponse)
                     single_crew = Crew(
                         agents=[crew.phase1_extract_agent()],
-                        tasks=[dyn_task],
+                        tasks=[task],
                         process=Process.sequential,
                     )
                     result = single_crew.kickoff()
                     
-                    # Unwrap CrewOutput
-                    actual_result = None
-                    if hasattr(result, 'pydantic'):
-                        actual_result = result.pydantic
-                    elif hasattr(result, 'model_dump'):
-                        actual_result = result
+                    # Extract Pydantic model from CrewOutput
+                    batch_response: HoldingBatchResponse
+                    if hasattr(result, 'pydantic') and result.pydantic:
+                        batch_response = result.pydantic
+                    elif isinstance(result, HoldingBatchResponse):
+                        batch_response = result
                     else:
-                        actual_result = result
+                        logger.warning(f"Phase 5: Unexpected result type: {type(result)}")
+                        batch_response = HoldingBatchResponse(results=[])
                     
-                    # Parse pydantic output
-                    if hasattr(actual_result, 'model_dump'):
-                        properties = actual_result.model_dump(exclude_none=True)  # type: ignore[attr-defined]
-                    elif isinstance(actual_result, dict):
-                        properties = actual_result
-                    else:
-                        properties = json.loads(str(actual_result))
+                    results = batch_response.results
                     
-                    # Create Holding node
-                    holding_temp_id = f"n{next_idx}"
-                    next_idx += 1
-                    holding_node = {"temp_id": holding_temp_id, "label": "Holding", "properties": properties}
-                    self.state.nodes_accumulated.append(holding_node)
-                    holdings_created += 1
-                    
-                    # Create edge: Holding → Issue (ON_ISSUE)
-                    rel_label = get_relationship_label_for_edge("Holding", "Issue", self.state.rels_by_label or {})
-                    if rel_label and isinstance(issue_temp_id, str):
-                        self.state.edges_accumulated.append({
-                            "from": holding_temp_id,
-                            "to": issue_temp_id,
-                            "label": rel_label,
-                            "properties": {}
-                        })
-                        edges_created += 1
-                    else:
-                        logger.warning("Phase 5: No relationship found in schema for Holding -> Issue")
+                    # Process each result entry (one per issue in batch)
+                    for entry in results:
+                        issue_temp_id = entry.issue_temp_id
+                        holding_props = entry.holding
+                        
+                        if not holding_props or not isinstance(holding_props, dict):
+                            logger.warning(f"Phase 5: Holding for issue {issue_temp_id} is missing or not a dict")
+                            continue
+                        
+                        # Validate with model if available
+                        try:
+                            if holding_model is not None:
+                                inst = holding_model(**holding_props)
+                                properties = inst.model_dump(exclude_none=True)
+                            else:
+                                properties = holding_props
+                        except Exception:
+                            properties = {k: v for k, v in holding_props.items() if isinstance(k, str)}
+                        
+                        # Create Holding node
+                        holding_temp_id = f"n{next_idx}"
+                        next_idx += 1
+                        holding_node = {"temp_id": holding_temp_id, "label": "Holding", "properties": properties}
+                        self.state.nodes_accumulated.append(holding_node)
+                        holdings_created += 1
+                        
+                        # Create edge: Holding → Issue (ON_ISSUE)
+                        if isinstance(issue_temp_id, str) and issue_temp_id:
+                            rel_label = get_relationship_label_for_edge("Holding", "Issue", self.state.rels_by_label or {})
+                            if rel_label:
+                                self.state.edges_accumulated.append({
+                                    "from": holding_temp_id,
+                                    "to": issue_temp_id,
+                                    "label": rel_label,
+                                    "properties": {}
+                                })
+                                edges_created += 1
+                            else:
+                                logger.warning("Phase 5: No relationship found in schema for Holding -> Issue")
                 
                 except Exception as e:
-                    logger.warning(f"Phase 5: Failed to create Holding for an Issue: {e}")
+                    logger.warning(f"Phase 5: Failed to create Holdings for batch: {e}")
                     continue
             
             logger.info(f"Phase 5: completed (holdings_created={holdings_created}, edges_created={edges_created})")
             
-            if self.state.progress_callback:
-                try:
-                    self.state.progress_callback("Phase 5 complete: Created holdings per issue", "phase5", 45)
-                except Exception as e:
-                    logger.warning(f"Failed to publish progress: {e}")
+            # No end-of-phase progress callback; start-of-phase announces in-progress
             
             return {"status": "phase5_done"}
         except Exception as e:
@@ -1173,14 +1281,24 @@ class CaseExtractFlow(Flow[CaseExtractState]):
 
     @listen(phase5_create_holdings)
     def phase6_extract_ruling_and_arguments(self, _: Dict[str, Any]) -> Dict[str, Any]:
-        # Phase 6: for each Holding, create/select Ruling and extract Arguments; create edges
-        logger.info("Phase 6: extracting Ruling and Arguments per Holding")
+        # Phase 6: for each Holding batch, create/select Ruling and extract Arguments in single call; create edges
+        logger.info("Phase 6: extracting Ruling and Arguments per Holding (batched, combined)")
+        if self.state.progress_callback:
+            try:
+                self.state.progress_callback("Phase 6 in progress: Creating rulings and arguments", "phase6", 60)
+            except Exception as e:
+                logger.warning(f"Failed to publish progress: {e}")
         try:
             from .crews.case_crew.case_crew import CaseCrew as _CaseCrew
             
+            # Load config and apply batch size
+            flow_config = _load_flow_config()
+            batch_size = flow_config.get("batch_sizes", {}).get("phase6_holdings", 999)
+            # Allow env override
+            batch_size = int(os.getenv("PHASE6_HOLDING_BATCH_SIZE", str(batch_size)))
+            
             # Load flow_map for Ruling and Argument instructions
             try:
-                import os
                 flow_map_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "flow_map.json"))
                 with open(flow_map_path, "r") as f:
                     flow_map = json.load(f)
@@ -1225,6 +1343,8 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 logger.info("Phase 6: no Holding nodes present; skipping Ruling/Arguments")
                 return {"status": "phase6_skipped"}
             
+            logger.info(f"Phase 6: processing {len(holdings)} holdings in batches of {batch_size}")
+            
             # Build mapping of Holding → Issue for context
             holding_to_issue: Dict[str, Dict[str, Any]] = {}
             for edge in (self.state.edges_accumulated or []):
@@ -1261,149 +1381,154 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             # Track created Rulings for deduplication (same Ruling can apply to multiple Holdings)
             ruling_signatures: Dict[str, str] = {}  # signature -> temp_id
             
-            # For each Holding, create Ruling and Arguments
-            for holding_node in holdings:
+            # Process holdings in batches
+            for batch_start in range(0, len(holdings), batch_size):
+                batch_end = min(batch_start + batch_size, len(holdings))
+                batch = holdings[batch_start:batch_end]
+                
                 try:
-                    holding_temp_id = holding_node.get("temp_id")
-                    holding_props = holding_node.get("properties") or {}
-                    issue_node = holding_to_issue.get(holding_temp_id) if isinstance(holding_temp_id, str) else None
-                    issue_props = (issue_node.get("properties") or {}) if issue_node else {}
+                    logger.info(f"Phase 6: processing holding batch {batch_start // batch_size + 1} (holdings {batch_start + 1}-{batch_end} of {len(holdings)})")
                     
-                    context_json = json.dumps({
-                        "holding": holding_props,
-                        "issue": issue_props
-                    }, ensure_ascii=False)
+                    # Build holdings payload with issue context
+                    holdings_payload = {
+                        "holdings": [
+                            {
+                                "temp_id": n.get("temp_id"),
+                                "properties": n.get("properties") or {},
+                                "issue_properties": (holding_to_issue.get(n.get("temp_id"), {}).get("properties") or {})
+                            }
+                            for n in batch if isinstance(n, dict)
+                        ]
+                    }
                     
-                    # Task 1: Create or reuse Ruling
-                    ruling_desc = (
-                        "Read the document text (provided below) and create/identify the Ruling.\n\n"
+                    # Combined task: extract Ruling + Arguments per holding in one call
+                    desc = (
+                        "Read the document text (provided below) and for each Holding: (1) identify the Ruling, and (2) extract ALL Arguments.\n\n"
                         "CRITICAL: Extract information ONLY from the provided case text.\n\n"
                         "CASE_TEXT:\n" + (self.state.document_text or "") + "\n\n"
-                        "Context (Holding and Issue):\n" + context_json + "\n\n"
+                        "HOLDINGS_JSON:\n" + json.dumps(holdings_payload, ensure_ascii=False) + "\n\n"
                         "Guidance:\n"
-                        "- Summarize the court's disposition (affirmed, reversed, remanded, etc.).\n"
-                        "- A single ruling may apply to multiple issues/holdings in the case.\n"
-                        "- Return ONLY JSON matching the schema properties for Ruling.\n\n"
-                        "INSTRUCTIONS (from flow map):\n" + ruling_instructions + "\n\n"
-                        "EXAMPLES (illustrative):\n" + ruling_examples_json + "\n\n"
-                        "SCHEMA PROPERTIES for 'Ruling':\n" + ruling_spec_text + "\n\n"
-                    )
-                    
-                    ruling_task = crew.phase1_extract_single_node_task(ruling_desc, ruling_model)  # type: ignore[arg-type]
-                    ruling_crew = Crew(
-                        agents=[crew.phase1_extract_agent()],
-                        tasks=[ruling_task],
-                        process=Process.sequential,
-                    )
-                    ruling_result = ruling_crew.kickoff()
-                    
-                    # Parse Ruling
-                    actual_ruling = None
-                    if hasattr(ruling_result, 'pydantic'):
-                        actual_ruling = ruling_result.pydantic
-                    elif hasattr(ruling_result, 'model_dump'):
-                        actual_ruling = ruling_result
-                    else:
-                        actual_ruling = ruling_result
-                    
-                    if hasattr(actual_ruling, 'model_dump'):
-                        ruling_properties = actual_ruling.model_dump(exclude_none=True)  # type: ignore[attr-defined]
-                    elif isinstance(actual_ruling, dict):
-                        ruling_properties = actual_ruling
-                    else:
-                        ruling_properties = json.loads(str(actual_ruling))
-                    
-                    # Dedup Ruling by signature (label + decision_date)
-                    ruling_sig = f"{ruling_properties.get('label', '')}|{ruling_properties.get('decision_date', '')}".strip()
-                    if ruling_sig and ruling_sig in ruling_signatures:
-                        # Reuse existing Ruling
-                        ruling_temp_id = ruling_signatures[ruling_sig]
-                        logger.debug(f"Phase 6: Reusing existing Ruling ({ruling_temp_id})")
-                    else:
-                        # Create new Ruling
-                        ruling_temp_id = f"n{next_idx}"
-                        next_idx += 1
-                        ruling_node = {"temp_id": ruling_temp_id, "label": "Ruling", "properties": ruling_properties}
-                        self.state.nodes_accumulated.append(ruling_node)
-                        rulings_created += 1
-                        if ruling_sig:
-                            ruling_signatures[ruling_sig] = ruling_temp_id
-                    
-                    # Create edge: Ruling → Holding (SETS)
-                    rel_label_sets = get_relationship_label_for_edge("Ruling", "Holding", self.state.rels_by_label or {})
-                    if rel_label_sets and isinstance(holding_temp_id, str):
-                        self.state.edges_accumulated.append({
-                            "from": ruling_temp_id,
-                            "to": holding_temp_id,
-                            "label": rel_label_sets,
-                            "properties": {}
-                        })
-                        edges_created += 1
-                    
-                    # Create edge: Proceeding → Ruling (RESULTS_IN)
-                    proceeding_temp_id = find_first_temp_id("Proceeding")
-                    rel_label_results_in = get_relationship_label_for_edge("Proceeding", "Ruling", self.state.rels_by_label or {})
-                    if rel_label_results_in and proceeding_temp_id:
-                        self.state.edges_accumulated.append({
-                            "from": proceeding_temp_id,
-                            "to": ruling_temp_id,
-                            "label": rel_label_results_in,
-                            "properties": {}
-                        })
-                        edges_created += 1
-                    
-                    # Task 2: Extract Arguments relevant to this Holding/Issue
-                    argument_desc = (
-                        "Read the document text (provided below) and extract ALL Arguments relevant to this Holding/Issue.\n\n"
-                        "CRITICAL: Extract information ONLY from the provided case text.\n\n"
-                        "CASE_TEXT:\n" + (self.state.document_text or "") + "\n\n"
-                        "Context (Holding and Issue):\n" + context_json + "\n\n"
-                        "Guidance:\n"
-                        "- Extract ALL principal arguments advanced by any party that are relevant to this specific issue.\n"
-                        "- Return a JSON object: { items: [ { ...properties... }, ... ] }.\n"
-                        "- Each item must match the Argument schema properties exactly.\n"
+                        "- For each holding, identify the Ruling (court's disposition: affirmed, reversed, etc.). A single ruling may apply to multiple holdings.\n"
+                        "- For each holding, extract ALL principal arguments advanced by any party relevant to that holding's issue.\n"
+                        "- Return JSON as: { results: [ { holding_temp_id: string, ruling: <Ruling properties>, arguments: [ <Argument properties>, ... ] }, ... ] }.\n"
+                        "- Match Ruling and Argument schema properties exactly.\n"
                         "- Extract from text only; do not invent.\n\n"
-                        "INSTRUCTIONS (from flow map):\n" + argument_instructions + "\n\n"
-                        "EXAMPLES (illustrative):\n" + argument_examples_json + "\n\n"
-                        "SCHEMA PROPERTIES for 'Argument':\n" + argument_spec_text + "\n\n"
+                        "RULING INSTRUCTIONS:\n" + ruling_instructions + "\n\n"
+                        "RULING EXAMPLES:\n" + ruling_examples_json + "\n\n"
+                        "RULING SCHEMA:\n" + ruling_spec_text + "\n\n"
+                        "ARGUMENT INSTRUCTIONS:\n" + argument_instructions + "\n\n"
+                        "ARGUMENT EXAMPLES:\n" + argument_examples_json + "\n\n"
+                        "ARGUMENT SCHEMA:\n" + argument_spec_text + "\n\n"
                     )
                     
-                    # Create list model for Arguments
-                    from pydantic import create_model
-                    argument_list_model = create_model(
-                        f'ArgumentList',
-                        items=(List[argument_model], ...)  # type: ignore
-                    )
-                    
-                    argument_task = crew.phase1_extract_multi_nodes_task(argument_desc, argument_list_model)
-                    argument_crew = Crew(
+                    task = crew.batch_extract_task(desc, RulingAndArgumentsBatchResponse)
+                    single_crew = Crew(
                         agents=[crew.phase1_extract_agent()],
-                        tasks=[argument_task],
+                        tasks=[task],
                         process=Process.sequential,
                     )
-                    argument_result = argument_crew.kickoff()
+                    result = single_crew.kickoff()
                     
-                    # Parse Arguments
-                    actual_arg_result = None
-                    if hasattr(argument_result, 'pydantic'):
-                        actual_arg_result = argument_result.pydantic
-                    elif hasattr(argument_result, 'raw'):
-                        actual_arg_result = argument_result.raw
+                    # Extract Pydantic model from CrewOutput
+                    batch_response: RulingAndArgumentsBatchResponse
+                    if hasattr(result, 'pydantic') and result.pydantic:
+                        batch_response = result.pydantic
+                    elif isinstance(result, RulingAndArgumentsBatchResponse):
+                        batch_response = result
                     else:
-                        actual_arg_result = argument_result
+                        logger.warning(f"Phase 6: Unexpected result type: {type(result)}")
+                        batch_response = RulingAndArgumentsBatchResponse(results=[])
                     
-                    if not hasattr(actual_arg_result, 'items'):
-                        arguments_list = []
-                    elif not isinstance(actual_arg_result.items, list):
-                        arguments_list = []
-                    else:
-                        arguments_list = actual_arg_result.items
+                    results = batch_response.results
+                    proceeding_temp_id = find_first_temp_id("Proceeding")
                     
-                    # Create Argument nodes and edges
-                    rel_label_eval = get_relationship_label_for_edge("Argument", "Holding", self.state.rels_by_label or {})
-                    for arg_item in arguments_list:
+                    # Process each result entry (one per holding in batch)
+                    for entry in results:
+                        holding_temp_id = entry.holding_temp_id
+                        ruling_props = entry.ruling
+                        arguments_list = entry.arguments or []
+                        
+                        if not isinstance(ruling_props, dict):
+                            logger.warning(f"Phase 6: Ruling for holding {holding_temp_id} is not a dict")
+                            continue
+                        
+                        # Validate Ruling
                         try:
-                            arg_properties = arg_item.model_dump(exclude_none=True)
+                            if ruling_model is not None:
+                                inst = ruling_model(**ruling_props)
+                                ruling_properties = inst.model_dump(exclude_none=True)
+                            else:
+                                ruling_properties = ruling_props
+                        except Exception:
+                            ruling_properties = {k: v for k, v in ruling_props.items() if isinstance(k, str)}
+                        
+                        # Dedup Ruling by signature (label + decision_date)
+                        ruling_sig = f"{ruling_properties.get('label', '')}|{ruling_properties.get('decision_date', '')}".strip()
+                        if ruling_sig and ruling_sig in ruling_signatures:
+                            # Reuse existing Ruling
+                            ruling_temp_id = ruling_signatures[ruling_sig]
+                            logger.debug(f"Phase 6: Reusing existing Ruling ({ruling_temp_id})")
+                        else:
+                            # Create new Ruling
+                            ruling_temp_id = f"n{next_idx}"
+                            next_idx += 1
+                            ruling_node = {"temp_id": ruling_temp_id, "label": "Ruling", "properties": ruling_properties}
+                            self.state.nodes_accumulated.append(ruling_node)
+                            rulings_created += 1
+                            if ruling_sig:
+                                ruling_signatures[ruling_sig] = ruling_temp_id
+                        
+                        # Create edges for Ruling
+                        if isinstance(holding_temp_id, str) and holding_temp_id:
+                            # Edge: Ruling → Holding (SETS)
+                            rel_label_sets = get_relationship_label_for_edge("Ruling", "Holding", self.state.rels_by_label or {})
+                            if rel_label_sets:
+                                self.state.edges_accumulated.append({
+                                    "from": ruling_temp_id,
+                                    "to": holding_temp_id,
+                                    "label": rel_label_sets,
+                                    "properties": {}
+                                })
+                                edges_created += 1
+                            
+                            # Edge: Proceeding → Ruling (RESULTS_IN) - only create once per Ruling
+                            if ruling_sig and ruling_sig not in ruling_signatures or ruling_sig == ruling_properties.get('label', '') + "|" + ruling_properties.get('decision_date', ''):
+                                rel_label_results_in = get_relationship_label_for_edge("Proceeding", "Ruling", self.state.rels_by_label or {})
+                                if rel_label_results_in and proceeding_temp_id:
+                                    # Check if edge already exists
+                                    edge_key = (proceeding_temp_id, ruling_temp_id, rel_label_results_in)
+                                    existing = any(
+                                        e.get("from") == proceeding_temp_id and e.get("to") == ruling_temp_id and e.get("label") == rel_label_results_in
+                                        for e in (self.state.edges_accumulated or []) if isinstance(e, dict)
+                                    )
+                                    if not existing:
+                                        self.state.edges_accumulated.append({
+                                            "from": proceeding_temp_id,
+                                            "to": ruling_temp_id,
+                                            "label": rel_label_results_in,
+                                            "properties": {}
+                                        })
+                                        edges_created += 1
+                        
+                        # Process Arguments
+                        if not isinstance(arguments_list, list):
+                            arguments_list = []
+                        
+                        rel_label_eval = get_relationship_label_for_edge("Argument", "Holding", self.state.rels_by_label or {})
+                        for arg_props in arguments_list:
+                            if not isinstance(arg_props, dict):
+                                continue
+                            
+                            try:
+                                # Validate Argument
+                                if argument_model is not None:
+                                    inst = argument_model(**arg_props)
+                                    arg_properties = inst.model_dump(exclude_none=True)
+                                else:
+                                    arg_properties = arg_props
+                            except Exception:
+                                arg_properties = {k: v for k, v in arg_props.items() if isinstance(k, str)}
+                            
                             arg_temp_id = f"n{next_idx}"
                             next_idx += 1
                             arg_node = {"temp_id": arg_temp_id, "label": "Argument", "properties": arg_properties}
@@ -1411,7 +1536,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                             arguments_created += 1
                             
                             # Create edge: Argument → Holding (EVALUATED_IN)
-                            if rel_label_eval and isinstance(holding_temp_id, str):
+                            if rel_label_eval and isinstance(holding_temp_id, str) and holding_temp_id:
                                 self.state.edges_accumulated.append({
                                     "from": arg_temp_id,
                                     "to": holding_temp_id,
@@ -1419,21 +1544,14 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                                     "properties": {}
                                 })
                                 edges_created += 1
-                        except Exception as e:
-                            logger.warning(f"Phase 6: Failed to process an Argument: {e}")
-                            continue
                 
                 except Exception as e:
-                    logger.warning(f"Phase 6: Failed to process a Holding: {e}")
+                    logger.warning(f"Phase 6: Failed to process holdings batch: {e}")
                     continue
             
             logger.info(f"Phase 6: completed (rulings_created={rulings_created}, arguments_created={arguments_created}, edges_created={edges_created})")
             
-            if self.state.progress_callback:
-                try:
-                    self.state.progress_callback("Phase 6 complete: Created rulings and arguments", "phase6", 60)
-                except Exception as e:
-                    logger.warning(f"Failed to publish progress: {e}")
+            # No end-of-phase progress callback; start-of-phase announces in-progress
             
             return {"status": "phase6_done"}
         except Exception as e:
@@ -1444,6 +1562,11 @@ class CaseExtractFlow(Flow[CaseExtractState]):
     def phase7_assign_laws(self, _: Dict[str, Any]) -> Dict[str, Any]:
         # Phase 7: for each Argument, select or create Law(s) with dedup and add Argument->Law edges
         logger.info("Phase 7: assigning Laws to Arguments with catalog dedup")
+        if self.state.progress_callback:
+            try:
+                self.state.progress_callback("Phase 7 in progress: Assigning laws", "phase7", 70)
+            except Exception as e:
+                logger.warning(f"Failed to publish progress: {e}")
         try:
             from .crews.case_crew.case_crew import CaseCrew as _CaseCrew
             # Collect Arguments
@@ -1600,11 +1723,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             except Exception:
                 logger.info("Phase 7: law assignment completed")
             
-            if self.state.progress_callback:
-                try:
-                    self.state.progress_callback("Phase 7 complete: Assigned laws", "phase7", 70)
-                except Exception as e:
-                    logger.warning(f"Failed to publish progress: {e}")
+            # No end-of-phase progress callback; start-of-phase announces in-progress
             
             return {"status": "phase7_done"}
         except Exception as e:
@@ -1615,6 +1734,11 @@ class CaseExtractFlow(Flow[CaseExtractState]):
     def phase8_assign_relief_types(self, _: Dict[str, Any]) -> Dict[str, Any]:
         # Phase 8: select ReliefType(s) based on Ruling and create Ruling->ReliefType edges
         logger.info("Phase 8: assigning ReliefTypes per Ruling")
+        if self.state.progress_callback:
+            try:
+                self.state.progress_callback("Phase 8 in progress: Assigning relief types", "phase8", 75)
+            except Exception as e:
+                logger.warning(f"Failed to publish progress: {e}")
         try:
             from .crews.case_crew.case_crew import CaseCrew as _CaseCrew
             # Build catalog for ReliefType
@@ -1753,11 +1877,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             except Exception:
                 logger.info("Phase 8: ReliefType assignment completed")
             
-            if self.state.progress_callback:
-                try:
-                    self.state.progress_callback("Phase 8 complete: Assigned relief types", "phase8", 75)
-                except Exception as e:
-                    logger.warning(f"Failed to publish progress: {e}")
+            # No end-of-phase progress callback; start-of-phase announces in-progress
             
             return {"status": "phase8_done"}
         except Exception as e:
@@ -1765,13 +1885,23 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             return {"status": "phase8_skipped"}
     @listen(phase8_assign_relief_types)
     def phase9_extract_facts(self, _: Dict[str, Any]) -> Dict[str, Any]:
-        # New Phase 2: generate Fact nodes per Argument; many facts may support each argument
-        logger.info("Phase 9: generating Facts per Argument")
+        # Phase 9: generate Fact nodes per Argument batch; many facts may support each argument
+        logger.info("Phase 9: generating Facts per Argument (batched)")
+        if self.state.progress_callback:
+            try:
+                self.state.progress_callback("Phase 9 in progress: Generating facts for arguments", "phase9", 85)
+            except Exception as e:
+                logger.warning(f"Failed to publish progress: {e}")
         tools = []
+
+        # Load config and apply batch size
+        flow_config = _load_flow_config()
+        batch_size = flow_config.get("batch_sizes", {}).get("phase9_arguments", 999)
+        # Allow env override
+        batch_size = int(os.getenv("PHASE9_ARGUMENT_BATCH_SIZE", str(batch_size)))
 
         # Load flow_map for Fact instructions/examples
         try:
-            import os
             flow_map_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "flow_map.json"))
             with open(flow_map_path, "r") as f:
                 flow_map = json.load(f)
@@ -1795,13 +1925,15 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             fact_def_props_only = {"label": fact_def.get("label"), "properties": fact_def.get("properties", [])}
             spec_text = render_spec_text({"labels": [fact_def_props_only]})
 
-        # Collect existing Arguments from Phase 1 output
+        # Collect existing Arguments
         arguments: List[Dict[str, Any]] = [n for n in (self.state.nodes_accumulated or []) if isinstance(n, dict) and n.get("label") == "Argument"]
         if not arguments:
             logger.info("Phase 9: no Argument nodes present; skipping Facts generation")
             return {"status": "facts_phase9_skipped"}
 
-        # Prepare crew using Phase 2 agent config
+        logger.info(f"Phase 9: processing {len(arguments)} arguments in batches of {batch_size}")
+
+        # Prepare crew
         crew = CaseCrew(
             file_path=self.state.file_path,
             filename=self.state.filename,
@@ -1813,33 +1945,43 @@ class CaseExtractFlow(Flow[CaseExtractState]):
         next_idx = 1 + len(self.state.nodes_accumulated or [])
         facts_created_total = 0
         
-        # Build cumulative catalog of facts as we process arguments
-        # AI will check this catalog and decide whether to reuse or create new
+        # Build cumulative catalog of facts as we process argument batches
         facts_catalog: List[Dict[str, Any]] = []
 
-        for arg_idx, arg_node in enumerate(arguments):
+        # Process arguments in batches
+        for batch_start in range(0, len(arguments), batch_size):
+            batch_end = min(batch_start + batch_size, len(arguments))
+            batch = arguments[batch_start:batch_end]
+            
             try:
-                arg_props = arg_node.get("properties") or {}
-                arg_ctx_json = json.dumps(arg_props, ensure_ascii=False)
+                logger.info(f"Phase 9: processing argument batch {batch_start // batch_size + 1} (arguments {batch_start + 1}-{batch_end} of {len(arguments)})")
                 
-                # Prepare facts catalog for AI to check for reuse
+                # Build arguments payload for this batch
+                arguments_payload = {
+                    "arguments": [
+                        {"temp_id": n.get("temp_id"), "properties": n.get("properties") or {}}
+                        for n in batch if isinstance(n, dict)
+                    ]
+                }
+                
+                # Prepare catalog JSON
                 facts_catalog_json = json.dumps(facts_catalog, ensure_ascii=False)
                 
-                # Compose task: generate multiple facts supporting this argument
+                # Compose batch task
                 desc = (
-                    "Read the document text (provided below) and extract Facts that support the following Argument.\n\n"
+                    "Read the document text (provided below) and extract Facts that support each Argument.\n\n"
                     "CRITICAL: Extract information ONLY from the provided case text. Do not use general knowledge, external information, or assumptions. If information is not explicitly or implicitly present in the text, do not include it.\n\n"
                     "CASE_TEXT:\n" + (self.state.document_text or "") + "\n\n"
-                    "Argument (properties JSON):\n" + arg_ctx_json + "\n\n"
+                    "ARGUMENTS_JSON:\n" + json.dumps(arguments_payload, ensure_ascii=False) + "\n\n"
                     "EXISTING FACTS (already created):\n" + facts_catalog_json + "\n\n"
                     "Guidance:\n"
-                    "- BE COMPREHENSIVE: Extract ALL facts from the case text that support this argument.\n"
+                    "- BE COMPREHENSIVE: Extract ALL facts from the case text that support each argument.\n"
                     "- Check the existing facts catalog above. ONLY reuse a fact if it is EXACTLY the same fact (same content, same alleged_by, same proved status).\n"
                     "- When in doubt, create a new fact rather than reusing. It's better to have distinct facts than to conflate different facts.\n"
-                    "- Produce a JSON object: { facts: [ { temp_id?: string, fact?: <Fact properties> }, ... ] }.\n"
+                    "- Return JSON as: { results: [ { argument_temp_id: string, facts: [ { temp_id?: string, fact?: <Fact properties> }, ... ] }, ... ] }.\n"
                     "- For REUSING an IDENTICAL existing fact: include only 'temp_id' (omit 'fact').\n"
                     "- For CREATING a new fact: include only 'fact' with properties (omit 'temp_id').\n"
-                    "- Each fact MUST be relevant to this argument and MUST be present in the case text above.\n"
+                    "- Each fact MUST be relevant to its argument and MUST be present in the case text above.\n"
                     "- There can be many facts per argument - extract all of them from the text.\n"
                     "- Match the Fact schema properties exactly (include all required; optional when supported).\n"
                     "- Enforce types/enums/date formats; extract from text only; avoid invention.\n\n"
@@ -1847,109 +1989,120 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                     "EXAMPLES (illustrative, may be partial):\n" + examples_json + "\n\n"
                     "SCHEMA PROPERTIES for 'Fact':\n" + spec_text + "\n\n"
                 )
-                task = crew.phase2_extract_facts_task(desc)
+                
+                task = crew.batch_extract_task(desc, FactBatchResponse)
                 single_crew = Crew(
                     agents=[crew.phase2_extract_agent()],
                     tasks=[task],
                     process=Process.sequential,
                 )
                 result = single_crew.kickoff()
-                # Parse facts array
-                if isinstance(result, str):
-                    data = json.loads(result)
-                elif isinstance(result, dict):
-                    data = result
+                
+                # Extract Pydantic model from CrewOutput
+                batch_response: FactBatchResponse
+                if hasattr(result, 'pydantic') and result.pydantic:
+                    batch_response = result.pydantic
+                elif isinstance(result, FactBatchResponse):
+                    batch_response = result
                 else:
-                    data = json.loads(str(result))
-                facts_list = data.get("facts") if isinstance(data, dict) else None
-                if not isinstance(facts_list, list):
-                    facts_list = []
+                    logger.warning(f"Phase 9: Unexpected result type: {type(result)}")
+                    batch_response = FactBatchResponse(results=[])
+                
+                results = batch_response.results
 
-                # Process each fact - AI decides to reuse or create
-                for item in facts_list:
-                    if not isinstance(item, dict):
-                        continue
+                # Process each result entry (one per argument in batch)
+                for entry in results:
+                    argument_temp_id = entry.argument_temp_id
+                    facts_list = entry.facts or []
                     
-                    reuse_temp_id = item.get("temp_id")
-                    fact_props = item.get("fact")
-                    
-                    # Determine if reusing or creating
-                    if isinstance(reuse_temp_id, str) and reuse_temp_id:
-                        # AI chose to reuse existing fact
-                        fact_temp_id = reuse_temp_id
-                        logger.debug(f"Phase 9: AI reusing existing Fact ({fact_temp_id})")
-                    elif isinstance(fact_props, dict):
-                        # AI creating new fact
-                        try:
-                            if fact_model is not None:
-                                inst = fact_model(**fact_props)
-                                clean_props = inst.model_dump(exclude_none=True)
-                            else:
-                                clean_props = fact_props
-                        except Exception:
-                            clean_props = {k: v for k, v in fact_props.items() if isinstance(k, str)}
-
-                        fact_temp_id = f"n{next_idx}"
-                        next_idx += 1
-                        node = {"temp_id": fact_temp_id, "label": "Fact", "properties": clean_props}
-                        self.state.nodes_accumulated.append(node)
-                        facts_created_total += 1
+                    # Process each fact for this argument
+                    for item in facts_list:
+                        if not isinstance(item, dict):
+                            continue
                         
-                        # Add to catalog for future iterations (minimal info: text summary)
-                        fact_text = clean_props.get("text", "")
-                        fact_text_short = fact_text[:150] if isinstance(fact_text, str) else ""
-                        facts_catalog.append({
-                            "temp_id": fact_temp_id,
-                            "text": fact_text_short,
-                            "alleged_by": clean_props.get("alleged_by"),
-                            "proved": clean_props.get("proved")
-                        })
-                    else:
-                        logger.warning(f"Phase 9: Fact item has neither temp_id nor fact: {item}")
-                        continue
-                    
-                    # Create edge: Argument -> Fact (get relationship label from schema)
-                    try:
-                        arg_temp_id = arg_node.get("temp_id")
-                        if isinstance(arg_temp_id, str) and arg_temp_id:
-                            # Get the correct relationship label from schema
-                            rel_label = get_relationship_label_for_edge("Argument", "Fact", self.state.rels_by_label or {})
-                            if rel_label:
-                                edge = {"from": arg_temp_id, "to": fact_temp_id, "label": rel_label, "properties": {}}
-                                self.state.edges_accumulated.append(edge)
-                            else:
-                                logger.warning("Phase 2: No relationship found in schema for Argument -> Fact")
-                    except Exception as e:
-                        logger.warning(f"Phase 9: Failed to create edge for fact: {e}")
+                        reuse_temp_id = item.get("temp_id")
+                        fact_props = item.get("fact")
+                        
+                        # Determine if reusing or creating
+                        if isinstance(reuse_temp_id, str) and reuse_temp_id:
+                            # AI chose to reuse existing fact
+                            fact_temp_id = reuse_temp_id
+                            logger.debug(f"Phase 9: AI reusing existing Fact ({fact_temp_id})")
+                        elif isinstance(fact_props, dict):
+                            # AI creating new fact
+                            try:
+                                if fact_model is not None:
+                                    inst = fact_model(**fact_props)
+                                    clean_props = inst.model_dump(exclude_none=True)
+                                else:
+                                    clean_props = fact_props
+                            except Exception:
+                                clean_props = {k: v for k, v in fact_props.items() if isinstance(k, str)}
+
+                            fact_temp_id = f"n{next_idx}"
+                            next_idx += 1
+                            node = {"temp_id": fact_temp_id, "label": "Fact", "properties": clean_props}
+                            self.state.nodes_accumulated.append(node)
+                            facts_created_total += 1
+                            
+                            # Add to catalog for future batches
+                            fact_text = clean_props.get("text", "")
+                            fact_text_short = fact_text[:150] if isinstance(fact_text, str) else ""
+                            facts_catalog.append({
+                                "temp_id": fact_temp_id,
+                                "text": fact_text_short,
+                                "alleged_by": clean_props.get("alleged_by"),
+                                "proved": clean_props.get("proved")
+                            })
+                        else:
+                            logger.warning(f"Phase 9: Fact item has neither temp_id nor fact: {item}")
+                            continue
+                        
+                        # Create edge: Argument -> Fact
+                        try:
+                            if isinstance(argument_temp_id, str) and argument_temp_id:
+                                rel_label = get_relationship_label_for_edge("Argument", "Fact", self.state.rels_by_label or {})
+                                if rel_label:
+                                    edge = {"from": argument_temp_id, "to": fact_temp_id, "label": rel_label, "properties": {}}
+                                    self.state.edges_accumulated.append(edge)
+                                else:
+                                    logger.warning("Phase 9: No relationship found in schema for Argument -> Fact")
+                        except Exception as e:
+                            logger.warning(f"Phase 9: Failed to create edge for fact: {e}")
+                            
             except Exception as e:
-                logger.warning(f"Phase 9: fact generation for an Argument failed: {e}")
+                logger.warning(f"Phase 9: fact generation for batch failed: {e}")
                 continue
 
         try:
             unique_facts = len(facts_catalog)
-            logger.info(f"Phase 2: completed (facts_created={facts_created_total})")
-            logger.info(f"Phase 2: total unique facts - {unique_facts} (AI-driven deduplication)")
+            logger.info(f"Phase 9: completed (facts_created={facts_created_total}, unique_facts={unique_facts}, AI-driven deduplication)")
         except Exception:
             logger.info("Phase 9: Facts generation completed")
         
-        # Publish progress
-        if self.state.progress_callback:
-            try:
-                self.state.progress_callback("Phase 9 complete: Generated facts for arguments", "phase9", 85)
-            except Exception as e:
-                logger.warning(f"Failed to publish progress: {e}")
+        # No end-of-phase progress callback; start-of-phase announces in-progress
         
         return {"status": "facts_phase9_done"}
 
     @listen(phase9_extract_facts)
     def phase10_extract_supports(self, _: Dict[str, Any]) -> Dict[str, Any]:
-        # Phase 3: generate Witnesses and Evidence for each Fact, and link via SUPPORTED_BY_WITNESS/EVIDENCE
-        logger.info("Phase 10: generating Witnesses and Evidence per Fact and linking edges")
+        # Phase 10: generate Witnesses and Evidence per Fact batch, and link via SUPPORTED_BY_WITNESS/EVIDENCE
+        logger.info("Phase 10: generating Witnesses and Evidence per Fact (batched)")
+        if self.state.progress_callback:
+            try:
+                self.state.progress_callback("Phase 10 in progress: Generating witnesses and evidence", "phase10", 95)
+            except Exception as e:
+                logger.warning(f"Failed to publish progress: {e}")
         tools = []
+
+        # Load config and apply batch size
+        flow_config = _load_flow_config()
+        batch_size = flow_config.get("batch_sizes", {}).get("phase10_facts", 10)
+        # Allow env override
+        batch_size = int(os.getenv("PHASE10_FACT_BATCH_SIZE", str(batch_size)))
 
         # Load flow_map entries for Witness and Evidence
         try:
-            import os
             flow_map_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "flow_map.json"))
             with open(flow_map_path, "r") as f:
                 flow_map = json.load(f)
@@ -1990,6 +2143,8 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             logger.info("Phase 10: no Fact nodes present; skipping supports generation")
             return {"status": "supports_phase10_skipped"}
 
+        logger.info(f"Phase 10: processing {len(facts)} facts in batches of {batch_size}")
+
         crew = CaseCrew(
             file_path=self.state.file_path,
             filename=self.state.filename,
@@ -2003,35 +2158,46 @@ class CaseExtractFlow(Flow[CaseExtractState]):
         evidence_created = 0
         edges_created = 0
         
-        # Build cumulative catalog of witnesses and evidence as we process facts
+        # Build cumulative catalog of witnesses and evidence as we process fact batches
         # AI will check these catalogs and decide whether to reuse or create new
         witnesses_catalog: List[Dict[str, Any]] = []
         evidence_catalog: List[Dict[str, Any]] = []
 
-        for fact_idx, fact in enumerate(facts):
+        # Process facts in batches
+        for batch_start in range(0, len(facts), batch_size):
+            batch_end = min(batch_start + batch_size, len(facts))
+            batch = facts[batch_start:batch_end]
+            
             try:
-                fact_props = fact.get("properties") or {}
-                fact_ctx_json = json.dumps(fact_props, ensure_ascii=False)
+                logger.info(f"Phase 10: processing fact batch {batch_start // batch_size + 1} (facts {batch_start + 1}-{batch_end} of {len(facts)})")
+                
+                # Build facts payload for this batch
+                facts_payload = {
+                    "facts": [
+                        {"temp_id": n.get("temp_id"), "properties": n.get("properties") or {}}
+                        for n in batch if isinstance(n, dict)
+                    ]
+                }
                 
                 # Prepare catalogs for AI to check for reuse
                 witnesses_catalog_json = json.dumps(witnesses_catalog, ensure_ascii=False)
                 evidence_catalog_json = json.dumps(evidence_catalog, ensure_ascii=False)
                 
                 desc = (
-                    "Read the document text (provided below) and generate Witnesses and Evidence that support the following Fact.\n\n"
+                    "Read the document text (provided below) and generate Witnesses and Evidence that support each Fact.\n\n"
                     "CRITICAL: Extract information ONLY from the provided case text. Do not use general knowledge, external information, or assumptions. If information is not explicitly or implicitly present in the text, do not include it.\n\n"
                     "CASE_TEXT:\n" + (self.state.document_text or "") + "\n\n"
-                    "Fact (properties JSON):\n" + fact_ctx_json + "\n\n"
+                    "FACTS_JSON:\n" + json.dumps(facts_payload, ensure_ascii=False) + "\n\n"
                     "EXISTING WITNESSES (already created):\n" + witnesses_catalog_json + "\n\n"
                     "EXISTING EVIDENCE (already created):\n" + evidence_catalog_json + "\n\n"
                     "Guidance:\n"
-                    "- BE COMPREHENSIVE: Extract ALL witnesses and evidence from the case text that support this fact.\n"
+                    "- BE COMPREHENSIVE: Extract ALL witnesses and evidence from the case text that support each fact.\n"
                     "- Check the existing catalogs above. ONLY reuse if it is EXACTLY the same witness/evidence (same person/document).\n"
                     "- When in doubt, create new rather than reusing. It's better to have distinct items than to conflate different ones.\n"
-                    "- Return JSON as { witnesses: [ { temp_id?: string, node?: <Witness properties>, support_strength: number } ], evidence: [ { temp_id?: string, node?: <Evidence properties>, support_strength: number } ] }.\n"
+                    "- Return JSON as: { results: [ { fact_temp_id: string, witnesses: [ { temp_id?: string, node?: <Witness properties>, support_strength: number } ], evidence: [ { temp_id?: string, node?: <Evidence properties>, support_strength: number } ] }, ... ] }.\n"
                     "- For REUSING an IDENTICAL existing item: include only 'temp_id' and 'support_strength' (omit 'node').\n"
                     "- For CREATING a new item: include only 'node' and 'support_strength' (omit 'temp_id').\n"
-                    "- Each item MUST support this Fact and MUST be mentioned in the case text above.\n"
+                    "- Each item MUST support its Fact and MUST be mentioned in the case text above.\n"
                     "- support_strength: 0 to 100 (percent) based on what's in the text.\n"
                     "- Match schema properties strictly; include required; enforce types/enums/dates.\n"
                     "- Extract from text only; do not invent or assume details not in the text.\n\n"
@@ -2042,7 +2208,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                     "EVIDENCE EXAMPLES (partial):\n" + examples_e + "\n\n"
                     "SCHEMA PROPERTIES for 'Evidence':\n" + evidence_spec + "\n\n"
                 )
-                task = crew.phase3_extract_supports_task(desc)
+                task = crew.batch_extract_task(desc, SupportBatchResponse)
                 single_crew = Crew(
                     agents=[crew.phase2_extract_agent()],
                     tasks=[task],
@@ -2050,157 +2216,153 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 )
                 result = single_crew.kickoff()
 
-                if isinstance(result, str):
-                    data = json.loads(result)
-                elif isinstance(result, dict):
-                    data = result
+                # Extract Pydantic model from CrewOutput
+                batch_response: SupportBatchResponse
+                if hasattr(result, 'pydantic') and result.pydantic:
+                    batch_response = result.pydantic
+                elif isinstance(result, SupportBatchResponse):
+                    batch_response = result
                 else:
-                    data = json.loads(str(result))
+                    logger.warning(f"Phase 10: Unexpected result type: {type(result)}")
+                    batch_response = SupportBatchResponse(results=[])
 
-                witnesses = data.get("witnesses") if isinstance(data, dict) else None
-                evidences = data.get("evidence") if isinstance(data, dict) else None
-                if not isinstance(witnesses, list):
-                    witnesses = []
-                if not isinstance(evidences, list):
-                    evidences = []
+                results = batch_response.results
 
-                # Witnesses - AI decides to reuse or create
-                for item in witnesses:
-                    try:
-                        if not isinstance(item, dict):
-                            continue
-                        
-                        strength = item.get("support_strength")
-                        reuse_temp_id = item.get("temp_id")
-                        node_props = item.get("node")
-                        
-                        # Determine if reusing or creating
-                        if isinstance(reuse_temp_id, str) and reuse_temp_id:
-                            # AI chose to reuse existing witness
-                            wid = reuse_temp_id
-                            logger.debug(f"Phase 10: AI reusing existing Witness ({wid})")
-                        elif isinstance(node_props, dict):
-                            # AI creating new witness
-                            try:
-                                if witness_model is not None:
-                                    inst = witness_model(**node_props)
-                                    clean_props = inst.model_dump(exclude_none=True)
-                                else:
-                                    clean_props = node_props
-                            except Exception:
-                                clean_props = {k: v for k, v in node_props.items() if isinstance(k, str)}
-                            
-                            wid = f"n{next_idx}"
-                            next_idx += 1
-                            wnode = {"temp_id": wid, "label": "Witness", "properties": clean_props}
-                            self.state.nodes_accumulated.append(wnode)
-                            witnesses_created += 1
-                            
-                            # Add to catalog for future iterations (minimal info)
-                            witnesses_catalog.append({
-                                "temp_id": wid,
-                                "name": clean_props.get("name"),
-                                "type": clean_props.get("type")
-                            })
-                        else:
-                            logger.warning(f"Phase 10: Witness item has neither temp_id nor node: {item}")
-                            continue
-                        
-                        # Create edge to this fact (get relationship label from schema)
+                # Process each result entry (one per fact in batch)
+                for entry in results:
+                    fact_temp_id = entry.fact_temp_id
+                    witnesses = entry.witnesses or []
+                    evidences = entry.evidence or []
+
+                    # Witnesses - AI decides to reuse or create
+                    for item in witnesses:
                         try:
-                            s_val = float(strength) if isinstance(strength, (int, float)) or (isinstance(strength, str) and strength.strip()) else None
-                        except Exception:
-                            s_val = None
-                        eprops = {"support_strength": s_val if s_val is not None else 0.0}
-                        # Get the correct relationship label from schema
-                        rel_label = get_relationship_label_for_edge("Fact", "Witness", self.state.rels_by_label or {})
-                        if rel_label:
-                            self.state.edges_accumulated.append({"from": fact.get("temp_id"), "to": wid, "label": rel_label, "properties": eprops})
-                            edges_created += 1
-                        else:
-                            logger.warning("Phase 3: No relationship found in schema for Fact -> Witness")
-                    except Exception as e:
-                        logger.warning(f"Phase 10: Failed to process witness: {e}")
-                        continue
-
-                # Evidence - AI decides to reuse or create
-                for item in evidences:
-                    try:
-                        if not isinstance(item, dict):
-                            continue
-                        
-                        strength = item.get("support_strength")
-                        reuse_temp_id = item.get("temp_id")
-                        node_props = item.get("node")
-                        
-                        # Determine if reusing or creating
-                        if isinstance(reuse_temp_id, str) and reuse_temp_id:
-                            # AI chose to reuse existing evidence
-                            eid = reuse_temp_id
-                            logger.debug(f"Phase 10: AI reusing existing Evidence ({eid})")
-                        elif isinstance(node_props, dict):
-                            # AI creating new evidence
+                            strength = item.support_strength
+                            reuse_temp_id = item.temp_id
+                            node_props = item.node
+                            
+                            # Determine if reusing or creating
+                            if isinstance(reuse_temp_id, str) and reuse_temp_id:
+                                # AI chose to reuse existing witness
+                                wid = reuse_temp_id
+                                logger.debug(f"Phase 10: AI reusing existing Witness ({wid})")
+                            elif isinstance(node_props, dict):
+                                # AI creating new witness
+                                try:
+                                    if witness_model is not None:
+                                        inst = witness_model(**node_props)
+                                        clean_props = inst.model_dump(exclude_none=True)
+                                    else:
+                                        clean_props = node_props
+                                except Exception:
+                                    clean_props = {k: v for k, v in node_props.items() if isinstance(k, str)}
+                                
+                                wid = f"n{next_idx}"
+                                next_idx += 1
+                                wnode = {"temp_id": wid, "label": "Witness", "properties": clean_props}
+                                self.state.nodes_accumulated.append(wnode)
+                                witnesses_created += 1
+                                
+                                # Add to catalog for future batches
+                                witnesses_catalog.append({
+                                    "temp_id": wid,
+                                    "name": clean_props.get("name"),
+                                    "type": clean_props.get("type")
+                                })
+                            else:
+                                logger.warning(f"Phase 10: Witness item has neither temp_id nor node: {item}")
+                                continue
+                            
+                            # Create edge to this fact (get relationship label from schema)
                             try:
-                                if evidence_model is not None:
-                                    inst = evidence_model(**node_props)
-                                    clean_props = inst.model_dump(exclude_none=True)
-                                else:
-                                    clean_props = node_props
+                                s_val = float(strength) if isinstance(strength, (int, float)) or (isinstance(strength, str) and strength.strip()) else None
                             except Exception:
-                                clean_props = {k: v for k, v in node_props.items() if isinstance(k, str)}
-                            
-                            eid = f"n{next_idx}"
-                            next_idx += 1
-                            enode = {"temp_id": eid, "label": "Evidence", "properties": clean_props}
-                            self.state.nodes_accumulated.append(enode)
-                            evidence_created += 1
-                            
-                            # Add to catalog for future iterations (minimal info: type and first 100 chars of description)
-                            desc = clean_props.get("description", "")
-                            desc_short = desc[:100] if isinstance(desc, str) else ""
-                            evidence_catalog.append({
-                                "temp_id": eid,
-                                "type": clean_props.get("type"),
-                                "description": desc_short
-                            })
-                        else:
-                            logger.warning(f"Phase 10: Evidence item has neither temp_id nor node: {item}")
+                                s_val = None
+                            eprops = {"support_strength": s_val if s_val is not None else 0.0}
+                            # Get the correct relationship label from schema
+                            if isinstance(fact_temp_id, str) and fact_temp_id:
+                                rel_label = get_relationship_label_for_edge("Fact", "Witness", self.state.rels_by_label or {})
+                                if rel_label:
+                                    self.state.edges_accumulated.append({"from": fact_temp_id, "to": wid, "label": rel_label, "properties": eprops})
+                                    edges_created += 1
+                                else:
+                                    logger.warning("Phase 10: No relationship found in schema for Fact -> Witness")
+                        except Exception as e:
+                            logger.warning(f"Phase 10: Failed to process witness: {e}")
                             continue
-                        
-                        # Create edge to this fact (get relationship label from schema)
+
+                    # Evidence - AI decides to reuse or create
+                    for item in evidences:
                         try:
-                            s_val = float(strength) if isinstance(strength, (int, float)) or (isinstance(strength, str) and strength.strip()) else None
-                        except Exception:
-                            s_val = None
-                        eprops = {"support_strength": s_val if s_val is not None else 0.0}
-                        # Get the correct relationship label from schema
-                        rel_label = get_relationship_label_for_edge("Fact", "Evidence", self.state.rels_by_label or {})
-                        if rel_label:
-                            self.state.edges_accumulated.append({"from": fact.get("temp_id"), "to": eid, "label": rel_label, "properties": eprops})
-                            edges_created += 1
-                        else:
-                            logger.warning("Phase 3: No relationship found in schema for Fact -> Evidence")
-                    except Exception as e:
-                        logger.warning(f"Phase 10: Failed to process evidence: {e}")
-                        continue
+                            strength = item.support_strength
+                            reuse_temp_id = item.temp_id
+                            node_props = item.node
+                            
+                            # Determine if reusing or creating
+                            if isinstance(reuse_temp_id, str) and reuse_temp_id:
+                                # AI chose to reuse existing evidence
+                                eid = reuse_temp_id
+                                logger.debug(f"Phase 10: AI reusing existing Evidence ({eid})")
+                            elif isinstance(node_props, dict):
+                                # AI creating new evidence
+                                try:
+                                    if evidence_model is not None:
+                                        inst = evidence_model(**node_props)
+                                        clean_props = inst.model_dump(exclude_none=True)
+                                    else:
+                                        clean_props = node_props
+                                except Exception:
+                                    clean_props = {k: v for k, v in node_props.items() if isinstance(k, str)}
+                                
+                                eid = f"n{next_idx}"
+                                next_idx += 1
+                                enode = {"temp_id": eid, "label": "Evidence", "properties": clean_props}
+                                self.state.nodes_accumulated.append(enode)
+                                evidence_created += 1
+                                
+                                # Add to catalog for future batches
+                                desc = clean_props.get("description", "")
+                                # Pass full description but cap to 800 characters for context safety
+                                desc_short = desc[:800] if isinstance(desc, str) else ""
+                                evidence_catalog.append({
+                                    "temp_id": eid,
+                                    "type": clean_props.get("type"),
+                                    "description": desc_short
+                                })
+                            else:
+                                logger.warning(f"Phase 10: Evidence item has neither temp_id nor node: {item}")
+                                continue
+                            
+                            # Create edge to this fact (get relationship label from schema)
+                            try:
+                                s_val = float(strength) if isinstance(strength, (int, float)) or (isinstance(strength, str) and strength.strip()) else None
+                            except Exception:
+                                s_val = None
+                            eprops = {"support_strength": s_val if s_val is not None else 0.0}
+                            # Get the correct relationship label from schema
+                            if isinstance(fact_temp_id, str) and fact_temp_id:
+                                rel_label = get_relationship_label_for_edge("Fact", "Evidence", self.state.rels_by_label or {})
+                                if rel_label:
+                                    self.state.edges_accumulated.append({"from": fact_temp_id, "to": eid, "label": rel_label, "properties": eprops})
+                                    edges_created += 1
+                                else:
+                                    logger.warning("Phase 10: No relationship found in schema for Fact -> Evidence")
+                        except Exception as e:
+                            logger.warning(f"Phase 10: Failed to process evidence: {e}")
+                            continue
+                            
             except Exception as e:
-                logger.warning(f"Phase 10: supports generation for a Fact failed: {e}")
+                logger.warning(f"Phase 10: supports generation for batch failed: {e}")
                 continue
 
         try:
             unique_witnesses = len(witnesses_catalog)
             unique_evidence = len(evidence_catalog)
-            logger.info(f"Phase 3: completed (witnesses_created={witnesses_created}, evidence_created={evidence_created}, edges_added={edges_created})")
-            logger.info(f"Phase 3: total unique items - {unique_witnesses} witnesses, {unique_evidence} evidence (AI-driven deduplication)")
+            logger.info(f"Phase 10: completed (witnesses_created={witnesses_created}, evidence_created={evidence_created}, edges_added={edges_created}, unique_witnesses={unique_witnesses}, unique_evidence={unique_evidence}, AI-driven deduplication)")
         except Exception:
             logger.info("Phase 10: supports generation completed")
         
-        # Publish progress
-        if self.state.progress_callback:
-            try:
-                self.state.progress_callback("Phase 10 complete: Generated witnesses and evidence", "phase10", 95)
-            except Exception as e:
-                logger.warning(f"Failed to publish progress: {e}")
+        # No end-of-phase progress callback; start-of-phase announces in-progress
         
         return {"status": "supports_phase10_done"}
 
