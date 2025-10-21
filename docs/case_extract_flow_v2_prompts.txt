@@ -1,0 +1,434 @@
+Phase 1 — Case (single) prompt
+--------------------------------
+Analyse the document text (provided below) and identify data as described by the instructions below.
+
+CRITICAL: Extract information ONLY from the provided case text. Do not use general knowledge, external information, or assumptions. If information is not explicitly or implicitly present in the text, do not include it.
+
+INSTRUCTIONS:
+Identify the case metadata and produce a single Case node summarizing the decision. Include the official case name as the name, and use a concise case synopsis for summary.
+
+Be comprehensive; do not miss any information that IS in the text.
+Return ONLY JSON matching the schema properties for this node type:
+
+SCHEMA PROPERTIES for 'Case':
+{SCHEMA_PROPERTIES_FOR_Case}
+
+Guidance:
+- Extract ONLY from the case text provided below - do not rely on general knowledge.
+- Include all properties you can confidently extract from the text.
+- For required properties, provide your best inference from the text if not explicitly stated.
+- Enforce types, enums, and date formats exactly as specified.
+- Use facts present in the text; do not invent or assume.
+- Do not output temp_id or label here. Properties only.
+
+EXAMPLES (illustrative, may be partial):
+[
+  { "name": "Abrams v. United States", "summary": "Defendants were convicted under the Espionage Act for distributing leaflets urging resistance to U.S. war efforts. The Supreme Court affirmed their conviction, emphasizing the wartime context. A notable dissent by Justice Holmes emphasized the importance of free speech under the First Amendment." },
+  { "name": "Smith v. Acme Manufacturing Co.", "summary": "Plaintiff brought a products liability claim alleging a design defect in a hydraulic press that caused workplace injury. The appellate court affirmed part of the lower court's judgment but remanded for further proceedings on specific claims. The decision clarified the scope of manufacturer duty in design defect cases." },
+  { "name": "People v. Ortega", "summary": "Defendant appealed a conviction on grounds of unlawful search and seizure. The appellate court found that evidence had been obtained in violation of the Fourth Amendment and reversed the conviction. The ruling reinforced constitutional limits on warrantless searches." },
+  { "name": "Green Earth Alliance v. State Water Board", "summary": "An environmental advocacy group sought review of a discharge permit issued by the state agency. The court set aside the permit, holding that the agency failed to adequately consider cumulative environmental impacts as required by law. The decision underscored agencies' duty to conduct comprehensive environmental review." }
+]
+
+CASE_TEXT:
+{CASE_TEXT}
+
+
+Phase 1 — Proceeding (multi) prompt
+-----------------------------------
+Analyse the document text (provided below) and extract ALL distinct nodes for the label 'Proceeding'.
+
+CRITICAL: Extract information ONLY from the provided case text. Do not use general knowledge, external information, or assumptions. If information is not explicitly or implicitly present in the text, do not include it.
+
+INSTRUCTIONS:
+Extract the distinct stage of the litigation relevant to the opinion (e.g., trial, summary judgment, appeal). Use the stage, docket number, and dates to summarize what occurred.
+
+Return a JSON object: { items: [ { ...properties... }, ... ] }.
+Each item must match the schema properties exactly; include required properties; enforce types/enums/dates.
+Extract ONLY from the case text provided - do not rely on general knowledge or make assumptions.
+Do not include temp_id or label in the items.
+
+SCHEMA PROPERTIES for 'Proceeding':
+{SCHEMA_PROPERTIES_FOR_Proceeding}
+
+EXAMPLES (illustrative, may be partial):
+[
+  { "stage": "Trial—Superior Court", "docket_no": "19-CV-78231", "start_date": "2021-03-08", "end_date": "2021-03-15" },
+  { "stage": "Appeal—Court of Appeal", "docket_no": "A165432", "start_date": "2022-01-10", "end_date": "2022-11-04" }
+]
+
+CASE_TEXT:
+{CASE_TEXT}
+
+
+Phase 1 — Issue (multi) prompt
+-------------------------------
+Analyse the document text (provided below) and extract ALL distinct nodes for the label 'Issue'.
+
+CRITICAL: Extract information ONLY from the provided case text. Do not use general knowledge, external information, or assumptions. If information is not explicitly or implicitly present in the text, do not include it.
+
+INSTRUCTIONS:
+Create a new Issue node for each legal question decided by the court in neutral terms. Put the concise statement in label and the fuller question in text; include a brief summary. Each issue will have its own holding.
+
+Return a JSON object: { items: [ { ...properties... }, ... ] }.
+Each item must match the schema properties exactly; include required properties; enforce types/enums/dates.
+Extract ONLY from the case text provided - do not rely on general knowledge or make assumptions.
+Do not include temp_id or label in the items.
+
+SCHEMA PROPERTIES for 'Issue':
+{SCHEMA_PROPERTIES_FOR_Issue}
+
+EXAMPLES (illustrative, may be partial):
+[
+  { "label": "Enforceability of clickwrap", "text": "Is an online clickwrap agreement enforceable against the user?", "type": "procedural", "summary": "Click acceptance binds the user where terms are conspicuous and assent is clear." },
+  { "label": "Tolling by concealment", "text": "Was the statute of limitations tolled by fraudulent concealment?", "type": "substantive", "summary": "Concealment of defect reports tolled limitations period." }
+]
+
+CASE_TEXT:
+{CASE_TEXT}
+
+
+Phase 2 — Select Forum from catalog
+-----------------------------------
+Phase 5 selection for ReliefType and Forum from provided catalogs using Ruling properties and case text. Do not select Jurisdiction; it will be added programmatically from the selected Forum.
+
+CRITICAL: Base your selections ONLY on the provided CASE_TEXT and RULING_JSON. Do not use general knowledge or external information. Select only what is explicitly or implicitly supported by the text.
+
+Inputs will be provided in the instructions as JSON blocks:
+- RULING_JSON: { ...properties... } (the single generated Ruling node's properties)
+- CASE_TEXT: raw case text
+- CATALOGS: { label: [ { forum_id?, relief_type_id?, name?, type?, description?, ...other fields... }, ... ] }
+
+Steps:
+1) Based on RULING_JSON, select the most appropriate ReliefType from the ReliefType catalog.
+2) Based on CASE_TEXT, select the most appropriate Forum from the Forum catalog.
+3) Return JSON as { "selected": { "ReliefType": [IDs...], "Forum": [IDs...] } } where each value is the ID field:
+   - For Forum: return the 'forum_id' value from the catalog entry
+   - For ReliefType: return the 'relief_type_id' value from the catalog entry
+   - ONLY return the ID value, NOT the name or description
+
+Constraints (STRICTLY ENFORCED):
+- YOU MUST ONLY RETURN IDs (forum_id, relief_type_id) THAT EXIST IN THE PROVIDED CATALOGS
+- DO NOT create, invent, or return any other values (names, descriptions, etc.)
+- Return ONLY the ID field values as they appear in the catalog entries
+- If no appropriate match exists in the catalog, return an empty array []
+- NEVER use general knowledge - ONLY select from the catalog IDs provided below
+
+RULING_JSON:
+{RULING_JSON}
+
+CASE_TEXT:
+{CASE_TEXT}
+
+CATALOGS:
+{CATALOGS_JSON}
+
+
+Phase 3 — Parties and roles prompt
+----------------------------------
+Phase 8: Identify Parties from case text and deduplicate against existing Party catalog; output roles for Case relationships.
+
+CRITICAL: Extract parties ONLY from the provided CASE_TEXT. Do not use general knowledge or external information. Only include parties that are explicitly mentioned in the case text with their roles as stated in the text.
+
+Inputs provided in instructions as JSON blocks:
+- CASE_TEXT: raw case text
+- CATALOGS: { "Party": [ { name, type }, ... ] }
+
+Steps:
+1) Extract all parties involved in the case with best-guess role and type based on the case text only.
+2) For each extracted party name, fuzzy match against the Party catalog; if match is strong, standardize to catalog name.
+3) Return JSON as {
+   "parties": [ { name, type }, ... ],
+   "case_roles": [ { "party_index": <index in parties array>, "role": "plaintiff|defendant|appellant|appellee|petitioner|respondent" } ]
+}
+
+Constraints:
+- Only standardize to catalog entries; do not invent catalog names.
+- Prefer high-precision matches; if uncertain, keep extracted name.
+- Extract ONLY parties mentioned in the case text, not from general knowledge.
+
+CASE_TEXT:
+{CASE_TEXT}
+
+CATALOGS:
+{CATALOGS_JSON}
+
+
+Phase 4 — Issue concepts (Doctrine, Policy, FactPattern)
+--------------------------------------------------------
+Phase 7: For each Issue, select or create one Doctrine, one Policy, and one FactPattern.
+
+CRITICAL: Base your analysis ONLY on the Issues extracted from the case text. The issue properties themselves come from the case text. Only identify doctrines, policies, and fact patterns that are explicitly or implicitly referenced in the issue text or case context. Do not use general legal knowledge to add concepts not grounded in the case.
+
+Inputs provided in instructions as JSON blocks:
+- ISSUES_JSON: { "issues": [ { temp_id, properties }, ... ] }
+- CATALOGS: {
+    "Doctrine": [ { name, description, category }, ... ],
+    "Policy": [ { name, description, discipline }, ... ],
+    "FactPattern": [ { name, description }, ... ]
+  }
+- SCHEMA_SPEC: schema snippets for Doctrine, Policy, FactPattern properties
+
+Steps:
+1) For each issue, decide one Doctrine, one Policy, and one FactPattern based on what's in the issue text.
+   Prefer catalog matches by name/description; otherwise propose new entries consistent with schema, but only if grounded in the case.
+2) Return JSON as {
+   "doctrines": [ { properties }, ... ],
+   "policies": [ { properties }, ... ],
+   "factpatterns": [ { properties }, ... ],
+   "issue_map": [ { "issue_temp_id": "nX", "doctrine_index": i, "policy_index": j, "factpattern_index": k } ]
+}
+
+Constraints:
+- Deduplicate outputs by name (and category/discipline where applicable).
+- Properties must comply with schema types and required fields.
+- Only include concepts that are referenced in the issue text, not from general legal knowledge.
+
+ISSUES_JSON:
+{ISSUES_JSON}
+
+CATALOGS:
+{CATALOGS_JSON}
+
+SCHEMA_SPEC:
+{SCHEMA_SPEC_TEXT}
+
+
+Phase 5 — Holdings per Issue (batched)
+--------------------------------------
+Read the document text (provided below) and create a Holding for each Issue.
+
+CRITICAL: Extract information ONLY from the provided case text. State the court's holding for each specific issue.
+
+CASE_TEXT:
+{CASE_TEXT}
+
+ISSUES_JSON:
+{ISSUES_JSON}
+
+Guidance:
+- State the court's holding as a clear, outcome-determinative rule or answer to each specific legal question.
+- Avoid reasoning; focus on the bottom-line legal conclusion for each issue.
+- Return JSON as: { results: [ { issue_temp_id: string, holding: <Holding properties> }, ... ] }.
+- Each holding MUST correspond to its issue and MUST be extracted from the case text above.
+- Match the Holding schema properties exactly.
+
+INSTRUCTIONS (from flow map):
+For the given Issue, state the court's holding as a clear, outcome-determinative rule or answer to that specific legal question. Each holding addresses exactly one issue. Avoid reasoning; focus on the bottom-line legal conclusion for this issue.
+
+EXAMPLES (illustrative, may be partial):
+[
+  { "type": "Fourth Amendment", "disposition": "reversed", "summary": "Warrantless search invalid; evidence suppressed." },
+  { "type": "Contract—Non-Compete", "disposition": "affirmed", "summary": "Covenant unenforceable due to overbreadth and lack of protectable interest." }
+]
+
+SCHEMA PROPERTIES for 'Holding':
+{SCHEMA_PROPERTIES_FOR_Holding}
+
+
+Phase 6 — Ruling and Arguments per Holding (batched)
+----------------------------------------------------
+Read the document text (provided below) and for each Holding: (1) identify the Ruling, and (2) extract ALL Arguments.
+
+CRITICAL: Extract information ONLY from the provided case text.
+
+CASE_TEXT:
+{CASE_TEXT}
+
+HOLDINGS_JSON:
+{HOLDINGS_JSON}
+
+Guidance:
+- For each holding, identify the Ruling (court's disposition: affirmed, reversed, etc.). A single ruling may apply to multiple holdings.
+- For each holding, extract ALL principal arguments advanced by any party relevant to that holding's issue.
+- Return JSON as: { results: [ { holding_temp_id: string, ruling: <Ruling properties>, arguments: [ <Argument properties>, ... ] }, ... ] }.
+- Match Ruling and Argument schema properties exactly.
+- Extract from text only; do not invent.
+
+RULING INSTRUCTIONS:
+Summarize the court's disposition (affirmed, reversed, remanded, etc.) and capture the operative basis in text. A single ruling may apply to multiple issues/holdings in the case.
+
+RULING EXAMPLES:
+[
+  { "label": "Judgment affirmed", "decision_date": "2022-09-14", "type": "appeal", "text": "Sufficient evidence supported the jury's negligence finding." },
+  { "label": "Order reversed and remanded", "decision_date": "2023-02-27", "type": "post-trial decision", "text": "Trial court applied an incorrect standard for preliminary injunction." }
+]
+
+RULING SCHEMA:
+{SCHEMA_PROPERTIES_FOR_Ruling}
+
+ARGUMENT INSTRUCTIONS:
+For the given Holding/Issue, extract ALL of the principal arguments advanced by any party that are relevant to this specific issue. Use a short label and put the thesis or rationale in text.
+
+ARGUMENT EXAMPLES:
+[
+  { "label": "Federal preemption applies", "text": "Federal safety standards preempt state tort claims concerning labeling." },
+  { "label": "Habitability breach", "text": "Persistent mold and lack of heat breached the implied warranty of habitability." }
+]
+
+ARGUMENT SCHEMA:
+{SCHEMA_PROPERTIES_FOR_Argument}
+
+
+Phase 7 — Assign Laws to Arguments
+----------------------------------
+Phase 6: For each provided Argument, select or create at least one Law.
+
+CRITICAL: Base your analysis ONLY on the Arguments extracted from the case text. The argument properties themselves come from the case text. Do not use general legal knowledge to add laws not referenced in those arguments. Only identify laws that are explicitly or implicitly referenced in the argument text.
+
+Inputs provided in instructions as JSON blocks:
+- ARGUMENTS_JSON: { "arguments": [ { temp_id, properties }, ... ] }
+- CATALOGS: { "Law": [ { name, text, type, citation }, ... ] }
+- SCHEMA_SPEC: schema for Law properties for validation context
+
+Steps:
+1) For each argument, decide the governing Law(s) based on what's in the argument text. Prefer matching entries in the Law catalog by citation or name.
+2) When no clear match exists, propose a new Law consistent with schema, but only if the law is referenced in the argument.
+3) Return JSON as {
+   "laws": [ { properties }, ... ],
+   "argument_to_law": [ { "argument_temp_id": "nX", "law_index": <index in laws array> }, ... ]
+}
+
+Constraints:
+- Do not output duplicate Law entries; deduplicate by citation/name.
+- Properties must comply with schema types and required fields.
+- Only include laws that are referenced in the argument text, not from general legal knowledge.
+
+ARGUMENTS_JSON:
+{ARGUMENTS_JSON}
+
+CATALOGS:
+{CATALOGS_JSON}
+
+SCHEMA_SPEC:
+{SCHEMA_SPEC_TEXT}
+
+
+Phase 8 — Select ReliefType from catalog
+----------------------------------------
+Phase 5 selection for ReliefType and Forum from provided catalogs using Ruling properties and case text. Do not select Jurisdiction; it will be added programmatically from the selected Forum.
+
+CRITICAL: Base your selections ONLY on the provided CASE_TEXT and RULING_JSON. Do not use general knowledge or external information. Select only what is explicitly or implicitly supported by the text.
+
+Inputs will be provided in the instructions as JSON blocks:
+- RULING_JSON: { ...properties... } (the single generated Ruling node's properties)
+- CASE_TEXT: raw case text
+- CATALOGS: { label: [ { forum_id?, relief_type_id?, name?, type?, description?, ...other fields... }, ... ] }
+
+Steps:
+1) Based on RULING_JSON, select the most appropriate ReliefType from the ReliefType catalog.
+2) Based on CASE_TEXT, select the most appropriate Forum from the Forum catalog.
+3) Return JSON as { "selected": { "ReliefType": [IDs...], "Forum": [IDs...] } } where each value is the ID field:
+   - For Forum: return the 'forum_id' value from the catalog entry
+   - For ReliefType: return the 'relief_type_id' value from the catalog entry
+   - ONLY return the ID value, NOT the name or description
+
+Constraints (STRICTLY ENFORCED):
+- YOU MUST ONLY RETURN IDs (forum_id, relief_type_id) THAT EXIST IN THE PROVIDED CATALOGS
+- DO NOT create, invent, or return any other values (names, descriptions, etc.)
+- Return ONLY the ID field values as they appear in the catalog entries
+- If no appropriate match exists in the catalog, return an empty array []
+- NEVER use general knowledge - ONLY select from the catalog IDs provided below
+
+RULING_JSON:
+{RULING_JSON}
+
+CASE_TEXT:
+{CASE_TEXT}
+
+CATALOGS:
+{CATALOGS_JSON}
+
+
+Phase 9 — Facts per Argument (batched)
+--------------------------------------
+Read the document text (provided below) and extract Facts that support each Argument.
+
+CRITICAL: Extract information ONLY from the provided case text. Do not use general knowledge, external information, or assumptions. If information is not explicitly or implicitly present in the text, do not include it.
+
+CASE_TEXT:
+{CASE_TEXT}
+
+ARGUMENTS_JSON:
+{ARGUMENTS_JSON}
+
+EXISTING FACTS (already created):
+{FACTS_CATALOG_JSON}
+
+Guidance:
+- BE COMPREHENSIVE: Extract ALL facts from the case text that support each argument.
+- Check the existing facts catalog above. ONLY reuse a fact if it is EXACTLY the same fact (same content, same alleged_by, same proved status).
+- When in doubt, create a new fact rather than reusing. It's better to have distinct facts than to conflate different facts.
+- Return JSON as: { results: [ { argument_temp_id: string, facts: [ { temp_id?: string, fact?: <Fact properties> }, ... ] }, ... ] }.
+- For REUSING an IDENTICAL existing fact: include only 'temp_id' (omit 'fact').
+- For CREATING a new fact: include only 'fact' with properties (omit 'temp_id').
+- Each fact MUST be relevant to its argument and MUST be present in the case text above.
+- There can be many facts per argument - extract all of them from the text.
+- Match the Fact schema properties exactly (include all required; optional when supported).
+- Enforce types/enums/date formats; extract from text only; avoid invention.
+
+INSTRUCTIONS (from flow map):
+Extract material, case-dispositive facts credited by the court. Place the full fact sentence in text, note who alleged it, and whether it was proved.
+
+EXAMPLES (illustrative, may be partial):
+[
+  { "text": "The replacement valve failed pressure tests within two weeks of installation.", "alleged_by": "plaintiff", "proved": "yes" },
+  { "text": "The mobile app continued collecting GPS data after the user opted out.", "alleged_by": "plaintiff", "proved": "no" }
+]
+
+SCHEMA PROPERTIES for 'Fact':
+{SCHEMA_PROPERTIES_FOR_Fact}
+
+
+Phase 10 — Witnesses and Evidence per Fact (batched)
+----------------------------------------------------
+Read the document text (provided below) and generate Witnesses and Evidence that support each Fact.
+
+CRITICAL: Extract information ONLY from the provided case text. Do not use general knowledge, external information, or assumptions. If information is not explicitly or implicitly present in the text, do not include it.
+
+CASE_TEXT:
+{CASE_TEXT}
+
+FACTS_JSON:
+{FACTS_JSON}
+
+EXISTING WITNESSES (already created):
+{WITNESSES_CATALOG_JSON}
+
+EXISTING EVIDENCE (already created):
+{EVIDENCE_CATALOG_JSON}
+
+Guidance:
+- BE COMPREHENSIVE: Extract ALL witnesses and evidence from the case text that support each fact.
+- Check the existing catalogs above. ONLY reuse if it is EXACTLY the same witness/evidence (same person/document).
+- When in doubt, create new rather than reusing. It's better to have distinct items than to conflate different ones.
+- Return JSON as: { results: [ { fact_temp_id: string, witnesses: [ { temp_id?: string, node?: <Witness properties>, support_strength: number } ], evidence: [ { temp_id?: string, node?: <Evidence properties>, support_strength: number } ] }, ... ] }.
+- For REUSING an IDENTICAL existing item: include only 'temp_id' and 'support_strength' (omit 'node').
+- For CREATING a new item: include only 'node' and 'support_strength' (omit 'temp_id').
+- Each item MUST support its Fact and MUST be mentioned in the case text above.
+- support_strength: 0 to 100 (percent) based on what's in the text.
+- Match schema properties strictly; include required; enforce types/enums/dates.
+- Extract from text only; do not invent or assume details not in the text.
+
+WITNESS INSTRUCTIONS:
+Extract the witness(es) that supports each Fact. In order to assign to the fact, the witness must be explicitly linked to the Fact in the case text. Use the person's name and type; briefly summarize testimony and whether the witness was admitted.
+
+WITNESS EXAMPLES (partial):
+[
+  { "name": "Dr. Elena Park", "type": "expert", "testimony_summary": "Orthopedic expert opined injuries consistent with repetitive strain.", "expert_type": "economics", "admitted": "YES" },
+  { "name": "Officer Luis Moreno", "type": "layperson", "testimony_summary": "Described chain of custody for seized laptop.", "admitted": "YES" }
+]
+
+SCHEMA PROPERTIES for 'Witness':
+{SCHEMA_PROPERTIES_FOR_Witness}
+
+EVIDENCE INSTRUCTIONS:
+Extract the evidence that supports each Fact. In order to assign to the fact, the evidence must be explicitly linked to the Fact in the case text. Use the evidence type and summarize its content or relevance in description; indicate whether it was admitted.
+
+EVIDENCE EXAMPLES (partial):
+[
+  { "type": "Email chain", "description": "Internal messages showing knowledge of scheduling delays.", "admitted": "YES" },
+  { "type": "Dashcam video", "description": "Footage contradicting officer's account of the traffic stop.", "admitted": "YES" }
+]
+
+SCHEMA PROPERTIES for 'Evidence':
+{SCHEMA_PROPERTIES_FOR_Evidence}

@@ -57,7 +57,6 @@ env/
 *.log
 *_test_*.json
 *_log.json
-crew_search_log.json
 doctrine_search_test_*.json
 
 /src/generated/prisma

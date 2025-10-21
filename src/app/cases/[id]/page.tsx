@@ -38,6 +38,7 @@ export default function CaseEditorPage() {
   // displayData removed as a stateful dependency; we derive UI solely from graphState + viewConfig
   const [viewConfig, setViewConfig] = useState<any>(null)
   const [saving, setSaving] = useState(false)
+  const [submittingKg, setSubmittingKg] = useState(false)
   const [error, setError] = useState('')
   const [editingEdgeIdx, setEditingEdgeIdx] = useState<number | null>(null)
   const [editToValue, setEditToValue] = useState<string>('')
@@ -189,6 +190,28 @@ export default function CaseEditorPage() {
       setError(e?.message || 'Failed to save')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const submitToKg = async () => {
+    try {
+      setSubmittingKg(true)
+      // Ensure latest changes are saved first
+      await onSave()
+      // Call secure API to trigger backend KG flow with case id
+      const res = await fetch('/api/kg/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id })
+      })
+      if (!res.ok) {
+        const txt = await res.text()
+        throw new Error(txt || 'Failed to submit to KG')
+      }
+    } catch (e: any) {
+      setError(e?.message || 'Submit to KG failed')
+    } finally {
+      setSubmittingKg(false)
     }
   }
 
@@ -2181,7 +2204,10 @@ export default function CaseEditorPage() {
                     <span className="font-medium">{orphanedNodes.length} orphaned node{orphanedNodes.length !== 1 ? 's' : ''} will be deleted</span>
                   </div>
                 )}
-                <Button onClick={onSave} disabled={saving}>{saving ? 'Saving...' : 'Save'}</Button>
+                <Button onClick={onSave} disabled={saving || submittingKg}>{saving ? 'Saving...' : 'Save'}</Button>
+                <Button onClick={submitToKg} disabled={saving || submittingKg}>
+                  {submittingKg ? 'Submitting…' : 'Submit to KG'}
+                </Button>
               </div>
             </div>
           </div>

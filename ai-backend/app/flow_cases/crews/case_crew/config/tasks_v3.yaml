@@ -1,0 +1,266 @@
+phase1_extract_single_node_task:
+  description: |
+    Analyse the document text (provided below) and identify data as described by the instructions below.
+
+    CRITICAL: Extract information ONLY from the provided case text. Do not use general knowledge, external information, or assumptions. If information is not explicitly or implicitly present in the text, do not include it.
+
+    INSTRUCTIONS:
+    {INSTRUCTIONS}
+
+    Be comprehensive; do not miss any information that IS in the text.
+    Return ONLY JSON matching the schema properties for this node type:
+
+    SCHEMA PROPERTIES for '{LABEL}':
+    {PROPS_SPEC_TEXT}
+
+    Guidance:
+    - Extract ONLY from the case text provided below - do not rely on general knowledge.
+    - Include all properties you can confidently extract from the text.
+    - For required properties, provide your best inference from the text if not explicitly stated.
+    - Enforce types, enums, and date formats exactly as specified.
+    - Use facts present in the text; do not invent or assume.
+    - Do not output temp_id or label here. Properties only.
+
+    EXAMPLES (illustrative, may be partial):
+    {EXAMPLES_JSON}
+
+    CASE_TEXT:
+    {CASE_TEXT}
+  expected_output: "JSON of properties only for the requested label"
+
+
+phase1_extract_multi_nodes_task:
+  description: |
+    Analyse the document text (provided below) and extract ALL distinct nodes for the label '{LABEL}'.
+
+    CRITICAL: Extract information ONLY from the provided case text. Do not use general knowledge, external information, or assumptions. If information is not explicitly or implicitly present in the text, do not include it.
+
+    INSTRUCTIONS:
+    {INSTRUCTIONS}
+
+    Return a JSON object: { items: [ { ...properties... }, ... ] }.
+    Each item must match the schema properties exactly; include required properties; enforce types/enums/dates.
+    Extract ONLY from the case text provided - do not rely on general knowledge or make assumptions.
+    Do not include temp_id or label in the items.
+
+    SCHEMA PROPERTIES for '{LABEL}':
+    {PROPS_SPEC_TEXT}
+
+    EXAMPLES (illustrative, may be partial):
+    {EXAMPLES_JSON}
+
+    CASE_TEXT:
+    {CASE_TEXT}
+  expected_output: "A JSON object { items: [ { ...properties... }, ... ] }"
+
+
+phase5_batch_ruling_arguments_task:
+  description: |
+    Read the document text (provided below) and for each Issue: (1) identify the Ruling, and (2) extract ALL Arguments.
+
+    CRITICAL: Extract information ONLY from the provided case text.
+
+    CASE_TEXT:
+    {CASE_TEXT}
+
+    ISSUES_JSON:
+    {ISSUES_JSON}
+
+    Guidance:
+    - For each issue, identify the Ruling (court's disposition). A single ruling may apply to multiple issues.
+    - For each issue, extract ALL principal arguments advanced by any party relevant to that issue.
+    - Return JSON as: { results: [ { issue_temp_id: string, ruling: <Ruling properties>, arguments: [ <Argument properties>, ... ] }, ... ] }.
+    - Match Ruling and Argument schema properties exactly.
+    - Extract from text only; do not invent.
+
+    RULING INSTRUCTIONS:
+    {RULING_INSTRUCTIONS}
+
+    RULING EXAMPLES:
+    {RULING_EXAMPLES_JSON}
+
+    RULING SCHEMA:
+    {RULING_SPEC_TEXT}
+
+    ARGUMENT INSTRUCTIONS:
+    {ARGUMENT_INSTRUCTIONS}
+
+    ARGUMENT EXAMPLES:
+    {ARGUMENT_EXAMPLES_JSON}
+
+    ARGUMENT SCHEMA:
+    {ARGUMENT_SPEC_TEXT}
+  expected_output: "A JSON object { results: [ { issue_temp_id: string, ruling: {...}, arguments: [...] }, ... ] }"
+
+
+phase3_relationships_task:
+  description: |
+    Assign relationships between nodes following the provided schema mappings strictly.
+
+    Inputs will be provided as JSON blocks:
+    - SCHEMA_SPEC: text with mapping lines (Label and Relationships)
+    - NODES_JSON: { "nodes": [ {temp_id, label, properties}, ... ] }
+
+    Steps:
+    1) For each source node, consult allowed relationships for its label.
+    2) Create edges to target nodes whose labels match the allowed target.
+    3) Cap to a small number per relation per source to avoid explosion.
+    4) Return JSON as { "edges": [ {from, to, label, properties}, ... ] }.
+
+    Constraints:
+    - 'from' and 'to' must be existing temp_id values.
+    - Only use relationship labels allowed by the schema mapping.
+
+    SCHEMA SPEC:
+    {SCHEMA_SPEC_TEXT}
+
+    NODES_JSON:
+    {NODES_JSON}
+  expected_output: "A JSON object { edges: [...] } with valid edges."
+
+
+phase5_select_existing_task:
+  description: |
+    Phase 5 selection for ReliefType and Forum from provided catalogs using Ruling properties and case text. Do not select Jurisdiction; it will be added programmatically from the selected Forum.
+
+    CRITICAL: Base your selections ONLY on the provided CASE_TEXT and RULING_JSON. Do not use general knowledge or external information. Select only what is explicitly or implicitly supported by the text.
+
+    Inputs will be provided in the instructions as JSON blocks:
+    - RULING_JSON: { ...properties... } (the single generated Ruling node's properties)
+    - CASE_TEXT: raw case text
+    - CATALOGS: { label: [ { forum_id?, relief_type_id?, name?, type?, description?, ...other fields... }, ... ] }
+
+    Steps:
+    1) Based on RULING_JSON, select the most appropriate ReliefType from the ReliefType catalog.
+    2) Based on CASE_TEXT, select the most appropriate Forum from the Forum catalog.
+    3) Return JSON as { "selected": { "ReliefType": [IDs...], "Forum": [IDs...] } } where each value is the ID field:
+       - For Forum: return the 'forum_id' value from the catalog entry
+       - For ReliefType: return the 'relief_type_id' value from the catalog entry
+       - ONLY return the ID value, NOT the name or description
+
+    Constraints (STRICTLY ENFORCED):
+    - YOU MUST ONLY RETURN IDs (forum_id, relief_type_id) THAT EXIST IN THE PROVIDED CATALOGS
+    - DO NOT create, invent, or return any other values (names, descriptions, etc.)
+    - Return ONLY the ID field values as they appear in the catalog entries
+    - If no appropriate match exists in the catalog, return an empty array []
+    - NEVER use general knowledge - ONLY select from the catalog IDs provided below
+
+    RULING_JSON:
+    {RULING_JSON}
+
+    CASE_TEXT:
+    {CASE_TEXT}
+
+    CATALOGS:
+    {CATALOGS_JSON}
+  expected_output: "A JSON object { selected: { ReliefType: [...], Forum: [...] } }."
+
+
+phase6_law_task:
+  description: |
+    Phase 6: For each provided Argument, select or create at least one Law.
+
+    CRITICAL: Base your analysis ONLY on the Arguments extracted from the case text. The argument properties themselves come from the case text. Do not use general legal knowledge to add laws not referenced in those arguments. Only identify laws that are explicitly or implicitly referenced in the argument text.
+
+    Inputs provided in instructions as JSON blocks:
+    - ARGUMENTS_JSON: { "arguments": [ { temp_id, properties }, ... ] }
+    - CATALOGS: { "Law": [ { name, text, type, citation }, ... ] }
+    - SCHEMA_SPEC: schema for Law properties for validation context
+
+    Steps:
+    1) For each argument, decide the governing Law(s) based on what's in the argument text. Prefer matching entries in the Law catalog by citation or name.
+    2) When no clear match exists, propose a new Law consistent with schema, but only if the law is referenced in the argument.
+    3) Return JSON as {
+       "laws": [ { properties }, ... ],
+       "argument_to_law": [ { "argument_temp_id": "nX", "law_index": <index in laws array> }, ... ]
+    }
+
+    Constraints:
+    - Do not output duplicate Law entries; deduplicate by citation/name.
+    - Properties must comply with schema types and required fields.
+    - Only include laws that are referenced in the argument text, not from general legal knowledge.
+
+    ARGUMENTS_JSON:
+    {ARGUMENTS_JSON}
+
+    CATALOGS:
+    {CATALOGS_JSON}
+
+    SCHEMA_SPEC:
+    {SCHEMA_SPEC_TEXT}
+  expected_output: "A JSON object { laws: [...], argument_to_law: [...] }."
+
+
+phase7_issue_related_task:
+  description: |
+    Phase 7: For each Issue, select or create one Doctrine, one Policy, and one FactPattern.
+
+    CRITICAL: Base your analysis ONLY on the Issues extracted from the case text. The issue properties themselves come from the case text. Only identify doctrines, policies, and fact patterns that are explicitly or implicitly referenced in the issue text or case context. Do not use general legal knowledge to add concepts not grounded in the case.
+
+    Inputs provided in instructions as JSON blocks:
+    - ISSUES_JSON: { "issues": [ { temp_id, properties }, ... ] }
+    - CATALOGS: {
+        "Doctrine": [ { name, description, category }, ... ],
+        "Policy": [ { name, description, discipline }, ... ],
+        "FactPattern": [ { name, description }, ... ]
+      }
+    - SCHEMA_SPEC: schema snippets for Doctrine, Policy, FactPattern properties
+
+    Steps:
+    1) For each issue, decide one Doctrine, one Policy, and one FactPattern based on what's in the issue text.
+       Prefer catalog matches by name/description; otherwise propose new entries consistent with schema, but only if grounded in the case.
+    2) Return JSON as {
+       "doctrines": [ { properties }, ... ],
+       "policies": [ { properties }, ... ],
+       "factpatterns": [ { properties }, ... ],
+       "issue_map": [ { "issue_temp_id": "nX", "doctrine_index": i, "policy_index": j, "factpattern_index": k } ]
+    }
+
+    Constraints:
+    - Deduplicate outputs by name (and category/discipline where applicable).
+    - Properties must comply with schema types and required fields.
+    - Only include concepts that are referenced in the issue text, not from general legal knowledge.
+
+    ISSUES_JSON:
+    {ISSUES_JSON}
+
+    CATALOGS:
+    {CATALOGS_JSON}
+
+    SCHEMA_SPEC:
+    {SCHEMA_SPEC_TEXT}
+  expected_output: "A JSON object { doctrines: [...], policies: [...], factpatterns: [...], issue_map: [...] }."
+
+
+phase8_party_task:
+  description: |
+    Phase 8: Identify Parties from case text and deduplicate against existing Party catalog; output roles for Case relationships.
+
+    CRITICAL: Extract parties ONLY from the provided CASE_TEXT. Do not use general knowledge or external information. Only include parties that are explicitly mentioned in the case text with their roles as stated in the text.
+
+    Inputs provided in instructions as JSON blocks:
+    - CASE_TEXT: raw case text
+    - CATALOGS: { "Party": [ { name, type }, ... ] }
+
+    Steps:
+    1) Extract all parties involved in the case with best-guess role and type based on the case text only.
+    2) For each extracted party name, fuzzy match against the Party catalog; if match is strong, standardize to catalog name.
+    3) Return JSON as {
+       "parties": [ { name, type }, ... ],
+        "case_roles": [ { "party_index": <index in parties array>, "role": "plaintiff|defendant|appellant|appellee|petitioner|respondent" } ]
+    }
+
+    Constraints:
+    - Only standardize to catalog entries; do not invent catalog names.
+    - Prefer high-precision matches; if uncertain, keep extracted name.
+    - Extract ONLY parties mentioned in the case text, not from general knowledge.
+
+    CASE_TEXT:
+    {CASE_TEXT}
+
+    CATALOGS:
+    {CATALOGS_JSON}
+  expected_output: "A JSON object { parties: [...], case_roles: [...] }."
+
+
+
