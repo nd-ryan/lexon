@@ -93,20 +93,20 @@ def read_document_tool(file_path: str, filename: str) -> Dict[str, Any]:
     return read_document(file_path, filename)
 
 
-def fetch_neo4j_schema() -> Dict[str, Any]:
+def fetch_schema_v3() -> Dict[str, Any]:
     """
-    Retrieve schema strictly from the local schema.json file.
-    This backend treats schema.json as the single source of truth.
+    Retrieve schema strictly from the local schema_v3.json file.
+    This backend treats schema_v3.json as the single source of truth.
     """
     try:
         base_dir = os.path.join(os.path.dirname(__file__), "..", "..", "..")
-        path = os.path.abspath(os.path.join(base_dir, "schema.json"))
+        path = os.path.abspath(os.path.join(base_dir, "schema_v3.json"))
         if os.path.exists(path):
             with open(path, "r") as f:
                 payload = json.load(f)
             return {"ok": True, "schema": payload}
-        # If schema.json is not present, return a clear error
-        return {"ok": False, "error": "schema.json not found"}
+        # If schema_v3.json is not present, return a clear error
+        return {"ok": False, "error": "schema_v3.json not found"}
     except Exception as e:
         logger.error(f"MCP schema retrieval failed: {e}")
         return {"ok": False, "error": f"MCP schema retrieval failed: {e}"}
@@ -129,10 +129,10 @@ def fetch_preset_nodes() -> Dict[str, Any]:
         print("[get_preset_nodes_tool] start")
         # Load schema to find preset labels and allowed properties
         base_dir = os.path.join(os.path.dirname(__file__), "..", "..", "..")
-        path = os.path.abspath(os.path.join(base_dir, "schema.json"))
+        path = os.path.abspath(os.path.join(base_dir, "schema_v3.json"))
         if not os.path.exists(path):
-            print("[get_preset_nodes_tool] schema.json not found")
-            return {"ok": False, "error": "schema.json not found"}
+            print("[get_preset_nodes_tool] schema_v3.json not found")
+            return {"ok": False, "error": "schema_v3.json not found"}
 
         with open(path, "r") as f:
             schema = json.load(f)
@@ -211,11 +211,11 @@ def fetch_preset_nodes() -> Dict[str, Any]:
 @tool("get_preset_nodes_tool")
 def get_preset_nodes_tool() -> Dict[str, Any]:
     """
-    Retrieve preset nodes from Neo4j via MCP, based on labels marked preset in schema.json.
+    Retrieve preset nodes from Neo4j via MCP, based on labels marked preset in schema_v3.json.
 
     Returns:
       { ok: bool, presets?: { label: [ { properties... } ] }, error?: str }
-    Only returns non-hidden, non-embedding properties as per schema.json.
+    Only returns non-hidden, non-embedding properties as per schema_v3.json.
     """
     return fetch_preset_nodes()
 

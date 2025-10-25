@@ -1,0 +1,127 @@
+- label: Case
+  instructions: Identify the case metadata and produce a single Case node summarizing the decision. Include the official case name as the name, and use a concise case synopsis for summary.
+  examples:
+    - name: "Abrams v. United States"
+      summary: "Defendants were convicted under the Espionage Act for distributing leaflets urging resistance to U.S. war efforts. The Supreme Court affirmed their conviction, emphasizing the wartime context. A notable dissent by Justice Holmes emphasized the importance of free speech under the First Amendment."
+    - name: "Smith v. Acme Manufacturing Co."
+      summary: "Plaintiff brought a products liability claim alleging a design defect in a hydraulic press that caused workplace injury. The appellate court affirmed part of the lower court's judgment but remanded for further proceedings on specific claims. The decision clarified the scope of manufacturer duty in design defect cases."
+    - name: "People v. Ortega"
+      summary: "Defendant appealed a conviction on grounds of unlawful search and seizure. The appellate court found that evidence had been obtained in violation of the Fourth Amendment and reversed the conviction. The ruling reinforced constitutional limits on warrantless searches."
+    - name: "Green Earth Alliance v. State Water Board"
+      summary: "An environmental advocacy group sought review of a discharge permit issued by the state agency. The court set aside the permit, holding that the agency failed to adequately consider cumulative environmental impacts as required by law. The decision underscored agencies' duty to conduct comprehensive environmental review."
+
+- label: Proceeding
+  instructions: Extract the distinct stage of the litigation relevant to the opinion (e.g., trial, summary judgment, appeal). Use the stage, docket number, and dates to summarize what occurred.
+  examples:
+    - stage: district court
+      docket_no: "19-CV-78231"
+      filed_date: "2021-03-08"
+      decided_date: "2021-03-15"
+    - stage: appeal court
+      docket_no: A165432
+      filed_date: "2022-01-10"
+      decided_date: "2022-11-04"
+
+- label: Argument
+  instructions: For the given Holding/Issue, extract ALL of the principal arguments advanced by any party that are relevant to this specific issue. Put the thesis or rationale in text and identify who raised it.
+  examples:
+    - text: "Federal safety standards preempt state tort claims concerning labeling."
+      raised_by: defendant
+    - text: "Persistent mold and lack of heat breached the implied warranty of habitability."
+      raised_by: plaintiff
+
+- label: Ruling
+  instructions: Summarize the court's disposition (affirmed, reversed, remanded, etc.) and capture the operative basis in text. A single ruling may apply to multiple issues/holdings in the case.
+  examples:
+    - label: "Judgment affirmed"
+      type: appeal
+      text: "Sufficient evidence supported the jury's negligence finding."
+      ratio: "The credibility determinations and evidentiary weight fell within the jury's province."
+      summary: "Appellate court affirmed the jury's finding of negligence."
+    - label: "Order reversed and remanded"
+      type: post-trial decision
+      text: "Trial court applied an incorrect standard for preliminary injunction."
+      ratio: "Preliminary injunctions require likelihood of success on the merits, not mere possibility."
+      summary: "Trial court's denial of preliminary injunction reversed for applying wrong legal standard."
+
+- label: Issue
+  instructions: Create a new Issue node for each legal question decided by the court in neutral terms. Put the concise statement in label and the fuller question in text. Each issue will have its own holding.
+  examples:
+    - label: "Enforceability of clickwrap"
+      text: "Is an online clickwrap agreement enforceable against the user?"
+      type: procedural
+    - label: "Tolling by concealment"
+      text: "Was the statute of limitations tolled by fraudulent concealment?"
+      type: substantive
+
+- label: Party
+  instructions: Identify and extract all parties involved in the case, labeling them by role elsewhere. Use the entity's official name and the entity type.
+  examples:
+    - name: "Omega BioTech, Inc."
+      type: corporation
+    - name: "Alicia Ramirez"
+      type: individual
+
+- label: Doctrine
+  instructions: Link each issue to the governing legal doctrine(s). Use the doctrine name and give a short, jurisdiction-neutral description.
+  examples:
+    - name: "Business Judgment Rule"
+      description: "Deference to informed, good-faith board decisions absent fraud or self-dealing."
+    - name: "Daubert Standard"
+      description: "Expert testimony must be relevant and reliably grounded in scientific methodology."
+
+- label: Policy
+  instructions: Capture explicit policy considerations the court invokes. Use a concise name, short description, and the relevant discipline.
+  examples:
+    - name: "Encouraging prompt product recalls"
+      description: "Liability rules should not deter swift disclosure of defects."
+      discipline: economics
+    - name: "Finality of arbitration awards"
+      description: "Limiting judicial review preserves efficiency and party autonomy."
+      discipline: "law & economics"
+
+- label: Law
+  instructions: List the specific constitutional provisions, statutes, regulations, rules, contracts, or cases cited. Use the official name and include the operative text; provide the type and citation.
+  examples:
+    - name: "U.C.C. § 2-314—Implied Warranty of Merchantability"
+      text: "Goods must be fit for the ordinary purposes for which such goods are used."
+      type: statute
+      citation: "U.C.C. § 2-314"
+    - name: "Cal. Civ. Proc. Code § 425.16—Anti-SLAPP"
+      text: "Allows early dismissal of suits arising from protected speech on public issues."
+      type: statute
+      citation: "Cal. Civ. Proc. Code § 425.16"
+
+- label: FactPattern
+  instructions: Abstract the recurring scenario that the issue relates to. Use a succinct name and a short description.
+  examples:
+    - name: "Medical Device Off-Label Promotion"
+      description: "Manufacturer communications to physicians about unapproved uses."
+    - name: "Gig-Worker Misclassification"
+      description: "Platform control over workers resembles employment relationship."
+
+- label: Relief
+  instructions: Extract the relief awarded or sought as defined by the schema. Use the standardized type and a short description.
+  examples:
+    - description: "Order restraining competitor from using misappropriated trade secrets."
+    - description: "Declaration that insurer owes no duty to defend under the policy."
+
+- label: ReliefType
+  instructions: Select the type(s) of relief awarded or sought as defined by the schema. Use the standardized type.
+  examples:
+    - type: injunction
+    - type: declaratory
+
+- label: Jurisdiction
+  instructions: Choose the relevant jurisdiction entity. Use the official jurisdiction name.
+  examples:
+    - name: "U.S. Supreme Court"
+    - name: "California Court of Appeal, First District"
+
+- label: Forum
+  instructions: Select the adjudicative body where the matter was heard (court, agency, board). Use the forum name and type.
+  examples:
+    - name: "U.S. District Court for the Southern District of New York"
+      type: "federal trial court"
+    - name: "National Labor Relations Board"
+      type: "administrative agency"

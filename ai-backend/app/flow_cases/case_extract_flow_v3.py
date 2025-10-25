@@ -3,33 +3,39 @@ from crewai import Crew, Process
 from pydantic import BaseModel, Field, create_model
 from typing import Dict, Any, List, Optional
 from .crews.case_crew.case_crew_v3 import CaseCrew
-from .tools.io_tools import read_document, fetch_neo4j_schema
+from .tools.io_tools import read_document, fetch_schema_v3
 from app.lib.schema_runtime import prune_ui_schema_for_llm, build_property_models, validate_case_graph, render_spec_text, build_relationship_property_models, get_relationship_label_for_edge, get_all_assigned_relationship_labels
 from app.models.case_graph import CaseGraph
 from app.lib.logging_config import setup_logger
 from app.lib.neo4j_client import neo4j_client
 import json
+import yaml
 import os
 from datetime import datetime
 
 
 logger = setup_logger("case-extract-flow-v3")
 
-
-def _load_flow_config() -> Dict[str, Any]:
-    """Load flow runtime configuration from flow_config_v3.json"""
-    try:
-        config_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "flow_config_v3.json"))
-        with open(config_path, "r") as f:
-            return json.load(f)
-    except Exception as e:
-        logger.warning(f"Failed to load flow_config_v3.json: {e}; using fallback defaults")
-        return {
-            "batch_sizes": {
-                "phase9_arguments": 999,
-                "phase10_facts": 10
-            }
-        }
+def _get_label_instructions_and_examples(label: str, node_instructions_by_label: Dict[str, Dict[str, Any]] | None) -> tuple[str, str]:
+    """
+    Extract instructions and examples for a given label from node_instructions_by_label.
+    
+    Args:
+        label: The node label to look up (e.g., "Case", "Ruling", "Argument")
+        node_instructions_by_label: Dictionary mapping label names to their instruction entries from flow_map_v3.yaml
+    
+    Returns:
+        Tuple of (instructions, examples_json) where:
+        - instructions: The instruction string for the label (empty if not found)
+        - examples_json: JSON-serialized examples list (empty list if not found)
+    """
+    # O(1) dictionary lookup
+    fm_entry = (node_instructions_by_label or {}).get(label)
+    
+    instructions = (fm_entry or {}).get("instructions") or ""
+    examples_json = json.dumps((fm_entry or {}).get("examples") or [], ensure_ascii=False)
+    
+    return instructions, examples_json
 
 
 class CaseExtractState(BaseModel):
@@ -51,6 +57,9 @@ class CaseExtractState(BaseModel):
     # Full schema payload (with relationship property schemas) if available
     schema_full: Any | None = None
     existing_catalog_by_label: Dict[str, List[Dict[str, Any]]] | None = None
+    # Node-specific instructions and examples from flow_map_v3.yaml
+    node_instructions: List[Dict[str, Any]] | None = None  # For phase filtering and ordering
+    node_instructions_by_label: Dict[str, Dict[str, Any]] | None = None  # For O(1) label lookups
     # Working context
     document_text: str = ""
     nodes_accumulated: List[Dict[str, Any]] | None = None
@@ -58,17 +67,28 @@ class CaseExtractState(BaseModel):
 
 
 # Pydantic models for batch extraction responses
+class ArgumentWithStatus(BaseModel):
+    """Argument with its evaluation status in the ruling"""
+    properties: Dict[str, Any]  # Argument node properties
+    status: Optional[str] = None  # "Supported" or "Rejected" - status in EVALUATED_IN relationship
+
 class RulingAndArgumentsResult(BaseModel):
     """Result for a single issue's ruling and arguments extraction"""
     issue_temp_id: str
     ruling: Optional[Dict[str, Any]] = None  # Ruling properties
-    arguments: List[Dict[str, Any]] = []  # List of Argument properties
+    in_favor: Optional[str] = None  # "plaintiff", "defendant", etc - in_favor property for SETS relationship
+    arguments: List[ArgumentWithStatus] = []  # List of Arguments with their evaluation status
 
 
 class RulingAndArgumentsBatchResponse(BaseModel):
     """Response for Phase 5: Ruling and Arguments extraction from multiple issues"""
     results: List[RulingAndArgumentsResult]
 
+
+
+class SelectionResponse(BaseModel):
+    """Response for selection tasks (Forum, ReliefType)"""
+    selected: Dict[str, List[str]]
 
 class CaseExtractFlow(Flow[CaseExtractState]):
     @start()
@@ -85,13 +105,155 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             "status": "initialized"
         }
 
+    def build_catalog_for_labels(self, labels: List[str]) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Build formatted catalog from raw data for specified labels.
+        
+        This method takes existing nodes from Neo4j (fetched in phase 0) and formats them
+        for AI agent consumption by:
+        1. Filtering properties to only those defined in the schema
+        2. Converting values to appropriate JSON-serializable types
+        3. Ensuring ID fields (properties ending in '_id') are included as a safety net
+        
+        Args:
+            labels: List of node label names to build catalogs for (e.g., ["Forum", "Law"])
+            
+        Returns:
+            Dictionary mapping label names to lists of formatted node properties.
+            Example: {"Forum": [{"name": "Supreme Court", "forum_id": "123"}, ...]}
+            
+        Note:
+            The '_id' field handling in step 3 is defensive - these fields are typically
+            already in the schema definition, so they'd be included in step 1 anyway.
+        """
+        # Helper to ensure values are JSON-serializable (keep primitives, stringify everything else)
+        def format_value(v: Any) -> Any:
+            return v if isinstance(v, (int, float, bool)) else str(v)
+        
+        catalogs = {}
+        for lbl in labels:
+            # Get raw existing nodes for this label from state (fetched via Neo4j in phase 0)
+            rows = (self.state.existing_catalog_by_label or {}).get(lbl) or []
+            
+            # Get schema metadata to know which properties are valid for this label
+            props_meta = (self.state.props_meta_by_label or {}).get(lbl) or {}
+            allowed_keys = [k for k in props_meta.keys() if isinstance(k, str)]
+            
+            # Build formatted entries by combining:
+            # 1. Schema-defined properties (from allowed_keys)
+            # 2. Any '_id' fields as a safety net (typically these are already in schema, but this ensures they're never missed)
+            entries = [
+                {k: format_value(r[k]) for k in allowed_keys if r.get(k) is not None} |
+                {k: format_value(v) for k, v in r.items() if isinstance(k, str) and k.endswith("_id") and v is not None}
+                for r in rows if isinstance(r, dict)
+            ]
+            # Filter out any empty entries
+            catalogs[lbl] = [e for e in entries if e]
+        
+        return catalogs
+
+    def find_first_temp_id(self, label: str) -> Optional[str]:
+        """Find the first node with the given label and return its temp_id."""
+        for n in (self.state.nodes_accumulated or []):
+            if isinstance(n, dict) and n.get("label") == label and isinstance(n.get("temp_id"), str):
+                return n.get("temp_id")
+        return None
+
+    def find_all_temp_ids(self, label: str) -> List[str]:
+        """Find all nodes with the given label and return their temp_ids."""
+        return [n.get("temp_id") for n in (self.state.nodes_accumulated or []) 
+                if isinstance(n, dict) and n.get("label") == label and isinstance(n.get("temp_id"), str)]
+
+    def get_existing_edges_set(self) -> set:
+        """Build a set of existing edge tuples for deduplication."""
+        return {(e.get("from"), e.get("to"), e.get("label")) 
+                for e in (self.state.edges_accumulated or []) if isinstance(e, dict)}
+
+    def parse_crew_result(self, result: Any) -> Dict[str, Any]:
+        """Parse CrewAI result into a dictionary, handling both dict and JSON string formats."""
+        try:
+            return json.loads(str(result)) if not isinstance(result, dict) else result
+        except Exception:
+            return {}
+
+    def validate_with_model(self, props: Dict[str, Any], model: Any) -> Dict[str, Any]:
+        """
+        Validate properties against a Pydantic model, with fallback to simple dict filtering.
+        
+        Args:
+            props: Raw properties dictionary
+            model: Pydantic model class (can be None)
+            
+        Returns:
+            Validated/cleaned properties dictionary
+        """
+        try:
+            if model is not None:
+                inst = model(**props)
+                return inst.model_dump(exclude_none=True)
+            else:
+                return {k: v for k, v in props.items() if isinstance(k, str)}
+        except Exception:
+            return {k: v for k, v in props.items() if isinstance(k, str)}
+
+    def parse_selection_response(self, result: Any) -> Dict[str, List[str]]:
+        """
+        Parse SelectionResponse from crew result into a dict of label -> list of IDs.
+        
+        Args:
+            result: CrewAI result containing selected items
+            
+        Returns:
+            Dictionary mapping label names to lists of selected IDs
+        """
+        selected: Dict[str, List[str]] = {}
+        try:
+            text = str(result)
+            data = json.loads(text) if isinstance(result, str) else (result if isinstance(result, dict) else json.loads(str(result)))
+            sel = data.get("selected") if isinstance(data, dict) else None
+            if isinstance(sel, dict):
+                for k, v in sel.items():
+                    if isinstance(k, str) and isinstance(v, list):
+                        selected[k] = [str(x) for x in v]
+        except Exception:
+            pass
+        return selected
+
+    def validate_relationship_properties(self, source_label: str, rel_label: str, props: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Validate relationship properties against schema models.
+        
+        Args:
+            source_label: Source node label
+            rel_label: Relationship label
+            props: Raw relationship properties
+            
+        Returns:
+            Validated and cleaned relationship properties
+        """
+        # Get the relationship property model for this source/rel combination
+        model = (self.state.rel_prop_models_by_key or {}).get((source_label, rel_label))
+        
+        if model is None:
+            # No property schema defined for this relationship - return as-is
+            return {k: v for k, v in props.items() if isinstance(k, str) and v is not None}
+        
+        try:
+            # Validate using Pydantic model
+            inst = model(**props)
+            return inst.model_dump(exclude_none=True)
+        except Exception as e:
+            logger.warning(f"Failed to validate relationship properties for {source_label}-[{rel_label}]: {e}")
+            # Fallback: return simple filtered dict
+            return {k: v for k, v in props.items() if isinstance(k, str) and v is not None}
+
     @listen(phase0_kickoff)
     def phase0_prepare_schema(self, ctx: Dict[str, Any]) -> Dict[str, Any]:
         logger.info("prepare_schema: starting")
         print("[prepare_schema] starting")
         # Build pruned spec and models up front so we can pass spec to the crew
         try:
-            schema_res = fetch_neo4j_schema()
+            schema_res = fetch_schema_v3()
             schema_payload = schema_res.get('schema') if isinstance(schema_res, dict) else None
         except Exception:
             schema_payload = None
@@ -104,6 +266,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
         self.state.schema_spec_text = spec_text
         self.state.models_by_label = models_by_label
         self.state.rels_by_label = rels_by_label
+        # ui
         self.state.props_meta_by_label = props_meta_by_label
         self.state.label_flags_by_label = label_flags_by_label
         # Relationship property models from full schema when available
@@ -115,6 +278,25 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             self.state.rel_prop_models_by_key = {}
             self.state.rel_prop_meta_by_key = {}
         self.state.schema_full = schema_payload
+
+        # Load node instructions (flow_map_v3.yaml) for label-specific prompts and index by label
+        try:
+            flow_map_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "flow_map_v3.yaml"))
+            with open(flow_map_path, "r") as f:
+                flow_map_data = yaml.safe_load(f)
+            # Store list for phase filtering/ordering
+            self.state.node_instructions = flow_map_data
+            # Build dictionary index for O(1) lookups
+            self.state.node_instructions_by_label = {
+                e.get("label"): e 
+                for e in flow_map_data 
+                if isinstance(e, dict) and isinstance(e.get("label"), str)
+            }
+            logger.info(f"Loaded node instructions for {len(self.state.node_instructions_by_label)} labels")
+        except Exception as e:
+            logger.warning(f"Failed to load flow_map_v3.yaml: {e}")
+            self.state.node_instructions = []
+            self.state.node_instructions_by_label = {}
 
         # Read document once and store text
         try:
@@ -230,28 +412,14 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 logger.warning(f"Failed to publish progress: {e}")
         tools = []
 
-        # Load flow_map to determine phase ordering and get instructions/examples for LLM prompts
-        # NOTE: Structural attributes (label, case_unique, can_create_new, ai_ignore) are sourced
-        # from schema_v3.json via label_flags_by_label. flow_map_v3.json only provides:
-        # - phase: determines extraction order
-        # - instructions: LLM guidance for extracting each label
-        # - examples: sample data for few-shot prompting
-        try:
-            import os
-            flow_map_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "flow_map_v3.json"))
-            with open(flow_map_path, "r") as f:
-                flow_map = json.load(f)
-        except Exception as e:
-            logger.warning(f"Failed to load flow_map_v3.json; falling back to schema order: {e}")
-            flow_map = []
-
+        # Use cached node instructions to determine phase ordering
         # Build list of Phase 1 labels: only Case, Proceeding, Issue
         labels_src = (self.state.schema_spec or {}).get("labels", []) if isinstance(self.state.schema_spec, dict) else []
         def_map = {ld.get("label"): ld for ld in labels_src if isinstance(ld, dict) and isinstance(ld.get("label"), str)}
 
         # Phase 1: Case, Proceeding, Issue only
-        # Filter flow_map by phase, then check ai_ignore from schema (not flow_map)
-        fm_phase1 = [e for e in (flow_map or []) if isinstance(e, dict) and e.get("phase") == 1]
+        # Filter node_instructions by phase, then check ai_ignore from schema
+        fm_phase1 = [e for e in (self.state.node_instructions or []) if isinstance(e, dict) and e.get("phase") == 1]
         
         # Filter to only Case, Proceeding, Issue and check ai_ignore from schema
         phase1_target_labels = {"Case", "Proceeding", "Issue"}
@@ -278,73 +446,164 @@ class CaseExtractFlow(Flow[CaseExtractState]):
 
         nodes_before_p1 = len(self.state.nodes_accumulated or [])
 
-        for label in ordered_labels:
+        # Phase 1: Extract Case (single)
+        if "Case" in ordered_labels:
             try:
-                # Build single-label spec for properties rendering
-                ldef = def_map.get(label)
-                if not isinstance(ldef, dict):
-                    continue
-                # Build properties-only spec for Phase 1 (omit relationships)
-                ldef_props_only = {
-                    "label": ldef.get("label"),
-                    "properties": ldef.get("properties", []),
-                }
-                props_spec_text = render_spec_text({"labels": [ldef_props_only]})
-
-                # Pull instructions/examples from flow_map entry
-                fm_entry = None
-                for e in (flow_map or []):
-                    if isinstance(e, dict) and e.get("label") == label:
-                        fm_entry = e
-                        break
-                instructions = (fm_entry or {}).get("instructions") or ""
-                examples_json = json.dumps((fm_entry or {}).get("examples") or [], ensure_ascii=False)
-
-                # Model for properties
-                props_model = (self.state.models_by_label or {}).get(label)
-                if props_model is None:
-                    continue
-
-                # Build replacements for YAML task template
-                replacements = {
-                    "INSTRUCTIONS": instructions,
-                    "LABEL": label,
-                    "PROPS_SPEC_TEXT": props_spec_text,
-                    "EXAMPLES_JSON": examples_json,
-                    "CASE_TEXT": self.state.document_text or "",
-                }
-
-                # Decide single vs multi extraction
-                # In Phase 1: Issue can have multiple instances; Proceeding typically single but allow multi for edge cases
-                allow_multiple = label in {"Issue", "Proceeding"}
-                if allow_multiple:
-                    try:
-                        # Create a dynamic Pydantic model for the list of items
-                        list_model = create_model(
-                            f'{label}List',
-                            items=(List[props_model], ...)  # type: ignore
-                        )
-                        logger.info(f"Phase 1: extracting multi-node label '{label}'")
-                        
-                        # Create crew with replacements
-                        crew_multi = CaseCrew(
+                ldef = def_map.get("Case")
+                if isinstance(ldef, dict):
+                    ldef_props_only = {
+                        "label": ldef.get("label"),
+                        "properties": ldef.get("properties", []),
+                    }
+                    props_spec_text = render_spec_text({"labels": [ldef_props_only]})
+                    instructions, examples_json = _get_label_instructions_and_examples("Case", self.state.node_instructions_by_label)
+                    props_model = (self.state.models_by_label or {}).get("Case")
+                    
+                    if props_model is not None:
+                        logger.info("Phase 1: extracting Case")
+                        replacements = {
+                            "INSTRUCTIONS": instructions,
+                            "PROPS_SPEC_TEXT": props_spec_text,
+                            "EXAMPLES_JSON": examples_json,
+                            "CASE_TEXT": self.state.document_text or "",
+                        }
+                        crew = CaseCrew(
                             file_path=self.state.file_path,
                             filename=self.state.filename,
                             case_id=self.state.case_id,
                             tools=tools,
                             replacements=replacements,
                         )
-                        dyn_task = crew_multi.phase1_extract_multi_nodes_task(list_model)
+                        dyn_task = crew.phase1_extract_case_task(props_model)
                         single_crew = Crew(
-                            agents=[crew_multi.phase1_extract_agent()],
+                            agents=[crew.phase1_extract_agent()],
                             tasks=[dyn_task],
                             process=Process.sequential,
                         )
                         result = single_crew.kickoff()
-                        logger.info(f"Phase 1: '{label}' extraction completed, result type: {type(result).__name__}")
                         
-                        # CrewAI returns a CrewOutput that wraps the Pydantic result
-                        # Access the actual Pydantic model via .pydantic or .raw
+                        actual_result = None
+                        if hasattr(result, 'pydantic'):
+                            actual_result = result.pydantic
+                        elif hasattr(result, 'model_dump'):
+                            actual_result = result
+                        else:
+                            actual_result = result
+                        
+                        if hasattr(actual_result, 'model_dump'):
+                            properties = actual_result.model_dump(exclude_none=True)
+                        elif isinstance(actual_result, dict):
+                            properties = actual_result
+                        else:
+                            properties = json.loads(str(actual_result))
+                        
+                        node = {"temp_id": f"n{next_idx}", "label": "Case", "properties": properties}
+                        next_idx += 1
+                        self.state.nodes_accumulated.append(node)
+                        produced_labels.append("Case")
+                        logger.info("Phase 1: Case extraction completed")
+            except Exception as e:
+                logger.warning(f"Phase 1: Case extraction failed: {e}")
+
+        # Phase 1: Extract Proceeding (single)
+        if "Proceeding" in ordered_labels:
+            try:
+                ldef = def_map.get("Proceeding")
+                if isinstance(ldef, dict):
+                    ldef_props_only = {
+                        "label": ldef.get("label"),
+                        "properties": ldef.get("properties", []),
+                    }
+                    props_spec_text = render_spec_text({"labels": [ldef_props_only]})
+                    instructions, examples_json = _get_label_instructions_and_examples("Proceeding", self.state.node_instructions_by_label)
+                    props_model = (self.state.models_by_label or {}).get("Proceeding")
+                    
+                    if props_model is not None:
+                        logger.info("Phase 1: extracting Proceeding")
+                        replacements = {
+                            "INSTRUCTIONS": instructions,
+                            "PROPS_SPEC_TEXT": props_spec_text,
+                            "EXAMPLES_JSON": examples_json,
+                            "CASE_TEXT": self.state.document_text or "",
+                        }
+                        crew = CaseCrew(
+                            file_path=self.state.file_path,
+                            filename=self.state.filename,
+                            case_id=self.state.case_id,
+                            tools=tools,
+                            replacements=replacements,
+                        )
+                        dyn_task = crew.phase1_extract_proceeding_task(props_model)
+                        single_crew = Crew(
+                            agents=[crew.phase1_extract_agent()],
+                            tasks=[dyn_task],
+                            process=Process.sequential,
+                        )
+                        result = single_crew.kickoff()
+                        
+                        actual_result = None
+                        if hasattr(result, 'pydantic'):
+                            actual_result = result.pydantic
+                        elif hasattr(result, 'model_dump'):
+                            actual_result = result
+                        else:
+                            actual_result = result
+                        
+                        if hasattr(actual_result, 'model_dump'):
+                            properties = actual_result.model_dump(exclude_none=True)
+                        elif isinstance(actual_result, dict):
+                            properties = actual_result
+                        else:
+                            properties = json.loads(str(actual_result))
+                        
+                        node = {"temp_id": f"n{next_idx}", "label": "Proceeding", "properties": properties}
+                        next_idx += 1
+                        self.state.nodes_accumulated.append(node)
+                        produced_labels.append("Proceeding")
+                        logger.info("Phase 1: Proceeding extraction completed")
+            except Exception as e:
+                logger.warning(f"Phase 1: Proceeding extraction failed: {e}")
+
+        # Phase 1: Extract Issue (multiple)
+        if "Issue" in ordered_labels:
+            try:
+                ldef = def_map.get("Issue")
+                if isinstance(ldef, dict):
+                    ldef_props_only = {
+                        "label": ldef.get("label"),
+                        "properties": ldef.get("properties", []),
+                    }
+                    props_spec_text = render_spec_text({"labels": [ldef_props_only]})
+                    instructions, examples_json = _get_label_instructions_and_examples("Issue", self.state.node_instructions_by_label)
+                    props_model = (self.state.models_by_label or {}).get("Issue")
+                    
+                    if props_model is not None:
+                        logger.info("Phase 1: extracting Issue")
+                        list_model = create_model(
+                            'IssueList',
+                            items=(List[props_model], ...)  # type: ignore
+                        )
+                        replacements = {
+                            "INSTRUCTIONS": instructions,
+                            "PROPS_SPEC_TEXT": props_spec_text,
+                            "EXAMPLES_JSON": examples_json,
+                            "CASE_TEXT": self.state.document_text or "",
+                        }
+                        crew = CaseCrew(
+                            file_path=self.state.file_path,
+                            filename=self.state.filename,
+                            case_id=self.state.case_id,
+                            tools=tools,
+                            replacements=replacements,
+                        )
+                        dyn_task = crew.phase1_extract_issue_task(list_model)
+                        single_crew = Crew(
+                            agents=[crew.phase1_extract_agent()],
+                            tasks=[dyn_task],
+                            process=Process.sequential,
+                        )
+                        result = single_crew.kickoff()
+                        
                         actual_result = None
                         if hasattr(result, 'pydantic'):
                             actual_result = result.pydantic
@@ -353,80 +612,33 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                         else:
                             actual_result = result
                         
-                        logger.info(f"Phase 1: '{label}' unwrapped result type: {type(actual_result).__name__}, has items: {hasattr(actual_result, 'items')}")
-                        
-                        # Now extract items from the Pydantic model
                         if not hasattr(actual_result, 'items'):
-                            logger.warning(f"Phase 1: '{label}' result has no 'items' attribute. Result: {actual_result}")
+                            logger.warning(f"Phase 1: Issue result has no 'items' attribute")
                             items = []
                         elif not isinstance(actual_result.items, list):
-                            logger.warning(f"Phase 1: '{label}' result.items is not a list. Type: {type(actual_result.items).__name__}")
+                            logger.warning(f"Phase 1: Issue result.items is not a list")
                             items = []
                         else:
                             items = actual_result.items
-                            logger.info(f"Phase 1: '{label}' returned {len(items)} items")
-
+                            logger.info(f"Phase 1: Issue returned {len(items)} items")
+                        
                         nodes_added_count = 0
                         for idx, item in enumerate(items):
                             try:
-                                # Each item is already a validated Pydantic model instance
                                 properties = item.model_dump(exclude_none=True)
-                                node = {"temp_id": f"n{next_idx}", "label": label, "properties": properties}
+                                node = {"temp_id": f"n{next_idx}", "label": "Issue", "properties": properties}
                                 next_idx += 1
                                 self.state.nodes_accumulated.append(node)
                                 nodes_added_count += 1
                             except Exception as e:
-                                logger.warning(f"Phase 1: Failed to process item {idx} for '{label}': {e}")
+                                logger.warning(f"Phase 1: Failed to process Issue {idx}: {e}")
                                 continue
                         
-                        logger.info(f"Phase 1: '{label}' added {nodes_added_count} nodes")
+                        logger.info(f"Phase 1: Issue added {nodes_added_count} nodes")
                         if nodes_added_count > 0:
-                            produced_labels.append(label)
-                    except Exception as e:
-                        logger.error(f"Phase 1: Multi-node extraction for '{label}' failed with error: {e}", exc_info=True)
-                        continue
-                else:
-                    # Single-instance labels
-                    # Create crew with replacements
-                    crew_single = CaseCrew(
-                        file_path=self.state.file_path,
-                        filename=self.state.filename,
-                        case_id=self.state.case_id,
-                        tools=tools,
-                        replacements=replacements,
-                    )
-                    dyn_task = crew_single.phase1_extract_single_node_task(props_model)  # type: ignore[arg-type]
-                    single_crew = Crew(
-                        agents=[crew_single.phase1_extract_agent()],
-                        tasks=[dyn_task],
-                        process=Process.sequential,
-                    )
-                    result = single_crew.kickoff()
-
-                    # Unwrap CrewOutput to get the actual Pydantic model
-                    actual_result = None
-                    if hasattr(result, 'pydantic'):
-                        actual_result = result.pydantic
-                    elif hasattr(result, 'model_dump'):
-                        actual_result = result
-                    else:
-                        actual_result = result
-
-                    # Parse pydantic output into properties dict
-                    if hasattr(actual_result, 'model_dump'):
-                        properties = actual_result.model_dump(exclude_none=True)  # type: ignore[attr-defined]
-                    elif isinstance(actual_result, dict):
-                        properties = actual_result
-                    else:
-                        properties = json.loads(str(actual_result))
-
-                    node = {"temp_id": f"n{next_idx}", "label": label, "properties": properties}
-                    next_idx += 1
-                    self.state.nodes_accumulated.append(node)
-                    produced_labels.append(label)
+                            produced_labels.append("Issue")
             except Exception as e:
-                logger.warning(f"Phase 1 per-node task for {label} failed: {e}")
-                continue
+                logger.error(f"Phase 1: Issue extraction failed: {e}", exc_info=True)
 
         # Fail fast if Case wasn't produced
         if "Case" in ordered_labels and ("Case" not in produced_labels):
@@ -434,20 +646,9 @@ class CaseExtractFlow(Flow[CaseExtractState]):
 
         # Create edges: Case → Proceeding and Proceeding → Issue
         try:
-            # Helper to find temp_id by label
-            def find_first_temp_id(label: str) -> Optional[str]:
-                for n in (self.state.nodes_accumulated or []):
-                    if isinstance(n, dict) and n.get("label") == label and isinstance(n.get("temp_id"), str):
-                        return n.get("temp_id")
-                return None
-            
-            def find_all_temp_ids(label: str) -> List[str]:
-                return [n.get("temp_id") for n in (self.state.nodes_accumulated or []) 
-                        if isinstance(n, dict) and n.get("label") == label and isinstance(n.get("temp_id"), str)]
-            
-            case_id = find_first_temp_id("Case")
-            proceeding_id = find_first_temp_id("Proceeding")
-            issue_ids = find_all_temp_ids("Issue")
+            case_id = self.find_first_temp_id("Case")
+            proceeding_id = self.find_first_temp_id("Proceeding")
+            issue_ids = self.find_all_temp_ids("Issue")
             
             edges_before = len(self.state.edges_accumulated or [])
             
@@ -506,33 +707,8 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 logger.warning(f"Failed to publish progress: {e}")
         try:
             from .crews.case_crew.case_crew_v3 import CaseCrew as _CaseCrew
-            # Build catalog for Forum only (no ReliefType in this phase)
-            catalogs: Dict[str, List[Dict[str, Any]]] = {}
-            for lbl in ["Forum"]:
-                rows = (self.state.existing_catalog_by_label or {}).get(lbl) or []
-                entries: List[Dict[str, Any]] = []
-                props_meta = (self.state.props_meta_by_label or {}).get(lbl) or {}
-                allowed_keys = [k for k in props_meta.keys() if isinstance(k, str)]
-                for r in rows:
-                    if not isinstance(r, dict):
-                        continue
-                    entry: Dict[str, Any] = {}
-                    for k in allowed_keys:
-                        if r.get(k) is not None:
-                            v = r.get(k)
-                            try:
-                                entry[k] = v if isinstance(v, (int, float, bool)) else str(v)
-                            except Exception:
-                                entry[k] = str(v)
-                    for k, v in r.items():
-                        if isinstance(k, str) and k.endswith("_id") and v is not None:
-                            try:
-                                entry[k] = v if isinstance(v, (int, float, bool)) else str(v)
-                            except Exception:
-                                entry[k] = str(v)
-                    if entry:
-                        entries.append(entry)
-                catalogs[lbl] = entries
+            # Build catalog for Forum only
+            catalogs = self.build_catalog_for_labels(["Forum"])
 
             # Select Forum based on case text
             crew_sel = _CaseCrew(
@@ -545,26 +721,36 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                     "CATALOGS_JSON": json.dumps(catalogs, ensure_ascii=False),
                 },
             )
-            task_sel = crew_sel.phase5_select_existing_task()
+
+            # Build catalog for Forum only
+            catalogs = self.build_catalog_for_labels(["Forum"])
+            
+            # Get Forum instructions and examples from flow_map
+            forum_instructions, forum_examples_json = _get_label_instructions_and_examples("Forum", self.state.node_instructions_by_label)
+
+            # Select Forum based on case text
+            crew_sel = _CaseCrew(
+                self.state.file_path,
+                self.state.filename,
+                self.state.case_id,
+                tools=[],
+                replacements={
+                    "FORUM_INSTRUCTIONS": forum_instructions,
+                    "FORUM_EXAMPLES_JSON": forum_examples_json,
+                    "CASE_TEXT": self.state.document_text or "",
+                    "CATALOGS_JSON": json.dumps(catalogs, ensure_ascii=False),
+                },
+            )
+            task_sel = crew_sel.phase2_select_forum_task(SelectionResponse)
             single_crew_sel = Crew(
-                agents=[crew_sel.phase5_select_existing_agent()],
+                agents=[crew_sel.phase2_select_forum_agent()],
                 tasks=[task_sel],
                 process=Process.sequential,
             )
             edges_before = len(self.state.edges_accumulated or [])
             nodes_before = len(self.state.nodes_accumulated or [])
             result_sel = single_crew_sel.kickoff()
-            selected: Dict[str, List[str]] = {}
-            try:
-                text = str(result_sel)
-                data = json.loads(text) if isinstance(result_sel, str) else (result_sel if isinstance(result_sel, dict) else json.loads(str(result_sel)))
-                sel = data.get("selected") if isinstance(data, dict) else None
-                if isinstance(sel, dict):
-                    for k, v in sel.items():
-                        if isinstance(k, str) and isinstance(v, list):
-                            selected[k] = [str(x) for x in v]
-            except Exception:
-                selected = {}
+            selected = self.parse_selection_response(result_sel)
 
             # Create selected Forum nodes by ID lookup
             next_idx = 1 + len(self.state.nodes_accumulated or [])
@@ -603,14 +789,8 @@ class CaseExtractFlow(Flow[CaseExtractState]):
 
             # Create edges: Proceeding → Forum
             try:
-                def find_first_temp_id(label: str) -> Optional[str]:
-                    for n in (self.state.nodes_accumulated or []):
-                        if isinstance(n, dict) and n.get("label") == label and isinstance(n.get("temp_id"), str):
-                            return n.get("temp_id")
-                    return None
-
-                p_id = find_first_temp_id("Proceeding")
-                f_id = find_first_temp_id("Forum")
+                p_id = self.find_first_temp_id("Proceeding")
+                f_id = self.find_first_temp_id("Forum")
 
                 if p_id and f_id:
                     rel_proceeding_forum = get_relationship_label_for_edge("Proceeding", "Forum", self.state.rels_by_label or {})
@@ -634,7 +814,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                             if rows:
                                 j_props = rows[0].get("props") if isinstance(rows[0], dict) else None
                                 if isinstance(j_props, dict):
-                                    j_node_id = find_first_temp_id("Jurisdiction")
+                                    j_node_id = self.find_first_temp_id("Jurisdiction")
                                     if not j_node_id:
                                         j_node_id = f"n{next_idx}"
                                         next_idx += 1
@@ -673,12 +853,17 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             # Party catalog can be extremely large; skip preloading and use fuzzy lookup per generated name
             catalogs: Dict[str, List[Dict[str, Any]]] = {"Party": []}
 
+            # Get Party instructions and examples from flow_map
+            party_instructions, party_examples_json = _get_label_instructions_and_examples("Party", self.state.node_instructions_by_label)
+
             crew = _CaseCrew(
                 self.state.file_path,
                 self.state.filename,
                 self.state.case_id,
                 tools=[],
                 replacements={
+                    "PARTY_INSTRUCTIONS": party_instructions,
+                    "PARTY_EXAMPLES_JSON": party_examples_json,
                     "CASE_TEXT": self.state.document_text or "",
                     "CATALOGS_JSON": json.dumps(catalogs, ensure_ascii=False),
                 },
@@ -692,11 +877,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             edges_before = len(self.state.edges_accumulated or [])
             nodes_before = len(self.state.nodes_accumulated or [])
             result = single_crew.kickoff()
-
-            try:
-                data = json.loads(str(result)) if not isinstance(result, dict) else result
-            except Exception:
-                data = {}
+            data = self.parse_crew_result(result)
             parties = data.get("parties") if isinstance(data, dict) else None
             roles = data.get("case_roles") if isinstance(data, dict) else None
             if not isinstance(parties, list):
@@ -740,6 +921,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                         if n.lower() == q.lower():
                             pid = props.get("party_id")
                             return n, (str(pid) if isinstance(pid, (str, int)) else None)
+                    # TODO: Replace string-based fuzzy matching with embedding-based similarity search for better party matching
                     # Heuristic: choose the closest by containment and length similarity
                     def score(candidate_name: str) -> float:
                         c = candidate_name.lower()
@@ -761,14 +943,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             for idx, p in enumerate(parties):
                 if not isinstance(p, dict):
                     continue
-                try:
-                    if party_model is not None:
-                        inst = party_model(**p)
-                        clean = inst.model_dump(exclude_none=True)
-                    else:
-                        clean = {k: v for k, v in p.items() if isinstance(k, str)}
-                except Exception:
-                    clean = {k: v for k, v in p.items() if isinstance(k, str)}
+                clean = self.validate_with_model(p, party_model)
                 nm = (clean.get("name") or "").strip()
                 if nm:
                     standardized_name, matched_party_id = _lookup_existing_party(nm)
@@ -796,7 +971,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 if nm:
                     existing_names.add(nm)
 
-            # Create Proceeding → Party edges (with role properties)
+            # Create Proceeding → Party edges (with role properties validated against schema)
             try:
                 rel_proceeding_party = get_relationship_label_for_edge("Proceeding", "Party", self.state.rels_by_label or {})
                 
@@ -810,7 +985,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                         pr_id = n.get("temp_id")
                         break
                 if isinstance(pr_id, str):
-                    existing_edges = {(e.get("from"), e.get("to"), e.get("label")) for e in (self.state.edges_accumulated or []) if isinstance(e, dict)}
+                    existing_edges = self.get_existing_edges_set()
                     for r in roles:
                         if not isinstance(r, dict):
                             continue
@@ -823,8 +998,10 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                             continue
                         key = (pr_id, p_id, rel_proceeding_party)
                         if key not in existing_edges:
-                            props = {"role": role}
-                            self.state.edges_accumulated.append({"from": pr_id, "to": p_id, "label": rel_proceeding_party, "properties": props})
+                            # Validate role property against schema
+                            raw_props = {"role": role}
+                            validated_props = self.validate_relationship_properties("Proceeding", rel_proceeding_party, raw_props)
+                            self.state.edges_accumulated.append({"from": pr_id, "to": p_id, "label": rel_proceeding_party, "properties": validated_props})
                             existing_edges.add(key)
                     logger.info(f"Phase 3: Created {len(roles)} edges Proceeding → Party ({rel_proceeding_party})")
             except Exception as e:
@@ -845,63 +1022,419 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             return {"status": "phase3_skipped"}
 
     @listen(phase3_extract_parties)
-    def phase4_assign_issue_concepts(self, _: Dict[str, Any]) -> Dict[str, Any]:
-        # Phase 4: per Issue, select/generate Doctrine, Policy, FactPattern with dedup and create edges
-        logger.info("Phase 4: assigning Doctrine/Policy/FactPattern per Issue with catalog dedup")
+    def phase4_extract_ruling_per_issue(self, _: Dict[str, Any]) -> Dict[str, Any]:
+        # Phase 4: extract one Ruling per Issue; create Proceeding→Ruling and Ruling→Issue edges
+        logger.info("Phase 4: extracting Ruling per Issue (one-to-one)")
         if self.state.progress_callback:
             try:
-                self.state.progress_callback("Phase 4 in progress: Assigning issue concepts", "phase4", 40)
+                self.state.progress_callback("Phase 4 in progress: Extracting rulings", "phase4", 40)
             except Exception as e:
                 logger.warning(f"Failed to publish progress: {e}")
         try:
             from .crews.case_crew.case_crew_v3 import CaseCrew as _CaseCrew
+            
+            # Collect all Issues
             issues = [
                 {"temp_id": n.get("temp_id"), "properties": n.get("properties") or {}}
                 for n in (self.state.nodes_accumulated or [])
                 if isinstance(n, dict) and n.get("label") == "Issue" and isinstance(n.get("temp_id"), str)
             ]
             if not issues:
-                logger.info("Phase 4: no Issue nodes present; skipping")
+                logger.info("Phase 4: no Issue nodes present; skipping Ruling extraction")
                 return {"status": "phase4_skipped"}
-
-            # Build catalogs using schema-defined properties
-            catalogs: Dict[str, List[Dict[str, Any]]] = {"Doctrine": [], "Policy": [], "FactPattern": []}
-            try:
-                for lbl in list(catalogs.keys()):
-                    rows = (self.state.existing_catalog_by_label or {}).get(lbl) or []
-                    entries: List[Dict[str, Any]] = []
-                    props_meta = (self.state.props_meta_by_label or {}).get(lbl) or {}
-                    allowed_keys = [k for k in props_meta.keys() if isinstance(k, str)]
-                    for r in rows:
-                        if not isinstance(r, dict):
-                            continue
-                        entry: Dict[str, Any] = {}
-                        for k in allowed_keys:
-                            if r.get(k) is not None:
-                                v = r.get(k)
-                                try:
-                                    entry[k] = v if isinstance(v, (int, float, bool)) else str(v)
-                                except Exception:
-                                    entry[k] = str(v)
-                        for k, v in r.items():
-                            if isinstance(k, str) and k.endswith("_id") and v is not None:
-                                try:
-                                    entry[k] = v if isinstance(v, (int, float, bool)) else str(v)
-                                except Exception:
-                                    entry[k] = str(v)
-                        if entry:
-                            entries.append(entry)
-                    catalogs[lbl] = entries
-            except Exception:
-                pass
-
-            # Build schema spec snippets
+            
+            # Get cached node instructions for Ruling (O(1) lookup)
+            ruling_instructions, ruling_examples_json = _get_label_instructions_and_examples("Ruling", self.state.node_instructions_by_label)
+            
+            # Get Ruling schema
             labels_src = (self.state.schema_spec or {}).get("labels", []) if isinstance(self.state.schema_spec, dict) else []
-            def get_def(lbl: str) -> Dict[str, Any] | None:
-                return next((ld for ld in labels_src if isinstance(ld, dict) and ld.get("label") == lbl), None)
+            ruling_def = next((ld for ld in labels_src if isinstance(ld, dict) and ld.get("label") == "Ruling"), None)
+            
+            ruling_spec_text = ""
+            if isinstance(ruling_def, dict):
+                ruling_def_props_only = {"label": ruling_def.get("label"), "properties": ruling_def.get("properties", [])}
+                ruling_spec_text = render_spec_text({"labels": [ruling_def_props_only]})
+            
+            ruling_model = (self.state.models_by_label or {}).get("Ruling")
+            
+            # Build issues payload
+            issues_payload = {"issues": issues}
+            
+            # Build replacements for YAML task template
+            replacements = {
+                "CASE_TEXT": self.state.document_text or "",
+                "ISSUES_JSON": json.dumps(issues_payload, ensure_ascii=False),
+                "RULING_INSTRUCTIONS": ruling_instructions,
+                "RULING_EXAMPLES_JSON": ruling_examples_json,
+                "RULING_SPEC_TEXT": ruling_spec_text,
+            }
+            
+            # Create crew with replacements
+            crew = _CaseCrew(
+                self.state.file_path,
+                self.state.filename,
+                self.state.case_id,
+                tools=[],
+                replacements=replacements,
+            )
+            
+            # TODO: Create appropriate task in case_crew_v3.py for phase4_ruling_per_issue
+            # For now, using a placeholder - this will need to be implemented
+            task = crew.phase4_ruling_per_issue_task()
+            single_crew = Crew(
+                agents=[crew.phase1_extract_agent()],
+                tasks=[task],
+                process=Process.sequential,
+            )
+            
+            edges_before = len(self.state.edges_accumulated or [])
+            nodes_before = len(self.state.nodes_accumulated or [])
+            result = single_crew.kickoff()
+            
+            # Parse result - expect format: { "rulings": [{"issue_temp_id": str, "ruling": {...}, "in_favor": str}] }
+            data = self.parse_crew_result(result)
+            rulings_list = data.get("rulings") if isinstance(data, dict) else None
+            if not isinstance(rulings_list, list):
+                rulings_list = []
+            
+            proceeding_temp_id = self.find_first_temp_id("Proceeding")
+            next_idx = 1 + len(self.state.nodes_accumulated or [])
+            
+            # Track created Rulings for deduplication (same Ruling can apply to multiple Issues)
+            ruling_signatures: Dict[str, str] = {}  # signature -> temp_id
+            
+            # Process each ruling (one per issue)
+            for entry in rulings_list:
+                if not isinstance(entry, dict):
+                    continue
+                
+                issue_temp_id = entry.get("issue_temp_id")
+                ruling_props = entry.get("ruling")
+                in_favor = entry.get("in_favor")  # For SETS relationship property
+                
+                if not isinstance(ruling_props, dict):
+                    logger.warning(f"Phase 4: Ruling for issue {issue_temp_id} is not a dict")
+                    continue
+                
+                # Validate Ruling properties
+                ruling_properties = self.validate_with_model(ruling_props, ruling_model)
+                
+                # Dedup Ruling by signature (label + type)
+                ruling_sig = f"{ruling_properties.get('label', '')}|{ruling_properties.get('type', '')}".strip()
+                if ruling_sig and ruling_sig in ruling_signatures:
+                    # Reuse existing Ruling
+                    ruling_temp_id = ruling_signatures[ruling_sig]
+                    logger.debug(f"Phase 4: Reusing existing Ruling ({ruling_temp_id})")
+                else:
+                    # Create new Ruling
+                    ruling_temp_id = f"n{next_idx}"
+                    next_idx += 1
+                    ruling_node = {"temp_id": ruling_temp_id, "label": "Ruling", "properties": ruling_properties}
+                    self.state.nodes_accumulated.append(ruling_node)
+                    if ruling_sig:
+                        ruling_signatures[ruling_sig] = ruling_temp_id
+                    
+                    # Create edge: Proceeding → Ruling (RESULTS_IN) - only once per unique Ruling
+                    if proceeding_temp_id:
+                        rel_label_results_in = get_relationship_label_for_edge("Proceeding", "Ruling", self.state.rels_by_label or {})
+                        if rel_label_results_in:
+                            # Check if edge already exists
+                            existing = any(
+                                e.get("from") == proceeding_temp_id and e.get("to") == ruling_temp_id and e.get("label") == rel_label_results_in
+                                for e in (self.state.edges_accumulated or []) if isinstance(e, dict)
+                            )
+                            if not existing:
+                                self.state.edges_accumulated.append({
+                                    "from": proceeding_temp_id,
+                                    "to": ruling_temp_id,
+                                    "label": rel_label_results_in,
+                                    "properties": {}
+                                })
+                
+                # Create edge: Ruling → Issue (SETS) with in_favor property
+                if isinstance(issue_temp_id, str) and issue_temp_id:
+                    rel_label_sets = get_relationship_label_for_edge("Ruling", "Issue", self.state.rels_by_label or {})
+                    if rel_label_sets:
+                        # Check if edge already exists
+                        existing = any(
+                            e.get("from") == ruling_temp_id and e.get("to") == issue_temp_id and e.get("label") == rel_label_sets
+                            for e in (self.state.edges_accumulated or []) if isinstance(e, dict)
+                        )
+                        if not existing:
+                            # Validate in_favor property against schema
+                            raw_sets_props = {"in_favor": in_favor} if isinstance(in_favor, str) else {}
+                            validated_sets_props = self.validate_relationship_properties("Ruling", rel_label_sets, raw_sets_props)
+                            self.state.edges_accumulated.append({
+                                "from": ruling_temp_id,
+                                "to": issue_temp_id,
+                                "label": rel_label_sets,
+                                "properties": validated_sets_props
+                            })
+            
+            try:
+                nodes_after = len(self.state.nodes_accumulated or [])
+                edges_after = len(self.state.edges_accumulated or [])
+                logger.info(f"Phase 4: completed (rulings_created={max(0, nodes_after - nodes_before)}, edges_created={max(0, edges_after - edges_before)})")
+            except Exception:
+                logger.info("Phase 4: Ruling extraction completed")
+            
+            return {"status": "phase4_done"}
+        except Exception as e:
+            logger.warning(f"Phase 4: Ruling extraction failed: {e}")
+            return {"status": "phase4_skipped"}
+
+    @listen(phase4_extract_ruling_per_issue)
+    def phase5_extract_arguments_and_laws(self, _: Dict[str, Any]) -> Dict[str, Any]:
+        # Phase 5: extract Arguments per Ruling and select Laws per Ruling; create edges
+        logger.info("Phase 5: extracting Arguments and selecting Laws per Ruling")
+        if self.state.progress_callback:
+            try:
+                self.state.progress_callback("Phase 5 in progress: Extracting arguments and assigning laws", "phase5", 50)
+            except Exception as e:
+                logger.warning(f"Failed to publish progress: {e}")
+        try:
+            from .crews.case_crew.case_crew_v3 import CaseCrew as _CaseCrew
+            
+            # Collect all Rulings
+            rulings = [
+                {"temp_id": n.get("temp_id"), "properties": n.get("properties") or {}}
+                for n in (self.state.nodes_accumulated or [])
+                if isinstance(n, dict) and n.get("label") == "Ruling" and isinstance(n.get("temp_id"), str)
+            ]
+            if not rulings:
+                logger.info("Phase 5: no Ruling nodes present; skipping Arguments/Laws extraction")
+                return {"status": "phase5_skipped"}
+            
+            # Get cached node instructions for Argument (O(1) lookup)
+            argument_instructions, argument_examples_json = _get_label_instructions_and_examples("Argument", self.state.node_instructions_by_label)
+            
+            # Get Argument schema
+            labels_src = (self.state.schema_spec or {}).get("labels", []) if isinstance(self.state.schema_spec, dict) else []
+            argument_def = next((ld for ld in labels_src if isinstance(ld, dict) and ld.get("label") == "Argument"), None)
+            law_def = next((ld for ld in labels_src if isinstance(ld, dict) and ld.get("label") == "Law"), None)
+            
+            argument_spec_text = ""
+            if isinstance(argument_def, dict):
+                argument_def_props_only = {"label": argument_def.get("label"), "properties": argument_def.get("properties", [])}
+                argument_spec_text = render_spec_text({"labels": [argument_def_props_only]})
+            
+            law_spec_text = ""
+            if isinstance(law_def, dict):
+                law_def_props_only = {"label": law_def.get("label"), "properties": law_def.get("properties", [])}
+                law_spec_text = render_spec_text({"labels": [law_def_props_only]})
+            
+            argument_model = (self.state.models_by_label or {}).get("Argument")
+            
+            # Build Law catalog
+            catalogs = self.build_catalog_for_labels(["Law"])
+            
+            # Build rulings payload
+            rulings_payload = {"rulings": rulings}
+            
+            # Build replacements for YAML task template
+            replacements = {
+                "CASE_TEXT": self.state.document_text or "",
+                "RULINGS_JSON": json.dumps(rulings_payload, ensure_ascii=False),
+                "ARGUMENT_INSTRUCTIONS": argument_instructions,
+                "ARGUMENT_EXAMPLES_JSON": argument_examples_json,
+                "ARGUMENT_SPEC_TEXT": argument_spec_text,
+                "LAW_SPEC_TEXT": law_spec_text,
+                "CATALOGS_JSON": json.dumps(catalogs, ensure_ascii=False),
+            }
+            
+            # Create crew with replacements
+            crew = _CaseCrew(
+                self.state.file_path,
+                self.state.filename,
+                self.state.case_id,
+                tools=[],
+                replacements=replacements,
+            )
+            
+            # TODO: Create appropriate task in case_crew_v3.py for phase5_arguments_and_laws
+            # Expected response format: { "results": [{"ruling_temp_id": str, "arguments": [{properties, status}], "law_ids": [str]}] }
+            task = crew.phase5_arguments_and_laws_task()
+            single_crew = Crew(
+                agents=[crew.phase1_extract_agent()],
+                tasks=[task],
+                process=Process.sequential,
+            )
+            
+            edges_before = len(self.state.edges_accumulated or [])
+            nodes_before = len(self.state.nodes_accumulated or [])
+            result = single_crew.kickoff()
+            
+            # Parse result
+            data = self.parse_crew_result(result)
+            results_list = data.get("results") if isinstance(data, dict) else None
+            if not isinstance(results_list, list):
+                results_list = []
+            
+            next_idx = 1 + len(self.state.nodes_accumulated or [])
+            arguments_created = 0
+            edges_created = 0
+            
+            # Process each ruling's arguments and laws
+            for entry in results_list:
+                if not isinstance(entry, dict):
+                    continue
+                
+                ruling_temp_id = entry.get("ruling_temp_id")
+                arguments_list = entry.get("arguments") or []
+                law_ids = entry.get("law_ids") or []
+                
+                if not isinstance(ruling_temp_id, str):
+                    logger.warning(f"Phase 5: ruling_temp_id is not a string")
+                    continue
+                
+                # Create Arguments and Argument → Ruling edges
+                rel_label_eval = get_relationship_label_for_edge("Argument", "Ruling", self.state.rels_by_label or {})
+                
+                for arg_item in arguments_list:
+                    if not isinstance(arg_item, dict):
+                        continue
+                    
+                    # Handle both structured objects and plain dicts
+                    if "properties" in arg_item:
+                        arg_props = arg_item.get("properties")
+                        arg_status = arg_item.get("status")
+                    else:
+                        arg_props = {k: v for k, v in arg_item.items() if k != "status"}
+                        arg_status = arg_item.get("status")
+                    
+                    if not isinstance(arg_props, dict):
+                        continue
+                    
+                    # Validate Argument properties
+                    arg_properties = self.validate_with_model(arg_props, argument_model)
+                    
+                    arg_temp_id = f"n{next_idx}"
+                    next_idx += 1
+                    arg_node = {"temp_id": arg_temp_id, "label": "Argument", "properties": arg_properties}
+                    self.state.nodes_accumulated.append(arg_node)
+                    arguments_created += 1
+                    
+                    # Create edge: Argument → Ruling (EVALUATED_IN) with status property
+                    if rel_label_eval:
+                        # Validate status property against schema
+                        raw_eval_props = {"status": arg_status} if isinstance(arg_status, str) else {}
+                        validated_eval_props = self.validate_relationship_properties("Argument", rel_label_eval, raw_eval_props)
+                        self.state.edges_accumulated.append({
+                            "from": arg_temp_id,
+                            "to": ruling_temp_id,
+                            "label": rel_label_eval,
+                            "properties": validated_eval_props
+                        })
+                        edges_created += 1
+                
+                # Create Ruling → Law edges (RELIES_ON_LAW)
+                if isinstance(law_ids, list) and law_ids:
+                    rel_label_law = get_relationship_label_for_edge("Ruling", "Law", self.state.rels_by_label or {})
+                    if rel_label_law:
+                        # Find or create Law nodes from catalog
+                        law_catalog = catalogs.get("Law", [])
+                        existing_edges = self.get_existing_edges_set()
+                        
+                        for law_id in law_ids:
+                            if not isinstance(law_id, str):
+                                continue
+                            
+                            # Find Law in catalog by ID
+                            law_entry = None
+                            for row in law_catalog:
+                                if isinstance(row, dict) and str(row.get("law_id")) == str(law_id):
+                                    law_entry = row
+                                    break
+                            
+                            if not law_entry:
+                                logger.warning(f"Phase 5: Law ID '{law_id}' not found in catalog; skipping")
+                                continue
+                            
+                            # Check if Law node already exists in accumulated nodes
+                            law_temp_id = None
+                            for n in (self.state.nodes_accumulated or []):
+                                if isinstance(n, dict) and n.get("label") == "Law":
+                                    props = n.get("properties") or {}
+                                    if str(props.get("law_id")) == str(law_id):
+                                        law_temp_id = n.get("temp_id")
+                                        break
+                            
+                            # Create Law node if it doesn't exist
+                            if not law_temp_id:
+                                law_temp_id = f"n{next_idx}"
+                                next_idx += 1
+                                props_meta = (self.state.props_meta_by_label or {}).get("Law", {})
+                                allowed_keys = [k for k in props_meta.keys() if isinstance(k, str)]
+                                law_props: Dict[str, Any] = {}
+                                for k in allowed_keys:
+                                    if law_entry.get(k) is not None:
+                                        law_props[k] = law_entry.get(k)
+                                # Ensure ID fields are included
+                                for k, v in law_entry.items():
+                                    if isinstance(k, str) and k.endswith("_id") and v is not None:
+                                        law_props[k] = str(v) if not isinstance(v, (int, float, bool)) else v
+                                
+                                self.state.nodes_accumulated.append({"temp_id": law_temp_id, "label": "Law", "properties": law_props})
+                            
+                            # Create edge: Ruling → Law
+                            key = (ruling_temp_id, law_temp_id, rel_label_law)
+                            if key not in existing_edges:
+                                self.state.edges_accumulated.append({
+                                    "from": ruling_temp_id,
+                                    "to": law_temp_id,
+                                    "label": rel_label_law,
+                                    "properties": {}
+                                })
+                                existing_edges.add(key)
+                                edges_created += 1
+            
+            try:
+                nodes_after = len(self.state.nodes_accumulated or [])
+                edges_after = len(self.state.edges_accumulated or [])
+                logger.info(f"Phase 5: completed (arguments_created={arguments_created}, edges_created={edges_created})")
+            except Exception:
+                logger.info("Phase 5: Arguments/Laws extraction completed")
+            
+            return {"status": "phase5_done"}
+        except Exception as e:
+            logger.warning(f"Phase 5: Arguments/Laws extraction failed: {e}")
+            return {"status": "phase5_skipped"}
+
+    @listen(phase5_extract_arguments_and_laws)
+    def phase6_assign_concepts_to_arguments(self, _: Dict[str, Any]) -> Dict[str, Any]:
+        # Phase 6: select Doctrine/Policy/FactPattern per Argument from catalog only + propagate to Issue
+        logger.info("Phase 6: assigning Doctrine/Policy/FactPattern to Arguments (catalog only)")
+        if self.state.progress_callback:
+            try:
+                self.state.progress_callback("Phase 6 in progress: Assigning concepts to arguments", "phase6", 60)
+            except Exception as e:
+                logger.warning(f"Failed to publish progress: {e}")
+        try:
+            from .crews.case_crew.case_crew_v3 import CaseCrew as _CaseCrew
+            
+            # Collect Arguments
+            arguments = [
+                {"temp_id": n.get("temp_id"), "properties": n.get("properties") or {}}
+                for n in (self.state.nodes_accumulated or [])
+                if isinstance(n, dict) and n.get("label") == "Argument" and isinstance(n.get("temp_id"), str)
+            ]
+            if not arguments:
+                logger.info("Phase 6: no Argument nodes present; skipping concept assignment")
+                return {"status": "phase6_skipped"}
+
+            # Build catalogs for Doctrine, Policy, FactPattern (selection only, no creation)
+            catalogs = self.build_catalog_for_labels(["Doctrine", "Policy", "FactPattern"])
+
+            # Get cached node instructions for Doctrine, Policy, FactPattern (O(1) lookups)
+            doctrine_instructions, doctrine_examples_json = _get_label_instructions_and_examples("Doctrine", self.state.node_instructions_by_label)
+            policy_instructions, policy_examples_json = _get_label_instructions_and_examples("Policy", self.state.node_instructions_by_label)
+            factpattern_instructions, factpattern_examples_json = _get_label_instructions_and_examples("FactPattern", self.state.node_instructions_by_label)
+
+            # Build schema spec text
+            labels_src = (self.state.schema_spec or {}).get("labels", []) if isinstance(self.state.schema_spec, dict) else []
             defs_props_only: List[Dict[str, Any]] = []
             for lbl in ["Doctrine", "Policy", "FactPattern"]:
-                d = get_def(lbl)
+                d = next((ld for ld in labels_src if isinstance(ld, dict) and ld.get("label") == lbl), None)
                 if isinstance(d, dict):
                     defs_props_only.append({"label": d.get("label"), "properties": d.get("properties", [])})
             spec_text = render_spec_text({"labels": defs_props_only})
@@ -912,735 +1445,451 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 self.state.case_id,
                 tools=[],
                 replacements={
-                    "ISSUES_JSON": json.dumps({"issues": issues}, ensure_ascii=False),
-                    "CATALOGS_JSON": json.dumps(catalogs, ensure_ascii=False),
-                    "SCHEMA_SPEC_TEXT": spec_text,
-                },
-            )
-            task = crew.phase7_issue_related_task()
-            single_crew = Crew(
-                agents=[crew.phase7_issue_related_agent()],
-                tasks=[task],
-                process=Process.sequential,
-            )
-            edges_before = len(self.state.edges_accumulated or [])
-            nodes_before = len(self.state.nodes_accumulated or [])
-            result = single_crew.kickoff()
-
-            # Parse
-            try:
-                data = json.loads(str(result)) if not isinstance(result, dict) else result
-            except Exception:
-                data = {}
-            doctrines = data.get("doctrines") if isinstance(data, dict) else None
-            policies = data.get("policies") if isinstance(data, dict) else None
-            factpatterns = data.get("factpatterns") if isinstance(data, dict) else None
-            issue_map = data.get("issue_map") if isinstance(data, dict) else None
-            if not isinstance(doctrines, list):
-                doctrines = []
-            if not isinstance(policies, list):
-                policies = []
-            if not isinstance(factpatterns, list):
-                factpatterns = []
-            if not isinstance(issue_map, list):
-                issue_map = []
-
-            # Models
-            doctrine_model = (self.state.models_by_label or {}).get("Doctrine")
-            policy_model = (self.state.models_by_label or {}).get("Policy")
-            fp_model = (self.state.models_by_label or {}).get("FactPattern")
-
-            # Dedup signatures and add nodes
-            def build_signature(lbl: str, props: Dict[str, Any]) -> str:
-                if lbl == "Doctrine":
-                    return f"{props.get('name','')}//{props.get('category','')}".strip()
-                if lbl == "Policy":
-                    return f"{props.get('name','')}//{props.get('discipline','')}".strip()
-                return f"{props.get('name','')}".strip()
-
-            existing_sig: Dict[str, set[str]] = {"Doctrine": set(), "Policy": set(), "FactPattern": set()}
-            for n in (self.state.nodes_accumulated or []):
-                if not isinstance(n, dict):
-                    continue
-                lbl = n.get("label")
-                if lbl not in existing_sig:
-                    continue
-                props = n.get("properties") or {}
-                sig = build_signature(lbl, props)
-                if sig:
-                    existing_sig[lbl].add(sig)
-
-            created_ids: Dict[str, Dict[int, str]] = {"Doctrine": {}, "Policy": {}, "FactPattern": {}}
-            next_idx = 1 + len(self.state.nodes_accumulated or [])
-            def add_items(lbl: str, items: List[Dict[str, Any]], model) -> None:
-                nonlocal next_idx
-                for idx, iprops in enumerate(items):
-                    if not isinstance(iprops, dict):
-                        continue
-                    try:
-                        if model is not None:
-                            inst = model(**iprops)
-                            clean = inst.model_dump(exclude_none=True)
-                        else:
-                            clean = {k: v for k, v in iprops.items() if isinstance(k, str)}
-                    except Exception:
-                        clean = {k: v for k, v in iprops.items() if isinstance(k, str)}
-                    sig = build_signature(lbl, clean)
-                    if sig and sig in existing_sig[lbl]:
-                        # find existing temp_id
-                        tid = None
-                        for n in (self.state.nodes_accumulated or []):
-                            if isinstance(n, dict) and n.get("label") == lbl:
-                                props = n.get("properties") or {}
-                                if build_signature(lbl, props) == sig and isinstance(n.get("temp_id"), str):
-                                    tid = n.get("temp_id")
-                                    break
-                        if isinstance(tid, str):
-                            created_ids[lbl][idx] = tid
-                            continue
-                    tid = f"n{next_idx}"
-                    next_idx += 1
-                    self.state.nodes_accumulated.append({"temp_id": tid, "label": lbl, "properties": clean})
-                    created_ids[lbl][idx] = tid
-                    if sig:
-                        existing_sig[lbl].add(sig)
-
-            add_items("Doctrine", doctrines, doctrine_model)
-            add_items("Policy", policies, policy_model)
-            add_items("FactPattern", factpatterns, fp_model)
-
-            # Create Issue relationships (get labels from schema)
-            rel_label_doctrine = get_relationship_label_for_edge("Issue", "Doctrine", self.state.rels_by_label or {})
-            rel_label_policy = get_relationship_label_for_edge("Issue", "Policy", self.state.rels_by_label or {})
-            rel_label_factpattern = get_relationship_label_for_edge("Issue", "FactPattern", self.state.rels_by_label or {})
-            
-            existing_edges = {(e.get("from"), e.get("to"), e.get("label")) for e in (self.state.edges_accumulated or []) if isinstance(e, dict)}
-            for m in issue_map:
-                if not isinstance(m, dict):
-                    continue
-                i_id = m.get("issue_temp_id")
-                di = m.get("doctrine_index")
-                pi = m.get("policy_index")
-                fi = m.get("factpattern_index")
-                if isinstance(i_id, str) and isinstance(di, int) and rel_label_doctrine:
-                    d_id = created_ids["Doctrine"].get(di)
-                    if isinstance(d_id, str):
-                        key = (i_id, d_id, rel_label_doctrine)
-                        if key not in existing_edges:
-                            self.state.edges_accumulated.append({"from": i_id, "to": d_id, "label": rel_label_doctrine, "properties": {}})
-                            existing_edges.add(key)
-                if isinstance(i_id, str) and isinstance(pi, int) and rel_label_policy:
-                    p_id = created_ids["Policy"].get(pi)
-                    if isinstance(p_id, str):
-                        key = (i_id, p_id, rel_label_policy)
-                        if key not in existing_edges:
-                            self.state.edges_accumulated.append({"from": i_id, "to": p_id, "label": rel_label_policy, "properties": {}})
-                            existing_edges.add(key)
-                if isinstance(i_id, str) and isinstance(fi, int) and rel_label_factpattern:
-                    f_id = created_ids["FactPattern"].get(fi)
-                    if isinstance(f_id, str):
-                        key = (i_id, f_id, rel_label_factpattern)
-                        if key not in existing_edges:
-                            self.state.edges_accumulated.append({"from": i_id, "to": f_id, "label": rel_label_factpattern, "properties": {}})
-                            existing_edges.add(key)
-
-            try:
-                nodes_after = len(self.state.nodes_accumulated or [])
-                edges_after = len(self.state.edges_accumulated or [])
-                logger.info(f"Phase 4: completed (nodes_added={max(0, nodes_after - nodes_before)}, edges_added={max(0, edges_after - edges_before)})")
-            except Exception:
-                logger.info("Phase 4: issue-related assignment completed")
-            
-            # No end-of-phase progress callback; start-of-phase announces in-progress
-            
-            return {"status": "phase4_done"}
-        except Exception as e:
-            logger.warning(f"Phase 4: issue-related assignment failed: {e}")
-            return {"status": "phase4_skipped"}
-
-    @listen(phase4_assign_issue_concepts)
-    def phase5_extract_ruling_and_arguments(self, _: Dict[str, Any]) -> Dict[str, Any]:
-        # Phase 5: for each Issue batch, create Ruling and extract Arguments; create edges
-        logger.info("Phase 5: extracting Ruling and Arguments per Issue (batched)")
-        if self.state.progress_callback:
-            try:
-                self.state.progress_callback("Phase 5 in progress: Creating rulings and arguments", "phase5", 45)
-            except Exception as e:
-                logger.warning(f"Failed to publish progress: {e}")
-        try:
-            from .crews.case_crew.case_crew_v3 import CaseCrew as _CaseCrew
-            
-            # Load config and apply batch size
-            flow_config = _load_flow_config()
-            batch_size = flow_config.get("batch_sizes", {}).get("phase5_issues", 999)
-            # Allow env override
-            batch_size = int(os.getenv("PHASE5_ISSUE_BATCH_SIZE", str(batch_size)))
-            
-            # Load flow_map for Ruling and Argument instructions
-            try:
-                flow_map_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "flow_map_v3.json"))
-                with open(flow_map_path, "r") as f:
-                    flow_map = json.load(f)
-            except Exception:
-                flow_map = []
-            
-            fm_ruling = None
-            fm_argument = None
-            for e in (flow_map or []):
-                if isinstance(e, dict):
-                    if e.get("label") == "Ruling":
-                        fm_ruling = e
-                    if e.get("label") == "Argument":
-                        fm_argument = e
-            
-            ruling_instructions = (fm_ruling or {}).get("instructions") or ""
-            ruling_examples_json = json.dumps((fm_ruling or {}).get("examples") or [], ensure_ascii=False)
-            argument_instructions = (fm_argument or {}).get("instructions") or ""
-            argument_examples_json = json.dumps((fm_argument or {}).get("examples") or [], ensure_ascii=False)
-            
-            # Get schemas
-            labels_src = (self.state.schema_spec or {}).get("labels", []) if isinstance(self.state.schema_spec, dict) else []
-            ruling_def = next((ld for ld in labels_src if isinstance(ld, dict) and ld.get("label") == "Ruling"), None)
-            argument_def = next((ld for ld in labels_src if isinstance(ld, dict) and ld.get("label") == "Argument"), None)
-            
-            ruling_spec_text = ""
-            if isinstance(ruling_def, dict):
-                ruling_def_props_only = {"label": ruling_def.get("label"), "properties": ruling_def.get("properties", [])}
-                ruling_spec_text = render_spec_text({"labels": [ruling_def_props_only]})
-            
-            argument_spec_text = ""
-            if isinstance(argument_def, dict):
-                argument_def_props_only = {"label": argument_def.get("label"), "properties": argument_def.get("properties", [])}
-                argument_spec_text = render_spec_text({"labels": [argument_def_props_only]})
-            
-            ruling_model = (self.state.models_by_label or {}).get("Ruling")
-            argument_model = (self.state.models_by_label or {}).get("Argument")
-            
-            # Collect all Issues
-            issues = [n for n in (self.state.nodes_accumulated or []) if isinstance(n, dict) and n.get("label") == "Issue"]
-            if not issues:
-                logger.info("Phase 5: no Issue nodes present; skipping Ruling/Arguments")
-                return {"status": "phase5_skipped"}
-            
-            logger.info(f"Phase 5: processing {len(issues)} issues in batches of {batch_size}")
-            
-            # Helper function to find first node by label
-            def find_first_temp_id(label: str) -> Optional[str]:
-                for n in (self.state.nodes_accumulated or []):
-                    if isinstance(n, dict) and n.get("label") == label and isinstance(n.get("temp_id"), str):
-                        return n.get("temp_id")
-                return None
-            
-            next_idx = 1 + len(self.state.nodes_accumulated or [])
-            rulings_created = 0
-            arguments_created = 0
-            edges_created = 0
-            
-            # Track created Rulings for deduplication (same Ruling can apply to multiple Issues)
-            ruling_signatures: Dict[str, str] = {}  # signature -> temp_id
-            
-            # Process issues in batches
-            for batch_start in range(0, len(issues), batch_size):
-                batch_end = min(batch_start + batch_size, len(issues))
-                batch = issues[batch_start:batch_end]
-                
-                try:
-                    logger.info(f"Phase 5: processing issue batch {batch_start // batch_size + 1} (issues {batch_start + 1}-{batch_end} of {len(issues)})")
-                    
-                    # Build issues payload for this batch
-                    issues_payload = {
-                        "issues": [
-                            {"temp_id": n.get("temp_id"), "properties": n.get("properties") or {}}
-                            for n in batch if isinstance(n, dict)
-                        ]
-                    }
-                    
-                    # Build replacements for YAML task template
-                    replacements = {
-                        "CASE_TEXT": self.state.document_text or "",
-                        "ISSUES_JSON": json.dumps(issues_payload, ensure_ascii=False),
-                        "RULING_INSTRUCTIONS": ruling_instructions,
-                        "RULING_EXAMPLES_JSON": ruling_examples_json,
-                        "RULING_SPEC_TEXT": ruling_spec_text,
-                        "ARGUMENT_INSTRUCTIONS": argument_instructions,
-                        "ARGUMENT_EXAMPLES_JSON": argument_examples_json,
-                        "ARGUMENT_SPEC_TEXT": argument_spec_text,
-                    }
-                    
-                    # Create crew with replacements
-                    crew_batch = _CaseCrew(
-                        self.state.file_path,
-                        self.state.filename,
-                        self.state.case_id,
-                        tools=[],
-                        replacements=replacements,
-                    )
-                    
-                    task = crew_batch.phase5_batch_ruling_arguments_task(RulingAndArgumentsBatchResponse)
-                    single_crew = Crew(
-                        agents=[crew_batch.phase1_extract_agent()],
-                        tasks=[task],
-                        process=Process.sequential,
-                    )
-                    result = single_crew.kickoff()
-                    
-                    # Extract Pydantic model from CrewOutput
-                    batch_response: RulingAndArgumentsBatchResponse
-                    if hasattr(result, 'pydantic') and result.pydantic:
-                        batch_response = result.pydantic
-                    elif isinstance(result, RulingAndArgumentsBatchResponse):
-                        batch_response = result
-                    else:
-                        logger.warning(f"Phase 5: Unexpected result type: {type(result)}")
-                        batch_response = RulingAndArgumentsBatchResponse(results=[])
-                    
-                    results = batch_response.results
-                    proceeding_temp_id = find_first_temp_id("Proceeding")
-                    
-                    # Process each result entry (one per issue in batch)
-                    for entry in results:
-                        issue_temp_id = entry.issue_temp_id
-                        ruling_props = entry.ruling
-                        arguments_list = entry.arguments or []
-                        
-                        if not isinstance(ruling_props, dict):
-                            logger.warning(f"Phase 5: Ruling for issue {issue_temp_id} is not a dict")
-                            continue
-                        
-                        # Validate Ruling
-                        try:
-                            if ruling_model is not None:
-                                inst = ruling_model(**ruling_props)
-                                ruling_properties = inst.model_dump(exclude_none=True)
-                            else:
-                                ruling_properties = ruling_props
-                        except Exception:
-                            ruling_properties = {k: v for k, v in ruling_props.items() if isinstance(k, str)}
-                        
-                        # Dedup Ruling by signature (label + type)
-                        ruling_sig = f"{ruling_properties.get('label', '')}|{ruling_properties.get('type', '')}".strip()
-                        if ruling_sig and ruling_sig in ruling_signatures:
-                            # Reuse existing Ruling
-                            ruling_temp_id = ruling_signatures[ruling_sig]
-                            logger.debug(f"Phase 5: Reusing existing Ruling ({ruling_temp_id})")
-                        else:
-                            # Create new Ruling
-                            ruling_temp_id = f"n{next_idx}"
-                            next_idx += 1
-                            ruling_node = {"temp_id": ruling_temp_id, "label": "Ruling", "properties": ruling_properties}
-                            self.state.nodes_accumulated.append(ruling_node)
-                            rulings_created += 1
-                            if ruling_sig:
-                                ruling_signatures[ruling_sig] = ruling_temp_id
-                        
-                        # Create edges for Ruling
-                        if isinstance(issue_temp_id, str) and issue_temp_id:
-                            # Edge: Ruling → Issue (SETS)
-                            rel_label_sets = get_relationship_label_for_edge("Ruling", "Issue", self.state.rels_by_label or {})
-                            if rel_label_sets:
-                                # Check if edge already exists
-                                existing = any(
-                                    e.get("from") == ruling_temp_id and e.get("to") == issue_temp_id and e.get("label") == rel_label_sets
-                                    for e in (self.state.edges_accumulated or []) if isinstance(e, dict)
-                                )
-                                if not existing:
-                                    self.state.edges_accumulated.append({
-                                        "from": ruling_temp_id,
-                                        "to": issue_temp_id,
-                                        "label": rel_label_sets,
-                                        "properties": {}
-                                    })
-                                    edges_created += 1
-                            
-                            # Edge: Proceeding → Ruling (RESULTS_IN) - only create once per Ruling
-                            if ruling_sig not in ruling_signatures or ruling_signatures.get(ruling_sig) == ruling_temp_id:
-                                rel_label_results_in = get_relationship_label_for_edge("Proceeding", "Ruling", self.state.rels_by_label or {})
-                                if rel_label_results_in and proceeding_temp_id:
-                                    # Check if edge already exists
-                                    existing = any(
-                                        e.get("from") == proceeding_temp_id and e.get("to") == ruling_temp_id and e.get("label") == rel_label_results_in
-                                        for e in (self.state.edges_accumulated or []) if isinstance(e, dict)
-                                    )
-                                    if not existing:
-                                        self.state.edges_accumulated.append({
-                                            "from": proceeding_temp_id,
-                                            "to": ruling_temp_id,
-                                            "label": rel_label_results_in,
-                                            "properties": {}
-                                        })
-                                        edges_created += 1
-                        
-                        # Process Arguments
-                        if not isinstance(arguments_list, list):
-                            arguments_list = []
-                        
-                        rel_label_eval = get_relationship_label_for_edge("Argument", "Ruling", self.state.rels_by_label or {})
-                        for arg_props in arguments_list:
-                            if not isinstance(arg_props, dict):
-                                continue
-                            
-                            try:
-                                # Validate Argument
-                                if argument_model is not None:
-                                    inst = argument_model(**arg_props)
-                                    arg_properties = inst.model_dump(exclude_none=True)
-                                else:
-                                    arg_properties = arg_props
-                            except Exception:
-                                arg_properties = {k: v for k, v in arg_props.items() if isinstance(k, str)}
-                            
-                            arg_temp_id = f"n{next_idx}"
-                            next_idx += 1
-                            arg_node = {"temp_id": arg_temp_id, "label": "Argument", "properties": arg_properties}
-                            self.state.nodes_accumulated.append(arg_node)
-                            arguments_created += 1
-                            
-                            # Create edge: Argument → Ruling (EVALUATED_IN)
-                            if rel_label_eval and isinstance(ruling_temp_id, str):
-                                self.state.edges_accumulated.append({
-                                    "from": arg_temp_id,
-                                    "to": ruling_temp_id,
-                                    "label": rel_label_eval,
-                                    "properties": {}
-                                })
-                                edges_created += 1
-                
-                except Exception as e:
-                    logger.warning(f"Phase 5: Failed to process issues batch: {e}")
-                    continue
-            
-            logger.info(f"Phase 5: completed (rulings_created={rulings_created}, arguments_created={arguments_created}, edges_created={edges_created})")
-            
-            return {"status": "phase5_done"}
-        except Exception as e:
-            logger.warning(f"Phase 5: Ruling/Arguments extraction failed: {e}")
-            return {"status": "phase5_skipped"}
-
-    @listen(phase5_extract_ruling_and_arguments)
-    def phase6_assign_laws(self, _: Dict[str, Any]) -> Dict[str, Any]:
-        # Phase 6: for each Argument, select or create Law(s) with dedup and add Argument->Law edges
-        logger.info("Phase 6: assigning Laws to Arguments with catalog dedup")
-        if self.state.progress_callback:
-            try:
-                self.state.progress_callback("Phase 6 in progress: Assigning laws", "phase6", 60)
-            except Exception as e:
-                logger.warning(f"Failed to publish progress: {e}")
-        try:
-            from .crews.case_crew.case_crew_v3 import CaseCrew as _CaseCrew
-            # Collect Arguments
-            arguments = [
-                {"temp_id": n.get("temp_id"), "properties": n.get("properties") or {}}
-                for n in (self.state.nodes_accumulated or [])
-                if isinstance(n, dict) and n.get("label") == "Argument" and isinstance(n.get("temp_id"), str)
-            ]
-            if not arguments:
-                logger.info("Phase 6: no Argument nodes present; skipping law assignment")
-                return {"status": "phase6_skipped"}
-
-            # Build Law catalog using schema-defined properties
-            catalogs: Dict[str, List[Dict[str, Any]]] = {"Law": []}
-            try:
-                rows = (self.state.existing_catalog_by_label or {}).get("Law") or []
-                entries: List[Dict[str, Any]] = []
-                law_props_meta = (self.state.props_meta_by_label or {}).get("Law") or {}
-                allowed_keys = [k for k in law_props_meta.keys() if isinstance(k, str)]
-                for r in rows:
-                    if not isinstance(r, dict):
-                        continue
-                    entry: Dict[str, Any] = {}
-                    for k in allowed_keys:
-                        if r.get(k) is not None:
-                            v = r.get(k)
-                            try:
-                                entry[k] = v if isinstance(v, (int, float, bool)) else str(v)
-                            except Exception:
-                                entry[k] = str(v)
-                    for k, v in r.items():
-                        if isinstance(k, str) and k.endswith("_id") and v is not None:
-                            try:
-                                entry[k] = v if isinstance(v, (int, float, bool)) else str(v)
-                            except Exception:
-                                entry[k] = str(v)
-                    if entry:
-                        entries.append(entry)
-                catalogs["Law"] = entries
-            except Exception:
-                catalogs = {"Law": []}
-
-            # Law schema spec text for validation context
-            labels_src = (self.state.schema_spec or {}).get("labels", []) if isinstance(self.state.schema_spec, dict) else []
-            law_def = next((ld for ld in labels_src if isinstance(ld, dict) and ld.get("label") == "Law"), None)
-            law_spec_text = ""
-            if isinstance(law_def, dict):
-                law_def_props_only = {"label": law_def.get("label"), "properties": law_def.get("properties", [])}
-                law_spec_text = render_spec_text({"labels": [law_def_props_only]})
-
-            crew = _CaseCrew(
-                self.state.file_path,
-                self.state.filename,
-                self.state.case_id,
-                tools=[],
-                replacements={
                     "ARGUMENTS_JSON": json.dumps({"arguments": arguments}, ensure_ascii=False),
                     "CATALOGS_JSON": json.dumps(catalogs, ensure_ascii=False),
-                    "SCHEMA_SPEC_TEXT": law_spec_text,
+                    "SCHEMA_SPEC_TEXT": spec_text,
+                    "DOCTRINE_INSTRUCTIONS": doctrine_instructions,
+                    "DOCTRINE_EXAMPLES_JSON": doctrine_examples_json,
+                    "POLICY_INSTRUCTIONS": policy_instructions,
+                    "POLICY_EXAMPLES_JSON": policy_examples_json,
+                    "FACTPATTERN_INSTRUCTIONS": factpattern_instructions,
+                    "FACTPATTERN_EXAMPLES_JSON": factpattern_examples_json,
                 },
             )
-            task = crew.phase6_law_task()
+            
+            # TODO: Create appropriate task in case_crew_v3.py for phase6_argument_concepts
+            # Expected response format: { "argument_map": [{"argument_temp_id": str, "doctrine_ids": [str], "policy_ids": [str], "factpattern_ids": [str]}] }
+            task = crew.phase6_argument_concepts_task()
             single_crew = Crew(
-                agents=[crew.phase6_law_agent()],
+                agents=[crew.phase1_extract_agent()],
                 tasks=[task],
                 process=Process.sequential,
             )
+            
             edges_before = len(self.state.edges_accumulated or [])
             nodes_before = len(self.state.nodes_accumulated or [])
             result = single_crew.kickoff()
 
             # Parse output
-            try:
-                data = json.loads(str(result)) if not isinstance(result, dict) else result
-            except Exception:
-                data = {}
-            laws_list = data.get("laws") if isinstance(data, dict) else None
-            arg_map_list = data.get("argument_to_law") if isinstance(data, dict) else None
-            if not isinstance(laws_list, list):
-                laws_list = []
-            if not isinstance(arg_map_list, list):
-                arg_map_list = []
+            data = self.parse_crew_result(result)
+            argument_map = data.get("argument_map") if isinstance(data, dict) else None
+            if not isinstance(argument_map, list):
+                argument_map = []
 
-            # Validate/dedup laws and add nodes
-            law_model = (self.state.models_by_label or {}).get("Law")
-            existing_signatures: set[str] = set()
-            for n in (self.state.nodes_accumulated or []):
-                if isinstance(n, dict) and n.get("label") == "Law":
-                    props = n.get("properties") or {}
-                    sig = (props.get("citation") or props.get("name") or "").strip()
-                    if sig:
-                        existing_signatures.add(sig)
-
-            created_ids_by_index: Dict[int, str] = {}
+            # Get relationship labels
+            rel_label_doctrine = get_relationship_label_for_edge("Argument", "Doctrine", self.state.rels_by_label or {})
+            rel_label_policy = get_relationship_label_for_edge("Argument", "Policy", self.state.rels_by_label or {})
+            rel_label_factpattern = get_relationship_label_for_edge("Argument", "FactPattern", self.state.rels_by_label or {})
+            
+            # Issue relationship labels for propagation
+            issue_rel_doctrine = get_relationship_label_for_edge("Issue", "Doctrine", self.state.rels_by_label or {})
+            issue_rel_policy = get_relationship_label_for_edge("Issue", "Policy", self.state.rels_by_label or {})
+            issue_rel_factpattern = get_relationship_label_for_edge("Issue", "FactPattern", self.state.rels_by_label or {})
+            
+            existing_edges = self.get_existing_edges_set()
             next_idx = 1 + len(self.state.nodes_accumulated or [])
-            for idx, lprops in enumerate(laws_list):
-                if not isinstance(lprops, dict):
-                    continue
-                try:
-                    if law_model is not None:
-                        inst = law_model(**lprops)
-                        clean_props = inst.model_dump(exclude_none=True)
-                    else:
-                        clean_props = {k: v for k, v in lprops.items() if isinstance(k, str)}
-                except Exception:
-                    clean_props = {k: v for k, v in lprops.items() if isinstance(k, str)}
-
-                sig = (clean_props.get("citation") or clean_props.get("name") or "").strip()
-                if sig and sig in existing_signatures:
-                    temp_id = None
-                    for n in (self.state.nodes_accumulated or []):
-                        if isinstance(n, dict) and n.get("label") == "Law":
-                            props = n.get("properties") or {}
-                            s = (props.get("citation") or props.get("name") or "").strip()
-                            if s == sig and isinstance(n.get("temp_id"), str):
-                                temp_id = n.get("temp_id")
-                                break
-                    if isinstance(temp_id, str):
-                        created_ids_by_index[idx] = temp_id
-                        continue
+            
+            # Track concept IDs to propagate to Issues
+            concepts_to_propagate: Dict[str, set[str]] = {
+                "Doctrine": set(),
+                "Policy": set(),
+                "FactPattern": set()
+            }
+            
+            # Helper function to find or create catalog node
+            def find_or_create_catalog_node(label: str, node_id: str, catalog: List[Dict[str, Any]]) -> Optional[str]:
+                nonlocal next_idx
+                
+                # Find in catalog
+                catalog_entry = None
+                id_field = f"{label.lower()}_id"
+                for row in catalog:
+                    if isinstance(row, dict) and str(row.get(id_field)) == str(node_id):
+                        catalog_entry = row
+                        break
+                
+                if not catalog_entry:
+                    logger.warning(f"Phase 6: {label} ID '{node_id}' not found in catalog; skipping (can_create_new=false)")
+                    return None
+                
+                # Check if node already exists in accumulated nodes
+                existing_temp_id = None
+                for n in (self.state.nodes_accumulated or []):
+                    if isinstance(n, dict) and n.get("label") == label:
+                        props = n.get("properties") or {}
+                        if str(props.get(id_field)) == str(node_id):
+                            existing_temp_id = n.get("temp_id")
+                            break
+                
+                if existing_temp_id:
+                    return existing_temp_id
+                
+                # Create new node from catalog
                 temp_id = f"n{next_idx}"
                 next_idx += 1
-                self.state.nodes_accumulated.append({"temp_id": temp_id, "label": "Law", "properties": clean_props})
-                created_ids_by_index[idx] = temp_id
-                if sig:
-                    existing_signatures.add(sig)
-
-            # Create Argument -> Law edges
-            rel_label_arg_law = get_relationship_label_for_edge("Argument", "Law", self.state.rels_by_label or {})
-            if not rel_label_arg_law:
-                logger.warning("Phase 6: No relationship found in schema for Argument -> Law")
-                return {"status": "phase6_skipped"}
+                props_meta = (self.state.props_meta_by_label or {}).get(label, {})
+                allowed_keys = [k for k in props_meta.keys() if isinstance(k, str)]
+                node_props: Dict[str, Any] = {}
+                for k in allowed_keys:
+                    if catalog_entry.get(k) is not None:
+                        node_props[k] = catalog_entry.get(k)
+                # Ensure ID fields are included
+                for k, v in catalog_entry.items():
+                    if isinstance(k, str) and k.endswith("_id") and v is not None:
+                        node_props[k] = str(v) if not isinstance(v, (int, float, bool)) else v
+                
+                self.state.nodes_accumulated.append({"temp_id": temp_id, "label": label, "properties": node_props})
+                return temp_id
             
-            existing_edges = {(e.get("from"), e.get("to"), e.get("label")) for e in (self.state.edges_accumulated or []) if isinstance(e, dict)}
-            for m in arg_map_list:
-                if not isinstance(m, dict):
+            # Process each argument's concept assignments
+            for entry in argument_map:
+                if not isinstance(entry, dict):
                     continue
-                a_id = m.get("argument_temp_id")
-                l_index = m.get("law_index")
-                if not (isinstance(a_id, str) and isinstance(l_index, int)):
+                
+                arg_temp_id = entry.get("argument_temp_id")
+                doctrine_ids = entry.get("doctrine_ids") or []
+                policy_ids = entry.get("policy_ids") or []
+                factpattern_ids = entry.get("factpattern_ids") or []
+                
+                if not isinstance(arg_temp_id, str):
                     continue
-                l_id = created_ids_by_index.get(l_index)
-                if not isinstance(l_id, str):
+                
+                # Create Argument → Doctrine edges
+                if isinstance(doctrine_ids, list) and rel_label_doctrine:
+                    for doctrine_id in doctrine_ids:
+                        if not isinstance(doctrine_id, str):
+                            continue
+                        doctrine_temp_id = find_or_create_catalog_node("Doctrine", doctrine_id, catalogs.get("Doctrine", []))
+                        if doctrine_temp_id:
+                            key = (arg_temp_id, doctrine_temp_id, rel_label_doctrine)
+                            if key not in existing_edges:
+                                self.state.edges_accumulated.append({
+                                    "from": arg_temp_id,
+                                    "to": doctrine_temp_id,
+                                    "label": rel_label_doctrine,
+                                    "properties": {}
+                                })
+                                existing_edges.add(key)
+                                concepts_to_propagate["Doctrine"].add(doctrine_temp_id)
+                
+                # Create Argument → Policy edges
+                if isinstance(policy_ids, list) and rel_label_policy:
+                    for policy_id in policy_ids:
+                        if not isinstance(policy_id, str):
+                            continue
+                        policy_temp_id = find_or_create_catalog_node("Policy", policy_id, catalogs.get("Policy", []))
+                        if policy_temp_id:
+                            key = (arg_temp_id, policy_temp_id, rel_label_policy)
+                            if key not in existing_edges:
+                                self.state.edges_accumulated.append({
+                                    "from": arg_temp_id,
+                                    "to": policy_temp_id,
+                                    "label": rel_label_policy,
+                                    "properties": {}
+                                })
+                                existing_edges.add(key)
+                                concepts_to_propagate["Policy"].add(policy_temp_id)
+                
+                # Create Argument → FactPattern edges
+                if isinstance(factpattern_ids, list) and rel_label_factpattern:
+                    for factpattern_id in factpattern_ids:
+                        if not isinstance(factpattern_id, str):
+                            continue
+                        fp_temp_id = find_or_create_catalog_node("FactPattern", factpattern_id, catalogs.get("FactPattern", []))
+                        if fp_temp_id:
+                            key = (arg_temp_id, fp_temp_id, rel_label_factpattern)
+                            if key not in existing_edges:
+                                self.state.edges_accumulated.append({
+                                    "from": arg_temp_id,
+                                    "to": fp_temp_id,
+                                    "label": rel_label_factpattern,
+                                    "properties": {}
+                                })
+                                existing_edges.add(key)
+                                concepts_to_propagate["FactPattern"].add(fp_temp_id)
+            
+            # Propagate concept relationships to Issues
+            # Find Issues via: Argument → Ruling → Issue path
+            issue_temp_ids = set()
+            rel_label_eval = get_relationship_label_for_edge("Argument", "Ruling", self.state.rels_by_label or {})
+            
+            for arg in arguments:
+                arg_id = arg.get("temp_id")
+                if not isinstance(arg_id, str):
                     continue
-                key = (a_id, l_id, rel_label_arg_law)
-                if key not in existing_edges:
-                    self.state.edges_accumulated.append({"from": a_id, "to": l_id, "label": rel_label_arg_law, "properties": {}})
-                    existing_edges.add(key)
-
+                
+                # Find Ruling(s) connected to this Argument
+                ruling_ids = set()
+                for e in (self.state.edges_accumulated or []):
+                    if isinstance(e, dict) and e.get("from") == arg_id and e.get("label") == rel_label_eval:
+                        ruling_id = e.get("to")
+                        if isinstance(ruling_id, str):
+                            ruling_ids.add(ruling_id)
+                
+                # Find Issue(s) connected to these Ruling(s)
+                for ruling_id in ruling_ids:
+                    for e in (self.state.edges_accumulated or []):
+                        if isinstance(e, dict) and e.get("from") == ruling_id:
+                            # Check if it's a SETS relationship
+                            rel_label_sets = get_relationship_label_for_edge("Ruling", "Issue", self.state.rels_by_label or {})
+                            if e.get("label") == rel_label_sets:
+                                issue_id = e.get("to")
+                                if isinstance(issue_id, str):
+                                    issue_temp_ids.add(issue_id)
+            
+            # Create Issue → Doctrine/Policy/FactPattern edges
+            for issue_id in issue_temp_ids:
+                # Issue → Doctrine
+                if issue_rel_doctrine:
+                    for doctrine_id in concepts_to_propagate["Doctrine"]:
+                        key = (issue_id, doctrine_id, issue_rel_doctrine)
+                        if key not in existing_edges:
+                            self.state.edges_accumulated.append({
+                                "from": issue_id,
+                                "to": doctrine_id,
+                                "label": issue_rel_doctrine,
+                                "properties": {}
+                            })
+                            existing_edges.add(key)
+                
+                # Issue → Policy
+                if issue_rel_policy:
+                    for policy_id in concepts_to_propagate["Policy"]:
+                        key = (issue_id, policy_id, issue_rel_policy)
+                        if key not in existing_edges:
+                            self.state.edges_accumulated.append({
+                                "from": issue_id,
+                                "to": policy_id,
+                                "label": issue_rel_policy,
+                                "properties": {}
+                            })
+                            existing_edges.add(key)
+                
+                # Issue → FactPattern
+                if issue_rel_factpattern:
+                    for fp_id in concepts_to_propagate["FactPattern"]:
+                        key = (issue_id, fp_id, issue_rel_factpattern)
+                        if key not in existing_edges:
+                            self.state.edges_accumulated.append({
+                                "from": issue_id,
+                                "to": fp_id,
+                                "label": issue_rel_factpattern,
+                                "properties": {}
+                            })
+                            existing_edges.add(key)
+            
             try:
                 nodes_after = len(self.state.nodes_accumulated or [])
                 edges_after = len(self.state.edges_accumulated or [])
                 logger.info(f"Phase 6: completed (nodes_added={max(0, nodes_after - nodes_before)}, edges_added={max(0, edges_after - edges_before)})")
             except Exception:
-                logger.info("Phase 6: law assignment completed")
-            
-            # No end-of-phase progress callback; start-of-phase announces in-progress
+                logger.info("Phase 6: concept assignment completed")
             
             return {"status": "phase6_done"}
         except Exception as e:
-            logger.warning(f"Phase 6: law assignment failed: {e}")
+            logger.warning(f"Phase 6: concept assignment failed: {e}")
             return {"status": "phase6_skipped"}
 
-    @listen(phase6_assign_laws)
-    def phase7_assign_relief_types(self, _: Dict[str, Any]) -> Dict[str, Any]:
-        # Phase 7: select ReliefType(s) based on Ruling and create Ruling->ReliefType edges
-        logger.info("Phase 7: assigning ReliefTypes per Ruling")
+    @listen(phase6_assign_concepts_to_arguments)
+    def phase7_generate_relief_and_assign_types(self, _: Dict[str, Any]) -> Dict[str, Any]:
+        # Phase 7: generate Relief nodes per Ruling + assign ReliefType; create Ruling→Relief and Relief→ReliefType edges
+        logger.info("Phase 7: generating Relief nodes and assigning ReliefTypes per Ruling")
         if self.state.progress_callback:
             try:
-                self.state.progress_callback("Phase 7 in progress: Assigning relief types", "phase7", 70)
+                self.state.progress_callback("Phase 7 in progress: Generating relief and assigning types", "phase7", 70)
             except Exception as e:
                 logger.warning(f"Failed to publish progress: {e}")
         try:
             from .crews.case_crew.case_crew_v3 import CaseCrew as _CaseCrew
-            # Build catalog for ReliefType
-            catalogs: Dict[str, List[Dict[str, Any]]] = {}
-            for lbl in ["ReliefType"]:
-                rows = (self.state.existing_catalog_by_label or {}).get(lbl) or []
-                entries: List[Dict[str, Any]] = []
-                props_meta = (self.state.props_meta_by_label or {}).get(lbl) or {}
-                allowed_keys = [k for k in props_meta.keys() if isinstance(k, str)]
-                for r in rows:
-                    if not isinstance(r, dict):
-                        continue
-                    entry: Dict[str, Any] = {}
-                    for k in allowed_keys:
-                        if r.get(k) is not None:
-                            v = r.get(k)
-                            try:
-                                entry[k] = v if isinstance(v, (int, float, bool)) else str(v)
-                            except Exception:
-                                entry[k] = str(v)
-                    for k, v in r.items():
-                        if isinstance(k, str) and k.endswith("_id") and v is not None:
-                            try:
-                                entry[k] = v if isinstance(v, (int, float, bool)) else str(v)
-                            except Exception:
-                                entry[k] = str(v)
-                    if entry:
-                        entries.append(entry)
-                catalogs[lbl] = entries
+            
+            # Collect all Rulings
+            rulings = [
+                {"temp_id": n.get("temp_id"), "properties": n.get("properties") or {}}
+                for n in (self.state.nodes_accumulated or [])
+                if isinstance(n, dict) and n.get("label") == "Ruling" and isinstance(n.get("temp_id"), str)
+            ]
+            if not rulings:
+                logger.info("Phase 7: no Ruling nodes present; skipping Relief generation")
+                return {"status": "phase7_skipped"}
 
-            # Extract Ruling properties
-            rulings = [n for n in (self.state.nodes_accumulated or []) if isinstance(n, dict) and n.get("label") == "Ruling"]
-            ruling_props = (rulings[0].get("properties") if rulings and isinstance(rulings[0].get("properties"), dict) else {})
+            # Build ReliefType catalog
+            catalogs = self.build_catalog_for_labels(["ReliefType"])
 
-            crew_sel = _CaseCrew(
+            # Get cached node instructions for Relief and ReliefType (O(1) lookups)
+            relief_instructions, relief_examples_json = _get_label_instructions_and_examples("Relief", self.state.node_instructions_by_label)
+            relieftype_instructions, relieftype_examples_json = _get_label_instructions_and_examples("ReliefType", self.state.node_instructions_by_label)
+
+            # Get Relief schema
+            labels_src = (self.state.schema_spec or {}).get("labels", []) if isinstance(self.state.schema_spec, dict) else []
+            relief_def = next((ld for ld in labels_src if isinstance(ld, dict) and ld.get("label") == "Relief"), None)
+            
+            relief_spec_text = ""
+            if isinstance(relief_def, dict):
+                relief_def_props_only = {"label": relief_def.get("label"), "properties": relief_def.get("properties", [])}
+                relief_spec_text = render_spec_text({"labels": [relief_def_props_only]})
+            
+            relief_model = (self.state.models_by_label or {}).get("Relief")
+            
+            # Build rulings payload
+            rulings_payload = {"rulings": rulings}
+            
+            # Build replacements for YAML task template
+            replacements = {
+                "CASE_TEXT": self.state.document_text or "",
+                "RULINGS_JSON": json.dumps(rulings_payload, ensure_ascii=False),
+                "RELIEF_SPEC_TEXT": relief_spec_text,
+                "RELIEF_INSTRUCTIONS": relief_instructions,
+                "RELIEF_EXAMPLES_JSON": relief_examples_json,
+                "RELIEFTYPE_INSTRUCTIONS": relieftype_instructions,
+                "RELIEFTYPE_EXAMPLES_JSON": relieftype_examples_json,
+                "CATALOGS_JSON": json.dumps(catalogs, ensure_ascii=False),
+            }
+            
+            # Create crew with replacements
+            crew = _CaseCrew(
                 self.state.file_path,
                 self.state.filename,
                 self.state.case_id,
                 tools=[],
-                replacements={
-                    "RULING_JSON": json.dumps(ruling_props, ensure_ascii=False),
-                    "CASE_TEXT": self.state.document_text or "",
-                    "CATALOGS_JSON": json.dumps(catalogs, ensure_ascii=False),
-                },
+                replacements=replacements,
             )
-            task_sel = crew_sel.phase5_select_existing_task()
-            single_crew_sel = Crew(
-                agents=[crew_sel.phase5_select_existing_agent()],
-                tasks=[task_sel],
+            
+            # TODO: Create appropriate task in case_crew_v3.py for phase7_relief_and_type
+            # Expected response format: { "results": [{"ruling_temp_id": str, "relief": {properties}, "relief_status": str, "relief_type_id": str}] }
+            task = crew.phase7_relief_and_type_task()
+            single_crew = Crew(
+                agents=[crew.phase1_extract_agent()],
+                tasks=[task],
                 process=Process.sequential,
             )
+            
             edges_before = len(self.state.edges_accumulated or [])
             nodes_before = len(self.state.nodes_accumulated or [])
-            result_sel = single_crew_sel.kickoff()
-            selected: Dict[str, List[str]] = {}
-            try:
-                text = str(result_sel)
-                data = json.loads(text) if isinstance(result_sel, str) else (result_sel if isinstance(result_sel, dict) else json.loads(str(result_sel)))
-                sel = data.get("selected") if isinstance(data, dict) else None
-                if isinstance(sel, dict):
-                    for k, v in sel.items():
-                        if isinstance(k, str) and isinstance(v, list):
-                            selected[k] = [str(x) for x in v]
-            except Exception:
-                selected = {}
+            result = single_crew.kickoff()
 
-            # Create selected ReliefType nodes by ID lookup
+            # Parse result
+            data = self.parse_crew_result(result)
+            results_list = data.get("results") if isinstance(data, dict) else None
+            if not isinstance(results_list, list):
+                results_list = []
+
             next_idx = 1 + len(self.state.nodes_accumulated or [])
-            for lbl in ["ReliefType"]:
-                relief_type_ids = selected.get(lbl) or []
-                props_meta = (self.state.props_meta_by_label or {}).get(lbl, {})
-                allowed_keys = [k for k in (props_meta.keys() if isinstance(props_meta, dict) else []) if isinstance(k, str)]
-                catalog_rows = catalogs.get(lbl, [])
+            reliefs_created = 0
+            edges_created = 0
+            
+            # Process each ruling's relief
+            for entry in results_list:
+                if not isinstance(entry, dict):
+                    continue
                 
-                # Lookup catalog entry by relief_type_id
-                def find_catalog_by_id(relief_type_id: str) -> Dict[str, Any] | None:
-                    for row in catalog_rows:
+                ruling_temp_id = entry.get("ruling_temp_id")
+                relief_props = entry.get("relief")
+                relief_status = entry.get("relief_status")  # For RESULTS_IN relationship property
+                relief_type_id = entry.get("relief_type_id")
+                
+                if not isinstance(ruling_temp_id, str):
+                    logger.warning(f"Phase 7: ruling_temp_id is not a string")
+                    continue
+                
+                if not isinstance(relief_props, dict):
+                    logger.warning(f"Phase 7: Relief properties for ruling {ruling_temp_id} is not a dict")
+                    continue
+                
+                # Validate Relief properties
+                relief_properties = self.validate_with_model(relief_props, relief_model)
+                
+                # Create Relief node
+                relief_temp_id = f"n{next_idx}"
+                next_idx += 1
+                relief_node = {"temp_id": relief_temp_id, "label": "Relief", "properties": relief_properties}
+                self.state.nodes_accumulated.append(relief_node)
+                reliefs_created += 1
+                
+                # Create edge: Ruling → Relief (RESULTS_IN) with relief_status property
+                rel_label_results_in = get_relationship_label_for_edge("Ruling", "Relief", self.state.rels_by_label or {})
+                if rel_label_results_in:
+                    # Validate relief_status property against schema
+                    raw_props = {"relief_status": relief_status} if isinstance(relief_status, str) else {}
+                    validated_props = self.validate_relationship_properties("Ruling", rel_label_results_in, raw_props)
+                    self.state.edges_accumulated.append({
+                        "from": ruling_temp_id,
+                        "to": relief_temp_id,
+                        "label": rel_label_results_in,
+                        "properties": validated_props
+                    })
+                    edges_created += 1
+                
+                # Find or create ReliefType node from catalog
+                if isinstance(relief_type_id, str) and relief_type_id:
+                    relief_type_catalog = catalogs.get("ReliefType", [])
+                    
+                    # Find ReliefType in catalog
+                    relief_type_entry = None
+                    for row in relief_type_catalog:
                         if isinstance(row, dict) and str(row.get("relief_type_id")) == str(relief_type_id):
-                            return row
-                    return None
-                
-                for relief_type_id in relief_type_ids:
-                    entry = find_catalog_by_id(relief_type_id)
-                    if not entry:
-                        logger.warning(f"Phase 7: ReliefType ID '{relief_type_id}' not found in catalog; skipping (can_create_new=false)")
+                            relief_type_entry = row
+                            break
+                    
+                    if not relief_type_entry:
+                        logger.warning(f"Phase 7: ReliefType ID '{relief_type_id}' not found in catalog; skipping")
                         continue
                     
-                    # Use all properties from catalog entry
-                    props: Dict[str, Any] = {}
-                    for k in allowed_keys:
-                        if entry.get(k) is not None:
-                            props[k] = entry.get(k)
-                    # Ensure ID fields are included
-                    for k, v in entry.items():
-                        if isinstance(k, str) and k.endswith("_id") and v is not None:
-                            props[k] = str(v) if not isinstance(v, (int, float, bool)) else v
-                    
-                    node = {"temp_id": f"n{next_idx}", "label": lbl, "properties": props}
-                    next_idx += 1
-                    self.state.nodes_accumulated.append(node)
-
-            # Create edges: Ruling → ReliefType
-            try:
-                def find_first_temp_id(label: str) -> Optional[str]:
+                    # Check if ReliefType node already exists in accumulated nodes
+                    relief_type_temp_id = None
                     for n in (self.state.nodes_accumulated or []):
-                        if isinstance(n, dict) and n.get("label") == label and isinstance(n.get("temp_id"), str):
-                            return n.get("temp_id")
-                    return None
-                
-                def find_all_temp_ids(label: str) -> List[str]:
-                    return [n.get("temp_id") for n in (self.state.nodes_accumulated or []) 
-                            if isinstance(n, dict) and n.get("label") == label and isinstance(n.get("temp_id"), str)]
-
-                ruling_ids = find_all_temp_ids("Ruling")
-                relief_type_ids = find_all_temp_ids("ReliefType")
-
-                rel_ruling_relief = get_relationship_label_for_edge("Ruling", "ReliefType", self.state.rels_by_label or {})
-                
-                if rel_ruling_relief and ruling_ids and relief_type_ids:
-                    existing_edges = {(e.get("from"), e.get("to"), e.get("label")) for e in (self.state.edges_accumulated or []) if isinstance(e, dict)}
-                    # Create edges from each Ruling to each selected ReliefType
-                    for r_id in ruling_ids:
-                        for rt_id in relief_type_ids:
-                            key = (r_id, rt_id, rel_ruling_relief)
-                            if key not in existing_edges:
-                                self.state.edges_accumulated.append({"from": r_id, "to": rt_id, "label": rel_ruling_relief, "properties": {}})
-                                existing_edges.add(key)
-                    logger.info(f"Phase 7: Created edges Ruling → ReliefType ({rel_ruling_relief})")
-            except Exception as e:
-                logger.warning(f"Phase 7: Failed to create edges: {e}")
+                        if isinstance(n, dict) and n.get("label") == "ReliefType":
+                            props = n.get("properties") or {}
+                            if str(props.get("relief_type_id")) == str(relief_type_id):
+                                relief_type_temp_id = n.get("temp_id")
+                                break
+                    
+                    # Create ReliefType node if it doesn't exist
+                    if not relief_type_temp_id:
+                        relief_type_temp_id = f"n{next_idx}"
+                        next_idx += 1
+                        props_meta = (self.state.props_meta_by_label or {}).get("ReliefType", {})
+                        allowed_keys = [k for k in props_meta.keys() if isinstance(k, str)]
+                        rt_props: Dict[str, Any] = {}
+                        for k in allowed_keys:
+                            if relief_type_entry.get(k) is not None:
+                                rt_props[k] = relief_type_entry.get(k)
+                        # Ensure ID fields are included
+                        for k, v in relief_type_entry.items():
+                            if isinstance(k, str) and k.endswith("_id") and v is not None:
+                                rt_props[k] = str(v) if not isinstance(v, (int, float, bool)) else v
+                        
+                        self.state.nodes_accumulated.append({"temp_id": relief_type_temp_id, "label": "ReliefType", "properties": rt_props})
+                    
+                    # Create edge: Relief → ReliefType (IS_TYPE)
+                    rel_label_is_type = get_relationship_label_for_edge("Relief", "ReliefType", self.state.rels_by_label or {})
+                    if rel_label_is_type:
+                        # Check if edge already exists
+                        existing = any(
+                            e.get("from") == relief_temp_id and e.get("to") == relief_type_temp_id and e.get("label") == rel_label_is_type
+                            for e in (self.state.edges_accumulated or []) if isinstance(e, dict)
+                        )
+                        if not existing:
+                            self.state.edges_accumulated.append({
+                                "from": relief_temp_id,
+                                "to": relief_type_temp_id,
+                                "label": rel_label_is_type,
+                                "properties": {}
+                            })
+                            edges_created += 1
 
             try:
                 nodes_after = len(self.state.nodes_accumulated or [])
                 edges_after = len(self.state.edges_accumulated or [])
-                logger.info(f"Phase 7: completed (nodes_added={max(0, nodes_after - nodes_before)}, edges_added={max(0, edges_after - edges_before)})")
+                logger.info(f"Phase 7: completed (reliefs_created={reliefs_created}, edges_created={edges_created})")
             except Exception:
-                logger.info("Phase 7: ReliefType assignment completed")
+                logger.info("Phase 7: Relief generation and ReliefType assignment completed")
             
             return {"status": "phase7_done"}
         except Exception as e:
-            logger.warning(f"Phase 7: ReliefType assignment failed: {e}")
+            logger.warning(f"Phase 7: Relief generation failed: {e}")
             return {"status": "phase7_skipped"}
 
-    @listen(phase7_assign_relief_types)
+    @listen(phase7_generate_relief_and_assign_types)
     def phase8_validate_and_repair(self, _: Dict[str, Any]) -> Dict[str, Any]:
         # Phase 8: Quick validation mode: just return the data without deep validation
         # The flow phases already enforce schema rules, so validation is mainly for catching edge cases

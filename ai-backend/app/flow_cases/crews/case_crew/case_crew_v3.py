@@ -9,31 +9,25 @@ from app.models.case_graph import CaseGraph
 @CrewBase
 class CaseCrew:
     """
-    Crew methods for case extraction flow.
+    Crew methods for case extraction flow (V3 - Production).
     
-    FLOW V2 PHASE MAPPING (case_extract_flow_v2.py):
+    PHASE MAPPING (case_extract_flow_v3.py):
     - Phase 1: Foundation (Case, Proceeding, Issue) 
-      → uses phase1_extract_agent + phase1_extract_single/multi_node_task
+      → uses phase1_extract_agent + phase1_extract_case_task / phase1_extract_proceeding_task / phase1_extract_issue_task
     - Phase 2: Forum & Jurisdiction 
-      → uses phase5_select_existing_agent/task
+      → uses phase2_select_forum_agent / phase2_select_forum_task
     - Phase 3: Parties 
-      → uses phase8_party_agent/task
-    - Phase 4: Issue Concepts (Doctrine/Policy/FactPattern) 
-      → uses phase7_issue_related_agent/task
-    - Phase 5: Holdings (NEW) 
-      → uses phase1_extract_agent + phase1_extract_single_node_task
-    - Phase 6: Ruling & Arguments (NEW) 
-      → uses phase1_extract_agent + phase1_extract_single/multi_node_task
-    - Phase 7: Laws 
-      → uses phase6_law_agent/task
-    - Phase 8: ReliefType 
-      → uses phase5_select_existing_agent/task
-    - Phase 9: Facts 
-      → uses phase2_extract_agent + phase2_extract_facts_task
-    - Phase 10: Evidence & Witnesses 
-      → uses phase2_extract_agent + phase3_extract_supports_task
-    
-    Note: Method names reflect original phase numbers for backward compatibility.
+      → uses phase8_party_agent / phase8_party_task
+    - Phase 4: Ruling extraction
+      → uses phase1_extract_agent + phase4_ruling_per_issue_task
+    - Phase 5: Arguments and Laws
+      → uses phase1_extract_agent + phase5_arguments_and_laws_task
+    - Phase 6: Concepts (Doctrine/Policy/FactPattern)
+      → uses phase1_extract_agent + phase6_argument_concepts_task
+    - Phase 7: Relief and ReliefType
+      → uses phase1_extract_agent + phase7_relief_and_type_task
+    - Phase 8: Validation
+      → validation only, no crew tasks needed
     """
     agents: List[BaseAgent]
     tasks: List[Task]
@@ -56,12 +50,7 @@ class CaseCrew:
     @agent
     def phase1_extract_agent(self) -> Agent:
         """
-        General-purpose extraction agent.
-        
-        Used in Flow V2 by:
-        - Phase 1: Case, Proceeding, Issue extraction
-        - Phase 5: Holdings extraction (NEW)
-        - Phase 6: Ruling & Arguments extraction (NEW)
+        General-purpose extraction agent for Phase 1 and other extraction phases.
         """
         llm = LLM(model=self.LLM_MODEL, temperature=self.LLM_TEMPERATURE)
         return Agent(
@@ -74,10 +63,6 @@ class CaseCrew:
     def phase2_extract_agent(self) -> Agent:
         """
         Relationship extraction agent.
-        
-        Used in Flow V2 by:
-        - Phase 9: Facts extraction
-        - Phase 10: Evidence & Witnesses extraction
         """
         llm = LLM(model=self.LLM_MODEL, temperature=self.LLM_TEMPERATURE)
         return Agent(
@@ -86,80 +71,84 @@ class CaseCrew:
             llm=llm
         )
 
-
-    # Dynamic, per-node extraction task with per-label instructions/examples and schema props
-    def phase1_extract_single_node_task(self, output_model: Type[BaseModel]) -> Task:
+    def phase1_extract_case_task(self, output_model: Type[BaseModel]) -> Task:
         """
-        Extract a single node instance with validated properties.
+        Extract Case node with validated properties.
         
-        Used in Flow V2 by:
-        - Phase 1: Case, Proceeding (single instances)
-        - Phase 5: Holdings (one per Issue)
-        - Phase 6: Ruling (one per Holding, with dedup)
-        
-        Replacements expected: INSTRUCTIONS, LABEL, PROPS_SPEC_TEXT, EXAMPLES_JSON, CASE_TEXT
+        Replacements expected: PROPS_SPEC_TEXT, EXAMPLES_JSON, CASE_TEXT
         """
-        cfg = self.tasks_config['phase1_extract_single_node_task'].copy()  # type: ignore[index]
+        task_spec = self.tasks_config['phase1_extract_case_task'].copy()  # type: ignore[index]
         desc = (
-            cfg['description']
+            task_spec['description']
             .replace('{FILENAME}', self.filename)
             .replace('{FILEPATH}', self.file_path)
         )
         for k, v in self.replacements.items():
             desc = desc.replace('{' + str(k) + '}', str(v))
-        cfg['description'] = desc
+        task_spec['description'] = desc
         return Task(
-            config=cfg,
-            agent=self.phase1_extract_agent(),
+            config=task_spec,
             output_pydantic=output_model
         )
 
-    # Dynamic, multi-node extraction task for labels that can occur multiple times
-    def phase1_extract_multi_nodes_task(self, output_model: Type[BaseModel]) -> Task:
+    def phase1_extract_proceeding_task(self, output_model: Type[BaseModel]) -> Task:
         """
-        Extract multiple node instances (list) with validated properties.
+        Extract Proceeding node with validated properties.
         
-        Used in Flow V2 by:
-        - Phase 1: Issue (multiple per case)
-        - Phase 6: Arguments (multiple per Holding)
-        
-        Replacements expected: INSTRUCTIONS, LABEL, PROPS_SPEC_TEXT, EXAMPLES_JSON, CASE_TEXT
+        Replacements expected: PROPS_SPEC_TEXT, EXAMPLES_JSON, CASE_TEXT
         """
-        cfg = self.tasks_config['phase1_extract_multi_nodes_task'].copy()  # type: ignore[index]
+        task_spec = self.tasks_config['phase1_extract_proceeding_task'].copy()  # type: ignore[index]
         desc = (
-            cfg['description']
+            task_spec['description']
             .replace('{FILENAME}', self.filename)
             .replace('{FILEPATH}', self.file_path)
         )
         for k, v in self.replacements.items():
             desc = desc.replace('{' + str(k) + '}', str(v))
-        cfg['description'] = desc
+        task_spec['description'] = desc
         return Task(
-            config=cfg,
-            agent=self.phase1_extract_agent(),
+            config=task_spec,
+            output_pydantic=output_model
+        )
+
+    def phase1_extract_issue_task(self, output_model: Type[BaseModel]) -> Task:
+        """
+        Extract multiple Issue nodes with validated properties.
+        
+        Replacements expected: PROPS_SPEC_TEXT, EXAMPLES_JSON, CASE_TEXT
+        """
+        task_spec = self.tasks_config['phase1_extract_issue_task'].copy()  # type: ignore[index]
+        desc = (
+            task_spec['description']
+            .replace('{FILENAME}', self.filename)
+            .replace('{FILEPATH}', self.file_path)
+        )
+        for k, v in self.replacements.items():
+            desc = desc.replace('{' + str(k) + '}', str(v))
+        task_spec['description'] = desc
+        return Task(
+            config=task_spec,
             output_pydantic=output_model
         )
 
     # Dynamic Phase 2 task for generating multiple Fact objects (no pydantic binding on Task)
     def phase2_extract_facts_task(self, description: str) -> Task:
-        cfg = {
+        task_spec = {
             "description": description,
             "expected_output": "A JSON object { facts: [ { ...properties... }, ... ] }"
         }
         return Task(
-            config=cfg,
-            agent=self.phase2_extract_agent(),
+            config=task_spec,
         )
 
     # Dynamic Phase 3 task for generating Witnesses and Evidence for a given Fact
     def phase3_extract_supports_task(self, description: str) -> Task:
-        cfg = {
+        task_spec = {
             "description": description,
             "expected_output": "A JSON object { witnesses: [ { node: {...}, support_strength: number } ], evidence: [ { node: {...}, support_strength: number } ] }"
         }
         return Task(
-            config=cfg,
-            agent=self.phase2_extract_agent(),
+            config=task_spec,
         )
     
     # Phase 5: Batch ruling and arguments extraction
@@ -171,25 +160,25 @@ class CaseCrew:
         Replacements expected: CASE_TEXT, ISSUES_JSON, RULING_INSTRUCTIONS, RULING_EXAMPLES_JSON,
                                RULING_SPEC_TEXT, ARGUMENT_INSTRUCTIONS, ARGUMENT_EXAMPLES_JSON, ARGUMENT_SPEC_TEXT
         """
-        cfg = self.tasks_config['phase5_batch_ruling_arguments_task'].copy()  # type: ignore[index]
+        task_spec = self.tasks_config['phase5_batch_ruling_arguments_task'].copy()  # type: ignore[index]
         desc = (
-            cfg['description']
+            task_spec['description']
             .replace('{FILENAME}', self.filename)
             .replace('{FILEPATH}', self.file_path)
         )
         for k, v in self.replacements.items():
             desc = desc.replace('{' + str(k) + '}', str(v))
-        cfg['description'] = desc
+        task_spec['description'] = desc
         return Task(
-            config=cfg,
-            agent=self.phase1_extract_agent(),
+            config=task_spec,
             output_pydantic=output_model
         )
 
     
 
     @agent
-    def phase5_select_existing_agent(self) -> Agent:
+    def phase2_select_forum_agent(self) -> Agent:
+        """Agent for Phase 2: selecting Forum from catalog based on case text"""
         llm = LLM(model=self.LLM_MODEL, temperature=self.LLM_TEMPERATURE)
         return Agent(
             config=self.agents_config['phase5_select_existing_agent'],  # type: ignore[index]
@@ -198,19 +187,47 @@ class CaseCrew:
         )
 
     @task
-    def phase5_select_existing_task(self) -> Task:
-        cfg = self.tasks_config['phase5_select_existing_task'].copy()  # type: ignore[index]
+    def phase2_select_forum_task(self, output_model: Type[BaseModel]) -> Task:
+        """Task for Phase 2: select Forum from catalog"""
+        task_spec = self.tasks_config['phase2_select_forum_task'].copy()  # type: ignore[index]
         desc = (
-            cfg['description']
+            task_spec['description']
             .replace('{FILENAME}', self.filename)
             .replace('{FILEPATH}', self.file_path)
         )
         for k, v in self.replacements.items():
             desc = desc.replace('{' + str(k) + '}', str(v))
-        cfg['description'] = desc
+        task_spec['description'] = desc
         return Task(
-            config=cfg,
-            agent=self.phase5_select_existing_agent(),
+            config=task_spec,
+            output_pydantic=output_model
+        )
+
+    @agent
+    def phase7_select_relief_type_agent(self) -> Agent:
+        """Agent for Phase 7: selecting ReliefType from catalog based on ruling"""
+        llm = LLM(model=self.LLM_MODEL, temperature=self.LLM_TEMPERATURE)
+        return Agent(
+            config=self.agents_config['phase5_select_existing_agent'],  # type: ignore[index]
+            tools=[],
+            llm=llm
+        )
+
+    @task
+    def phase7_select_relief_type_task(self, output_model: Type[BaseModel]) -> Task:
+        """Task for Phase 7: select ReliefType from catalog"""
+        task_spec = self.tasks_config['phase7_select_relief_type_task'].copy()  # type: ignore[index]
+        desc = (
+            task_spec['description']
+            .replace('{FILENAME}', self.filename)
+            .replace('{FILEPATH}', self.file_path)
+        )
+        for k, v in self.replacements.items():
+            desc = desc.replace('{' + str(k) + '}', str(v))
+        task_spec['description'] = desc
+        return Task(
+            config=task_spec,
+            output_pydantic=output_model
         )
 
     @agent
@@ -224,18 +241,17 @@ class CaseCrew:
 
     @task
     def phase3_relationships_task(self) -> Task:
-        cfg = self.tasks_config['phase3_relationships_task'].copy()  # type: ignore[index]
+        task_spec = self.tasks_config['phase3_relationships_task'].copy()  # type: ignore[index]
         desc = (
-            cfg['description']
+            task_spec['description']
             .replace('{FILENAME}', self.filename)
             .replace('{FILEPATH}', self.file_path)
         )
         for k, v in self.replacements.items():
             desc = desc.replace('{' + str(k) + '}', str(v))
-        cfg['description'] = desc
+        task_spec['description'] = desc
         return Task(
-            config=cfg,
-            agent=self.phase3_relationships_agent(),
+            config=task_spec,
         )
 
     @agent
@@ -249,18 +265,17 @@ class CaseCrew:
 
     @task
     def phase6_law_task(self) -> Task:
-        cfg = self.tasks_config['phase6_law_task'].copy()  # type: ignore[index]
+        task_spec = self.tasks_config['phase6_law_task'].copy()  # type: ignore[index]
         desc = (
-            cfg['description']
+            task_spec['description']
             .replace('{FILENAME}', self.filename)
             .replace('{FILEPATH}', self.file_path)
         )
         for k, v in self.replacements.items():
             desc = desc.replace('{' + str(k) + '}', str(v))
-        cfg['description'] = desc
+        task_spec['description'] = desc
         return Task(
-            config=cfg,
-            agent=self.phase6_law_agent(),
+            config=task_spec,
         )
 
     @agent
@@ -274,18 +289,17 @@ class CaseCrew:
 
     @task
     def phase7_issue_related_task(self) -> Task:
-        cfg = self.tasks_config['phase7_issue_related_task'].copy()  # type: ignore[index]
+        task_spec = self.tasks_config['phase7_issue_related_task'].copy()  # type: ignore[index]
         desc = (
-            cfg['description']
+            task_spec['description']
             .replace('{FILENAME}', self.filename)
             .replace('{FILEPATH}', self.file_path)
         )
         for k, v in self.replacements.items():
             desc = desc.replace('{' + str(k) + '}', str(v))
-        cfg['description'] = desc
+        task_spec['description'] = desc
         return Task(
-            config=cfg,
-            agent=self.phase7_issue_related_agent(),
+            config=task_spec,
         )
 
     @agent
@@ -299,18 +313,17 @@ class CaseCrew:
 
     @task
     def phase8_party_task(self) -> Task:
-        cfg = self.tasks_config['phase8_party_task'].copy()  # type: ignore[index]
+        task_spec = self.tasks_config['phase8_party_task'].copy()  # type: ignore[index]
         desc = (
-            cfg['description']
+            task_spec['description']
             .replace('{FILENAME}', self.filename)
             .replace('{FILEPATH}', self.file_path)
         )
         for k, v in self.replacements.items():
             desc = desc.replace('{' + str(k) + '}', str(v))
-        cfg['description'] = desc
+        task_spec['description'] = desc
         return Task(
-            config=cfg,
-            agent=self.phase8_party_agent(),
+            config=task_spec,
         )
 
     

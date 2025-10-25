@@ -3,10 +3,11 @@
     "label": "Domain",
     "case_unique": false,
     "can_create_new": false,
+    "ai_ignore": true,
     "properties": {
       "domain_upload_code": { "type": "STRING", "ui": { "hidden": true } },
       "domain_id": { "type": "STRING", "ui": { "hidden": true } },
-      "name": { "type": "STRING", "ui": { "order": 1, "input": "text", "required": true, "label": "Name" } }
+      "name": { "type": "STRING", "ui": { "order": 1, "input": "select", "options": ["Free Speech", "Antitrust"], "required": true, "label": "Name" } }
     },
     "relationships": {
       "CONTAINS": {
