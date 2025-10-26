@@ -50,7 +50,7 @@ phase7_issue_related_agent:
     a mapping from Issue temp_ids to indexes of selected/generated items.
 
 
-phase8_party_agent:
+phase9_party_agent:
   role: "Party Extractor/Deduplicator"
   goal: "Identify all parties in the case and deduplicate against existing Party catalog; assign roles to Case."
   backstory: |

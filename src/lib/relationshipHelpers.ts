@@ -27,14 +27,14 @@ export const getCanCreateNew = (nodeType: string, schema: Schema | null): boolea
 }
 
 /**
- * Get cardinality from views.json structure config
+ * Get cardinality from views_v3.json structure config
  */
 export const getCardinality = (config: any): 'single' | 'multiple' => {
   return config?.single === true ? 'single' : 'multiple'
 }
 
 /**
- * Get direction from views.json structure config
+ * Get direction from views_v3.json structure config
  */
 export const getDirection = (config: any): 'outgoing' | 'incoming' => {
   return config?.direction === 'incoming' ? 'incoming' : 'outgoing'

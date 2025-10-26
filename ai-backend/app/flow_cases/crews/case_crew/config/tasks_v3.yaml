@@ -1,7 +1,5 @@
 phase1_extract_case_task:
   description: |
-    Analyse the document text (provided below) and extract the Case information as described.
-
     CRITICAL: Extract information ONLY from the provided case text. Do not use general knowledge, external information, or assumptions. If information is not explicitly or implicitly present in the text, do not include it.
 
     INSTRUCTIONS:
@@ -19,8 +17,6 @@ phase1_extract_case_task:
     - For required properties, provide your best inference from the text if not explicitly stated.
     - Enforce types, enums, and date formats exactly as specified.
     - Use facts present in the text; do not invent or assume.
-    - Include the official case name as the name property.
-    - Use a concise case synopsis for summary
 
     EXAMPLES (illustrative, may be partial):
     {EXAMPLES_JSON}
@@ -50,7 +46,6 @@ phase1_extract_proceeding_task:
     - For required properties, provide your best inference from the text if not explicitly stated.
     - Enforce types, enums, and date formats exactly as specified.
     - Use facts present in the text; do not invent or assume.
-    - Do not output temp_id or label here. Properties only.
 
     EXAMPLES (illustrative, may be partial):
     {EXAMPLES_JSON}
@@ -68,13 +63,20 @@ phase1_extract_issue_task:
     INSTRUCTIONS:
     {INSTRUCTIONS}
 
-    Return a JSON object: { items: [ { ...properties... }, ... ] }.
-    Each item must match the Issue schema properties exactly; include required properties; enforce types/enums/dates.
-    Extract ONLY from the case text provided - do not rely on general knowledge or make assumptions.
-    Do not include temp_id or label in the items.
+    Be comprehensive; do not miss any information that IS in the text.
+    Return ONLY JSON matching the Issue schema properties:
 
     SCHEMA PROPERTIES for 'Issue':
     {PROPS_SPEC_TEXT}
+
+    Return a JSON object: { items: [ { ...properties... }, ... ] }.
+
+    Guidance:
+    - Extract ONLY from the case text provided - do not rely on general knowledge.
+    - Include all properties you can confidently extract from the text.
+    - For required properties, provide your best inference from the text if not explicitly stated.
+    - Enforce types, enums, and date formats exactly as specified.
+    - Use facts present in the text; do not invent or assume.
 
     EXAMPLES (illustrative, may be partial):
     {EXAMPLES_JSON}
@@ -85,7 +87,7 @@ phase1_extract_issue_task:
 
 phase2_select_forum_task:
   description: |
-    Phase 2: Select a matching Forum from the provided catalog based on the case text, if any.
+    Phase 2: Select a matching Forum, if any, from the provided forum catalog based on the case text.
 
     CRITICAL: Base your selection ONLY on the provided CASE_TEXT. Do not use general knowledge or external information. Select only what is explicitly or implicitly supported by the text.
 
@@ -95,20 +97,12 @@ phase2_select_forum_task:
     FORUM EXAMPLES:
     {FORUM_EXAMPLES_JSON}
 
-    Inputs will be provided in the instructions as JSON blocks:
-    - CASE_TEXT: raw case text
-    - CATALOGS: { "Forum": [ { forum_id, name, description?, ...other fields... }, ... ] }
-
-    Steps:
-    1) Based on CASE_TEXT, identify which Forum (court/tribunal) heard this case, if any.
-    2) Select a matching Forum from the Forum catalog. If no matching Forum is found.
-    3) Return JSON as { "selected": { "Forum": [forum_id] } } where forum_id is from the catalog. If no matching Forum is found, return If no match found: [forum_id] is an empty array (e.g., []).
-
-    Constraints (STRICTLY ENFORCED):
+    Guidance:
     - YOU MUST ONLY RETURN a forum_id VALUE THAT EXISTS IN THE PROVIDED CATALOG.
+    - Return JSON as { "selected": { "Forum": [forum_id] } } where forum_id is from the catalog.
+    - If no matching Forum is found, return If no match found: [forum_id] is an empty array (e.g., [])
     - DO NOT create, invent, or return any other values.
     - Return ONLY the ID field values as they appear in the catalog entries.
-    - If no matching Forum is found, return an empty array [] for the Forum key.
     - NEVER use general knowledge - ONLY select from the catalog IDs provided below.
 
     CASE_TEXT:
@@ -118,36 +112,33 @@ phase2_select_forum_task:
     {CATALOGS_JSON}
   expected_output: "A JSON object { selected: { Forum: [forum_id] } } where forum_id is from the catalog."
 
-phase3_relationships_task:
-  description: |
-    Assign relationships between nodes following the provided schema mappings strictly.
-
-    Inputs will be provided as JSON blocks:
-    - SCHEMA_SPEC: text with mapping lines (Label and Relationships)
-    - NODES_JSON: { "nodes": [ {temp_id, label, properties}, ... ] }
-
-    Steps:
-    1) For each source node, consult allowed relationships for its label.
-    2) Create edges to target nodes whose labels match the allowed target.
-    3) Cap to a small number per relation per source to avoid explosion.
-    4) Return JSON as { "edges": [ {from, to, label, properties}, ... ] }.
-
-    Constraints:
-    - 'from' and 'to' must be existing temp_id values.
-    - Only use relationship labels allowed by the schema mapping.
-
-    SCHEMA SPEC:
-    {SCHEMA_SPEC_TEXT}
-
-    NODES_JSON:
-    {NODES_JSON}
-  expected_output: "A JSON object { edges: [...] } with valid edges."
-
 phase4_ruling_per_issue_task:
   description: |
-    Phase 4: Read the document text and for each Issue, identify the Ruling (court's disposition).
+    Read the document text and for each Issue, identify the Ruling (court's disposition).
 
     CRITICAL: Extract information ONLY from the provided case text. Do not use general knowledge or external information.
+
+    RULING INSTRUCTIONS:
+    {RULING_INSTRUCTIONS}
+
+    RULING EXAMPLES (illustrative, may be partial). Note that ruling examples contain example issues that are paired with the ruling. 
+    {RULING_EXAMPLES_JSON}
+
+    Guidance:
+    - The ISSUES_JSON above contains existing Issue nodes with their temp_id values.
+    - IMPORTANT: The examples below show full issue objects for context only. Your output should only reference issues by their temp_id, not reproduce the full issue object.
+    - For each issue, identify the Ruling (court's disposition/decision on that issue) from the case text.
+    - A single ruling may apply to multiple issues if they share the same disposition.
+    - For each issue's ruling, identify which party the ruling favored (in_favor: plaintiff|defendant|appellant|appellee|petitioner|respondent).
+    - Return JSON as: { "rulings": [ { "issue_temp_id": string, "ruling": {...properties...}, "in_favor": string }, ... ] }.
+    - Use the temp_id from the provided ISSUES_JSON for "issue_temp_id" - do not generate new temp_ids.
+    - The "ruling" object should match Ruling schema properties exactly.
+    - Enforce types, enums, and date formats exactly as specified.
+    - The "in_favor" field is separate from the ruling properties, keep it separate in the JSON object.
+    - Extract from case text only; do not invent information.
+
+    RULING SCHEMA:
+    {RULING_SPEC_TEXT}
 
     CASE_TEXT:
     {CASE_TEXT}
@@ -155,87 +146,119 @@ phase4_ruling_per_issue_task:
     ISSUES_JSON:
     {ISSUES_JSON}
 
-    Guidance:
-    - For each issue, identify the Ruling (court's disposition/decision on that issue).
-    - A single ruling may apply to multiple issues if they share the same disposition.
-    - For each issue's ruling, identify which party the ruling favored (in_favor: plaintiff|defendant|appellant|appellee|petitioner|respondent).
-    - Return JSON as: { "rulings": [ { "issue_temp_id": string, "ruling": <Ruling properties>, "in_favor": string }, ... ] }.
-    - Match Ruling schema properties exactly (label, type, text, ratio, summary).
-    - Extract from case text only; do not invent information.
-
-    RULING INSTRUCTIONS:
-    {RULING_INSTRUCTIONS}
-
-    RULING EXAMPLES:
-    {RULING_EXAMPLES_JSON}
-
-    RULING SCHEMA:
-    {RULING_SPEC_TEXT}
   expected_output: "A JSON object { rulings: [ { issue_temp_id: string, ruling: {...}, in_favor: string }, ... ] }"
 
-phase5_arguments_and_laws_task:
+phase5_arguments_per_ruling_task:
   description: |
-    Phase 5: For each Ruling, extract ALL Arguments evaluated in that ruling and select the Laws the ruling relies upon.
+    For each Ruling, extract ALL Arguments evaluated in that ruling.
 
     CRITICAL: Extract information ONLY from the provided case text. Do not use general legal knowledge.
+
+    IMPORTANT: The RULING_EXAMPLES_JSON below shows full ruling objects paired with their arguments for context only. Your output should only reference rulings by their temp_id from RULINGS_JSON, not reproduce the full ruling object.
+
+    ARGUMENT INSTRUCTIONS:
+    {ARGUMENT_INSTRUCTIONS}
+
+    RULING_EXAMPLES_JSON (illustrative, showing arguments paired with rulings for context):
+    {ARGUMENT_EXAMPLES_JSON}
+
+    Guidance:
+    - For each argument, indicate:
+      * properties: all Argument schema properties (text, raised_by, label, etc.)
+      * status: whether it was "Accepted" or "Rejected" by the ruling
+    - Note: The 'status' field is NOT a property of the Argument node itself. Keep it separate in the JSON object.
+    - Return JSON as: { "results": [ { "ruling_temp_id": string, "arguments": [ { properties: <Argument properties>, status: "Accepted"|"Rejected" }, ... ] } ] }.
+    - Extract from case text only; do not invent arguments.
+
+    ARGUMENT SCHEMA:
+    {ARGUMENT_SPEC_TEXT}
 
     CASE_TEXT:
     {CASE_TEXT}
 
     RULINGS_JSON:
     {RULINGS_JSON}
+  expected_output: "A JSON object { results: [ { ruling_temp_id: string, arguments: [{ properties: {...}, status: string }, ...] } ] }"
+
+phase6_laws_per_ruling_task:
+  description: |
+    For each Ruling, select the Law(s) from the catalog that the ruling explicitly relies upon or cites.
+
+    CRITICAL: Select laws ONLY based on what is explicitly referenced in the case text. Do not use general legal knowledge.
+
+    RULINGS_JSON:
+    {RULINGS_JSON}
 
     Guidance:
-    - For each ruling, extract ALL principal arguments advanced by any party that were evaluated in that ruling.
-    - For each argument, indicate:
-      * properties: all Argument schema properties (text, raised_by)
-      * status: whether it was "Supported" or "Rejected" by the ruling
-    - For each ruling, select the Law(s) from the catalog that the ruling explicitly relies upon or cites.
-    - Return JSON as: { "results": [ { "ruling_temp_id": string, "arguments": [ { properties: <Argument properties>, status: "Supported"|"Rejected" }, ... ], "law_ids": [law_id1, law_id2, ...] } ] }.
+    - For each ruling, identify the Law(s) from the catalog that the ruling explicitly relies upon or cites.
+    - Return JSON as: { "results": [ { "ruling_temp_id": string, "law_ids": [law_id1, law_id2, ...] } ] }.
     - For law_ids, ONLY use law_id values that exist in the provided catalog. If no laws are referenced, return empty array [].
-    - Extract from case text only; do not invent arguments or laws.
-
-    ARGUMENT INSTRUCTIONS:
-    {ARGUMENT_INSTRUCTIONS}
-
-    ARGUMENT EXAMPLES:
-    {ARGUMENT_EXAMPLES_JSON}
-
-    ARGUMENT SCHEMA:
-    {ARGUMENT_SPEC_TEXT}
+    - Extract from case text only; do not invent laws.
 
     LAW SCHEMA:
     {LAW_SPEC_TEXT}
 
     LAW CATALOG (select law_ids from here):
     {CATALOGS_JSON}
-  expected_output: "A JSON object { results: [ { ruling_temp_id: string, arguments: [{ properties: {...}, status: string }, ...], law_ids: [...] } ] }"
+
+    CASE_TEXT:
+    {CASE_TEXT}
+  expected_output: "A JSON object { results: [ { ruling_temp_id: string, law_ids: [...] } ] }"
 
 
-phase6_argument_concepts_task:
+phase7_argument_concepts_task:
   description: |
-    Phase 6: For each Argument, select the Doctrine(s), Policy(ies), and FactPattern(s) that relate to that argument.
-
-    CRITICAL: Base your selection ONLY on the argument properties extracted from the case text. Only select concepts that are explicitly or implicitly referenced in the argument text. Do not use general legal knowledge.
+    You have access to an argument json object that has been created from the case text.
 
     ARGUMENTS_JSON:
     {ARGUMENTS_JSON}
 
-    CATALOGS (select IDs from these):
+    You also have access to a catalog of Doctrine, Policy, and FactPattern concepts.
+
+    CATALOGS (prefer selecting IDs from these):
     {CATALOGS_JSON}
 
-    Guidance:
-    - For each argument, identify which Doctrine(s), Policy(ies), and/or FactPattern(s) from the catalogs relate to that argument.
-    - It's OK if an argument doesn't relate to any doctrine, policy, or fact pattern - in that case, use empty arrays [].
-    - Only select concepts that are referenced in or relevant to the argument text itself.
-    - Return JSON as: { "argument_map": [ { "argument_temp_id": string, "doctrine_ids": [doctrine_id1, ...], "policy_ids": [policy_id1, ...], "factpattern_ids": [factpattern_id1, ...] }, ... ] }.
+    Instructions:
+    - For each Argument in the json, select or create the relevant Doctrine(s), Policy(ies), and FactPattern(s) that relate to that argument. 
+    - CRITICAL: Base your work ONLY on the ARGUMENTS_JSON. 
+    - Only select or create concepts that are explicitly or implicitly referenced in the argument text.
+    - For each argument, identify which Doctrine(s), Policy(ies), and/or FactPattern(s) relate to that argument, if any.
+    - PREFER SELECTION FIRST: Always check the catalog for existing concepts that match, if any.
+    - Only create new concepts if there is need for new concepts based on the argument text.
+    - It's OK if an argument doesn't relate to any doctrine, policy, or fact pattern - in that case, use empty arrays []. Only assign concepts if there is a good match.
+    - An argument can have multiple doctrines, policies, or fact patterns if relevant.
+    
+    Return JSON format:
+    {
+      "argument_map": [
+        {
+          "argument_temp_id": string,
+          "doctrine_ids": [doctrine_id1, ...],  // IDs from catalog
+          "policy_ids": [policy_id1, ...],      // IDs from catalog
+          "factpattern_ids": [factpattern_id1, ...],  // IDs from catalog
+          "new_doctrines": [{"properties": {...}}, ...],  // Only if no catalog match
+          "new_policies": [{"properties": {...}}, ...],   // Only if no catalog match
+          "new_factpatterns": [{"properties": {...}}, ...]  // Only if no catalog match
+        }
+      ]
+    }
+
+    Selection vs Creation Decision:
+    - ALWAYS prefer selecting from catalog when a reasonable match exists.
+    - ONLY create new concepts when the argument references a concept that clearly doesn't exist in the catalog.
+    - If uncertain, prefer selection over creation.
+    - If uncertain about whether to create a new concept, don't create new concepts.
+    - For newly created nodes, include only the properties defined in the schema
 
     Constraints (STRICTLY ENFORCED):
-    - YOU MUST ONLY RETURN IDs THAT EXIST IN THE PROVIDED CATALOGS
-    - DO NOT create, invent, or return any other values
-    - Return ONLY the ID field values as they appear in the catalog entries
-    - If no appropriate match exists in a catalog, use an empty array [] for that concept type
-    - NEVER use general legal knowledge - ONLY select from the catalog IDs provided
+    - For selected IDs: ONLY return IDs that exist in the provided catalogs.
+    - For new nodes: ensure properties match the schema definitions provided.
+    - Return ONLY the ID field values as they appear in the catalog entries (e.g., doctrine_id, policy_id, factpattern_id)
+    - CRITICAL: When selecting from catalog, use the actual ID field value (e.g., "d12345"), NOT the name field (e.g., NOT "Rule of Reason")
+    - CRITICAL: For new concepts, put them in the new_doctrines/new_policies/new_factpatterns arrays, NOT in the doctrine_ids/policy_ids/factpattern_ids arrays
+    - If you cannot find an exact ID match in the catalog, either use new_doctrines/new_policies/new_factpatterns or leave the IDs array empty
+    - NEVER invent IDs (UUIDs, names, etc.) - only use IDs that literally appear in the catalog
+    - NEVER use general legal knowledge - base everything on the argument text and case context
 
     DOCTRINE INSTRUCTIONS:
     {DOCTRINE_INSTRUCTIONS}
@@ -257,12 +280,12 @@ phase6_argument_concepts_task:
 
     SCHEMA_SPEC:
     {SCHEMA_SPEC_TEXT}
-  expected_output: "A JSON object { argument_map: [ { argument_temp_id: string, doctrine_ids: [...], policy_ids: [...], factpattern_ids: [...] }, ... ] }"
+  expected_output: "A JSON object { argument_map: [ { argument_temp_id: string, doctrine_ids: [...], policy_ids: [...], factpattern_ids: [...], new_doctrines: [...], new_policies: [...], new_factpatterns: [...] }, ... ] }"
 
 
-phase7_relief_and_type_task:
+phase8_relief_and_type_task:
   description: |
-    Phase 7: For each Ruling, extract the Relief (remedy/outcome awarded) and select its ReliefType from the catalog.
+    Phase 8: For each Ruling, extract the Relief (remedy/outcome awarded) and select its ReliefType from the catalog.
 
     CRITICAL: Extract information ONLY from the provided case text. Do not use general knowledge or external information.
 
@@ -306,9 +329,9 @@ phase7_relief_and_type_task:
   expected_output: "A JSON object { results: [ { ruling_temp_id: string, relief: {...}, relief_status: string, relief_type_id: string }, ... ] }"
 
 
-phase8_party_task:
+phase9_party_task:
   description: |
-    Phase 8: Identify Parties from case text and deduplicate against existing Party catalog; output roles for Case relationships.
+    Phase 9: Identify Parties from case text and deduplicate against existing Party catalog; output roles for Case relationships.
 
     CRITICAL: Extract parties ONLY from the provided CASE_TEXT. Do not use general knowledge or external information. Only include parties that are explicitly mentioned in the case text with their roles as stated in the text.
 

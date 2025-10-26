@@ -7,11 +7,11 @@ from typing import Any, Dict, List, Optional
 
 
 def load_views_config() -> Dict[str, Any]:
-    """Load views configuration from views.json"""
+    """Load views configuration from views_v3.json"""
     base_dir = os.path.join(os.path.dirname(__file__), "..", "..")
-    path = os.path.abspath(os.path.join(base_dir, "views.json"))
+    path = os.path.abspath(os.path.join(base_dir, "views_v3.json"))
     if not os.path.exists(path):
-        raise FileNotFoundError(f"views.json not found at {path}")
+        raise FileNotFoundError(f"views_v3.json not found at {path}")
     with open(path, "r") as f:
         return json.load(f)
 
@@ -172,16 +172,23 @@ class CaseViewBuilder:
                 nodes = self.get_nodes_by_label(label)
                 result[key] = nodes[0] if (single and nodes) else nodes
         
-        # Build holdings structure
-        holdings_config = view_config.get("holdings", {})
-        root_label = holdings_config.get("root")
-        structure = holdings_config.get("structure", {})
-        
-        holdings = self.get_nodes_by_label(root_label)
-        result["holdings"] = [
-            self.build_structured_node(h, structure)
-            for h in holdings
-        ]
+        # Build root-level structures (holdings, issues, etc.) - support any root name
+        for root_key, root_config in view_config.items():
+            if root_key in ['topLevel', 'description']:
+                continue  # Skip non-structure keys
+            
+            if not isinstance(root_config, dict):
+                continue
+            
+            root_label = root_config.get("root")
+            structure = root_config.get("structure", {})
+            
+            if root_label and structure:
+                entities = self.get_nodes_by_label(root_label)
+                result[root_key] = [
+                    self.build_structured_node(e, structure)
+                    for e in entities
+                ]
         
         return result
 

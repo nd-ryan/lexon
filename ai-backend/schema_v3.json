@@ -86,16 +86,31 @@
     }
   },
   {
-    "label": "Party",
-    "case_unique": false,
+    "label": "Issue",
+    "case_unique": true,
     "can_create_new": true,
     "properties": {
-      "party_upload_code": { "type": "STRING", "ui": { "hidden": true } },
-      "party_id": { "type": "STRING", "ui": { "hidden": true } },
-      "name": { "type": "STRING", "ui": { "order": 1, "input": "text", "required": true, "label": "Name" } },
-      "type": { "type": "STRING", "ui": { "order": 2, "input": "select", "options": ["individual", "corporation", "organization", "government"], "label": "Type", "required": true } }
+      "issue_upload_code": { "type": "STRING", "ui": { "hidden": true } },
+      "issue_id": { "type": "STRING", "ui": { "hidden": true } },
+      "label": { "type": "STRING", "ui": { "order": 1, "input": "text", "required": true, "label": "Label" } },
+      "text": { "type": "STRING", "ui": { "order": 2, "input": "textarea", "label": "Text", "required": true } },
+      "text_embedding": { "type": "LIST", "ui": { "hidden": true } },
+      "type": { "type": "STRING", "ui": { "order": 3, "input": "select", "options": ["substantive", "procedural", "constitutional"], "label": "Type", "required": true } }
     },
-    "relationships": {}
+    "relationships": {
+      "RELATES_TO_DOCTRINE": {
+        "target": "Doctrine",
+        "cardinality": "one-to-many"
+      },
+      "RELATES_TO_POLICY": {
+        "target": "Policy",
+        "cardinality": "one-to-many"
+      },
+      "RELATES_TO_FACTPATTERN": {
+        "target": "FactPattern",
+        "cardinality": "one-to-many"
+      }
+    }
   },
   {
     "label": "Forum",
@@ -123,6 +138,18 @@
       "jurisdiction_upload_code": { "type": "STRING", "ui": { "hidden": true } },
       "jurisdiction_id": { "type": "STRING", "ui": { "hidden": true } },
       "name": { "type": "STRING", "ui": { "order": 1, "input": "text", "required": true, "label": "Name" } }
+    },
+    "relationships": {}
+  },
+  {
+    "label": "Party",
+    "case_unique": false,
+    "can_create_new": true,
+    "properties": {
+      "party_upload_code": { "type": "STRING", "ui": { "hidden": true } },
+      "party_id": { "type": "STRING", "ui": { "hidden": true } },
+      "name": { "type": "STRING", "ui": { "order": 1, "input": "text", "required": true, "label": "Name" } },
+      "type": { "type": "STRING", "ui": { "order": 2, "input": "select", "options": ["individual", "corporation", "organization", "government"], "label": "Type", "required": true } }
     },
     "relationships": {}
   },
@@ -164,33 +191,6 @@
       "MODIFIES": {
         "target": "Ruling",
         "cardinality": "many-to-many"
-      }
-    }
-  },
-  {
-    "label": "Issue",
-    "case_unique": true,
-    "can_create_new": true,
-    "properties": {
-      "issue_upload_code": { "type": "STRING", "ui": { "hidden": true } },
-      "issue_id": { "type": "STRING", "ui": { "hidden": true } },
-      "label": { "type": "STRING", "ui": { "order": 1, "input": "text", "required": true, "label": "Label" } },
-      "text": { "type": "STRING", "ui": { "order": 2, "input": "textarea", "label": "Text", "required": true } },
-      "text_embedding": { "type": "LIST", "ui": { "hidden": true } },
-      "type": { "type": "STRING", "ui": { "order": 3, "input": "select", "options": ["substantive", "procedural", "constitutional"], "label": "Type", "required": true } }
-    },
-    "relationships": {
-      "RELATES_TO_DOCTRINE": {
-        "target": "Doctrine",
-        "cardinality": "one-to-many"
-      },
-      "RELATES_TO_POLICY": {
-        "target": "Policy",
-        "cardinality": "one-to-many"
-      },
-      "RELATES_TO_FACTPATTERN": {
-        "target": "FactPattern",
-        "cardinality": "one-to-many"
       }
     }
   },
@@ -250,6 +250,7 @@
     "properties": {
       "argument_upload_code": { "type": "STRING", "ui": { "hidden": true } },
       "argument_id": { "type": "STRING", "ui": { "hidden": true } },
+      "label": { "type": "STRING", "ui": { "order": 1, "input": "text", "required": true, "label": "Label" } },
       "text": { "type": "STRING", "ui": { "order": 2, "input": "textarea", "label": "Text", "required": true } },
       "text_embedding": { "type": "LIST", "ui": { "hidden": true } },
       "raised_by": { "type": "STRING", "ui": { "order": 4, "input": "select", "options": ["plaintiff", "defendant", "appellant", "appellee", "petitioner", "respondent"], "label": "Raised by", "required": true } }
@@ -259,7 +260,7 @@
         "target": "Ruling",
         "cardinality": "many-to-one",
         "properties": {
-          "status": { "type": "STRING", "ui": { "order": 1, "input": "select", "options": ["Supported", "Rejected"], "label": "Status", "required": true } }
+          "status": { "type": "STRING", "ui": { "order": 1, "input": "select", "options": ["Accepted", "Rejected"], "label": "Status", "required": true } }
         }
       },
       "RELATES_TO_DOCTRINE": {

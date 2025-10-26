@@ -1,20 +1,8 @@
 {
   "batch_sizes": {
-    "phase5_issues": 999,
-    "phase6_holdings": 999,
-    "phase9_arguments": 999,
-    "phase10_facts": 10
+    "phase7_arguments": 3
   },
   "comments": {
-    "phase5_issues": "Batch size for creating Holdings from Issues. Set to 999 to process all issues at once (typical cases have <10 issues).",
-    "phase6_holdings": "Batch size for creating Ruling and Arguments from Holdings. Set to 999 to process all holdings at once (typical cases have <10 holdings). Single call returns both Ruling and Arguments per holding.",
-    "phase9_arguments": "Batch size for extracting Facts from Arguments. Set to 999 to process all arguments at once (typical cases have <30 arguments). Lower if you see quality issues with large argument sets.",
-    "phase10_facts": "Batch size for extracting Witnesses/Evidence from Facts. Recommended: 8-12. Higher values save cost but may reduce de-dup accuracy as catalogs grow larger. Context per call: ~10k case text + batch facts + catalogs ≈ 15-25k tokens."
-  },
-  "model_overrides": {
-    "phase9_model": null,
-    "phase10_model": null,
-    "comment": "Optional: override models for specific phases (e.g., 'gemini-2.0-flash-exp'). Null uses crew default."
+    "phase7_arguments": "Batch size for assigning Doctrine/Policy/FactPattern concepts to Arguments. Set to 3 to process arguments in small batches. New concepts created in each batch are appended to catalogs before the next batch, ensuring de-duplication across batches."
   }
 }
-

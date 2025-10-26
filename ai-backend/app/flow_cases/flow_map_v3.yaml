@@ -1,17 +1,35 @@
 - label: Case
-  instructions: Identify the case metadata and produce a single Case node summarizing the decision. Include the official case name as the name, and use a concise case synopsis for summary.
+  instructions: | 
+    Analyse the document text (provided below) and extract the Case information as described.
+    Include the official case name as the name, and use a concise case synopsis for summary.
   examples:
     - name: "Abrams v. United States"
-      summary: "Defendants were convicted under the Espionage Act for distributing leaflets urging resistance to U.S. war efforts. The Supreme Court affirmed their conviction, emphasizing the wartime context. A notable dissent by Justice Holmes emphasized the importance of free speech under the First Amendment."
+      summary: |
+        Defendants were convicted under the Espionage Act for distributing leaflets urging resistance to U.S. war efforts. 
+        The Supreme Court affirmed their conviction, emphasizing the wartime context. 
+        A notable dissent by Justice Holmes emphasized the importance of free speech under the First Amendment.
     - name: "Smith v. Acme Manufacturing Co."
-      summary: "Plaintiff brought a products liability claim alleging a design defect in a hydraulic press that caused workplace injury. The appellate court affirmed part of the lower court's judgment but remanded for further proceedings on specific claims. The decision clarified the scope of manufacturer duty in design defect cases."
+      summary: |
+        Plaintiff brought a products liability claim alleging a design defect in a hydraulic press that caused workplace injury. 
+        The appellate court affirmed part of the lower court's judgment but remanded for further proceedings on specific claims. 
+        The decision clarified the scope of manufacturer duty in design defect cases.
     - name: "People v. Ortega"
-      summary: "Defendant appealed a conviction on grounds of unlawful search and seizure. The appellate court found that evidence had been obtained in violation of the Fourth Amendment and reversed the conviction. The ruling reinforced constitutional limits on warrantless searches."
+      summary: |
+        Defendant appealed a conviction on grounds of unlawful search and seizure. 
+        The appellate court found that evidence had been obtained in violation of the Fourth Amendment and reversed the conviction. 
+        The ruling reinforced constitutional limits on warrantless searches.
     - name: "Green Earth Alliance v. State Water Board"
-      summary: "An environmental advocacy group sought review of a discharge permit issued by the state agency. The court set aside the permit, holding that the agency failed to adequately consider cumulative environmental impacts as required by law. The decision underscored agencies' duty to conduct comprehensive environmental review."
+      summary: |
+        An environmental advocacy group sought review of a discharge permit issued by the state agency. 
+        The court set aside the permit, holding that the agency failed to adequately consider cumulative environmental impacts as required by law. 
+        The decision underscored agencies' duty to conduct comprehensive environmental review.
 
 - label: Proceeding
-  instructions: Extract the distinct stage of the litigation relevant to the opinion (e.g., trial, summary judgment, appeal). Use the stage, docket number, and dates to summarize what occurred.
+  instructions: |
+    Identify the primary proceeding that the case is part of.
+    Extract the distinct stage of the litigation relevant to the opinion (either district court, appeal court, or supreme court).
+    Use the stage, docket number, and dates to summarize what occurred.
+    Note that the case may reference other proceedings, but the primary proceeding is the one that the case text is primarily about.
   examples:
     - stage: district court
       docket_no: "19-CV-78231"
@@ -22,40 +40,228 @@
       filed_date: "2022-01-10"
       decided_date: "2022-11-04"
 
-- label: Argument
-  instructions: For the given Holding/Issue, extract ALL of the principal arguments advanced by any party that are relevant to this specific issue. Put the thesis or rationale in text and identify who raised it.
-  examples:
-    - text: "Federal safety standards preempt state tort claims concerning labeling."
-      raised_by: defendant
-    - text: "Persistent mold and lack of heat breached the implied warranty of habitability."
-      raised_by: plaintiff
-
-- label: Ruling
-  instructions: Summarize the court's disposition (affirmed, reversed, remanded, etc.) and capture the operative basis in text. A single ruling may apply to multiple issues/holdings in the case.
-  examples:
-    - label: "Judgment affirmed"
-      type: appeal
-      text: "Sufficient evidence supported the jury's negligence finding."
-      ratio: "The credibility determinations and evidentiary weight fell within the jury's province."
-      summary: "Appellate court affirmed the jury's finding of negligence."
-    - label: "Order reversed and remanded"
-      type: post-trial decision
-      text: "Trial court applied an incorrect standard for preliminary injunction."
-      ratio: "Preliminary injunctions require likelihood of success on the merits, not mere possibility."
-      summary: "Trial court's denial of preliminary injunction reversed for applying wrong legal standard."
-
 - label: Issue
-  instructions: Create a new Issue node for each legal question decided by the court in neutral terms. Put the concise statement in label and the fuller question in text. Each issue will have its own holding.
+  instructions: |
+    Create a new Issue node for each legal question decided by the court in neutral terms. 
+    Create a concise label for the question and the fuller question in text.
   examples:
-    - label: "Enforceability of clickwrap"
-      text: "Is an online clickwrap agreement enforceable against the user?"
+    - label: "Single Entity Question"
+      text: >
+        "Can the 32 independently owned NFL teams,
+        when licensing their intellectual property collectively through their joint venture (NFLP),
+        be considered a single entity immune from Section 1 of the Sherman Act,
+        or are they separate actors capable of conspiring?"
       type: procedural
-    - label: "Tolling by concealment"
-      text: "Was the statute of limitations tolled by fraudulent concealment?"
+    - label: "Product Market Definition - Vertical Aspects"
+      text: > 
+        "What are the relevant product markets (lines of commerce) for analyzing
+        the vertical aspects of the Brown-Kinney merger?"
       type: substantive
 
+- label: Forum
+  instructions: |
+    Select the adjudicative body where the matter was heard (court, agency, board). Use the forum name and type.
+  examples:
+    - name: "U.S. District Court for the Southern District of New York"
+      type: "federal trial court"
+    - name: "National Labor Relations Board"
+      type: "administrative agency"
+
+- label: Ruling
+  instructions: >
+    Summarize the court's final disposition (affirmed, reversed, remanded, etc.) in the label field.
+    In the text field, describe the specific legal ruling or holding that results in that disposition.
+    This is the core legal conclusion that justifies the final outcome (e.g., 'Sufficient evidence
+    supported the jury's negligence finding,' or 'Trial court applied an incorrect standard
+    for preliminary injunction'). A single ruling may apply to multiple issues/holdings in the case.
+  examples:
+    - issue: 
+        label: "Appealability - Is the District Court's Judgment a 'Final Judgment'?"
+        text: >
+          Is a District Court judgment that orders divestiture but leaves
+          the specific implementation plan to be determined later a "final
+          judgment" appealable under the Expediting Act?
+      ruling:
+        label: "The Judgment Is Final and Appealable"
+        type: appeal
+        text: >
+          The Supreme Court held that the District Court's divestiture order was a final judgment
+          because it fully resolved the substantive controversy between the parties.
+          Although the decree left certain implementation details to be worked out later,
+          those matters were purely ministerial and did not affect the finality of the decision.
+          The Court emphasized that postponing appeal until after implementation would
+          defeat the purpose of the Expediting Act's direct-review mechanism in antitrust cases.
+        ratio: >
+          A judgment is final and appealable when it conclusively determines the rights
+          of the parties, even if ministerial tasks remain, provided no substantive issues are
+          left for further adjudication.
+        summary: >
+          The Supreme Court held that the District Court's decree was a final judgment
+          properly appealable under § 2 of the Expediting Act. The Court found that despite
+          leaving implementation details to be worked out, the judgment
+          had 'sufficient indicia of finality' because all prayers for relief 
+          were decided and the remaining tasks were ministerial.
+      in_favor: "appellant"
+    - issue:
+        label: "Standard of Review - Rule of Reason vs Per Se Illegality"
+        text: >
+          Given that the NFL's collective licensing constitutes "concerted action,"
+          what legal standard should courts use to evaluate its legality—the strict
+          "per se" rule (which automatically condemns certain actions) or the more
+          flexible "Rule of Reason" (which weighs pro-competitive benefits against
+          anti-competitive harms)?
+      ruling:
+        label: "Rule of Reason Applies"
+        type: appeal
+        text: >
+          The Supreme Court held that the Rule of Reason is the appropriate standard
+          for evaluating the NFL's collective licensing arrangements. The Court reasoned
+          that per se illegality is inappropriate in this context because the teams
+          must cooperate to produce the product of professional football itself.
+          Collective activity is therefore not inherently anticompetitive, and its
+          legality depends on whether, under the Rule of Reason, the restraint's
+          pro-competitive benefits outweigh its anticompetitive effects.
+        ratio: >
+          When cooperation among competitors is necessary to create a product,
+          courts must apply the Rule of Reason rather than per se condemnation to
+          determine whether the joint activity unreasonably restrains trade.
+        summary: >
+          The Court held that the Rule of Reason is the appropriate standard.
+          It explicitly stated that per se illegality is inapplicable for this industry
+          because some level of cooperation among teams is
+          "essential if the product is to be available at all."
+      in_favor: "defendant"
+
+- label: Argument
+  instructions: |
+    For the given Ruling, extract ALL of the principal arguments advanced by any party that were evaluated in that ruling.
+    Put the thesis or rationale in text and identify who raised it.
+    Create an appropriate name for the argument in the label field.
+  examples:
+    - ruling:
+        label: "Relevant Product Markets Are Men's, Women's, and Children's Shoes"
+        type: appeal
+        favored_party: appellee
+        text: >
+          The Supreme Court upheld the District Court's finding that the relevant lines
+          of commerce for antitrust purposes are men's, women's, and children's shoes.
+          The Court accepted the District Court's application of submarket principles
+          and practical indicia, concluding that these lines constitute distinct
+          product markets.
+      arguments:
+        - label: "Submarket Analysis Framework"
+          text: >
+            The Court established a foundational test: "The outer boundaries of a product market
+            are determined by the reasonable interchangeability of use or the 
+            cross-elasticity of demand between the product itself and substitutes for it.
+            However, within this broad market, well-defined submarkets may exist which,
+            in themselves, constitute product markets for antitrust purposes."
+            The Court cited United States v. E. I. du Pont de Nemours & Co.,
+            353 U.S. 586, 593-595, as authority for this principle.
+          raised_by: defendant
+          status: Accepted
+        - label: "Practical Indicia Test"
+          text: >
+            The Court held that "boundaries of such a submarket may be determined by
+            examining such practical indicia as industry or public recognition of the
+            submarket as a separate economic entity, the product's peculiar characteristics and uses,
+            unique production facilities, distinct customers, distinct prices,
+            sensitivity to price changes, and specialized vendors."
+          raised_by: defendant
+          status: Accepted
+        - label: "Application of Practical Indicia to Shoe Lines"
+          text: >
+            "Applying these considerations to the present case, we conclude that the
+            record supports the District Court's finding that the relevant lines of
+            commerce are men's, women's, and children's shoes. These product lines are
+            recognized by the public; each line is manufactured in separate plants;
+            each has characteristics peculiar to itself rendering it generally
+            noncompetitive with the others; and each is, of course, directed toward
+            a distinct class of customers."
+          raised_by: defendant
+          status: Accepted
+        - label: "Price-Quality Divisions Within Product Lines"
+          text: >
+            Brown argued that "the predominantly medium-priced shoes which it manufactures occupy
+            a product market different from the predominantly low-priced shoes which Kinney sells."
+
+            The Court rejected this argument, stating: "But agreement with that argument would be
+            equivalent to holding that medium-priced shoes do not compete with low-priced shoes.
+            We think the District Court properly found the facts to be otherwise. It would be unrealistic
+            to accept Brown's contention that, for example, men's shoes selling below $8.99 are in a
+            different product market from those selling above $9.00.”
+
+            The Court clarified: "This is not to say, however, that 'price/quality' differences, where
+            they exist, are unimportant in analyzing a merger; they may be of importance in determining
+            the likely effect of a merger. But the boundaries of the relevant market must be drawn with
+            sufficient breadth to include the competing products of each of the merging companies and
+            to recognize competition where, in fact, competition exists. Thus we agree with the District
+            Court that in this case a further division of product lines based on 'price/quality' differences
+            would be 'unrealistic.'"
+          raised_by: Defendent
+          status: Rejected
+    - ruling:
+        label: "The Horizontal Merger Violates Section 7"
+        type: appeal
+        favored_party: appellee
+        text: >
+          The Court concluded that "the merger would substantially lessen competition in these markets,
+          citing the combined market shares of Brown and Kinney, the adverse effects on independent
+          retailers from large national chains, and the accelerated trend toward concentration
+          in the industry."
+      arguments:
+        - label: "Rejection of Purely Mathematical Test"
+          text: >
+            The Court "explicitly rejected a purely mathematical test for 'substantially to lessen
+            competition,' instead advocating for an examination of various economic and historical
+            factors within the industry context."
+          raised_by: defendant
+          status: Accepted
+        - label: "Combined Market Shares in Specific Cities"
+          text: >
+            The Court relied on evidence of the combined market shares of Brown and Kinney in various
+            cities with populations exceeding 10,000 where both companies operated retail stores.
+          raised_by: defendant
+          status: Accepted
+        - label: "Impact on Independent Retailers"
+          text: >
+            The Court considered "the adverse effects on independent retailers from large national
+            chains" as a factor supporting the finding of competitive harm.
+          raised_by: defendant
+          status: Accepted
+        - label: "Trend Toward Concentration"
+          text: >
+            The Court emphasized "the accelerated trend toward concentration in the industry" as
+            a critical factor. This reflects the 1950 amendment's purpose to halt anticompetitive
+            trends in their incipiency.
+          raised_by: defendant
+          status: Accepted
+        - label: "Market Share Percentages Too Small to Matter"
+          text: >
+            The Court implicitly rejected any argument that the combined market shares were too small
+            to constitute a substantial lessening of competition, applying its multi-factor analysis
+            rather than accepting a threshold percentage test.
+          raised_by: plaintiff
+          status: Rejected
+
+- label: Law
+  instructions:
+  examples:
+    - name: "U.C.C. § 2-314—Implied Warranty of Merchantability"
+      text: |
+        Goods must be fit for the ordinary purposes for which such goods are used.
+      type: statute
+      citation: "U.C.C. § 2-314"
+    - name: "Cal. Civ. Proc. Code § 425.16—Anti-SLAPP"
+      text: |
+        Allows early dismissal of suits arising from protected speech on public issues.
+      type: statute
+      citation: "Cal. Civ. Proc. Code § 425.16"
+
 - label: Party
-  instructions: Identify and extract all parties involved in the case, labeling them by role elsewhere. Use the entity's official name and the entity type.
+  instructions: |
+    Identify and extract all parties involved in the case, labeling them by role elsewhere. 
+    Use the entity's official name and the entity type.
   examples:
     - name: "Omega BioTech, Inc."
       type: corporation
@@ -63,37 +269,49 @@
       type: individual
 
 - label: Doctrine
-  instructions: Link each issue to the governing legal doctrine(s). Use the doctrine name and give a short, jurisdiction-neutral description.
+  instructions: |
+    A legal doctrine is an established principle, test, or rule of law that a court applies to decide an issue (e.g., 'Business Judgment Rule,' 'Daubert Standard,' 'Respondeat Superior'). This is the legal tool the court uses for its analysis.
+    Use the doctrine name and give a short, jurisdiction-neutral description.
   examples:
-    - name: "Business Judgment Rule"
-      description: "Deference to informed, good-faith board decisions absent fraud or self-dealing."
-    - name: "Daubert Standard"
-      description: "Expert testimony must be relevant and reliably grounded in scientific methodology."
+    - name: Acquiring-Acquired Mergers
+      description: >
+        By the deletion of the "acquiring-acquired" language in the original text,
+        Congress hoped to make plain that section 7 applied not only to mergers between
+        actual competitors, but also to vertical and conglomerate mergers whose effect
+        may tend to lessen competition in any line of commerce in any section of the country.
+    - name: The Copperweld Framework
+      description: >
+        The Court repeatedly invoked Copperweld Corp. v. Independence Tube Corp. for the principle
+        that § 1 embodies a "basic distinction between concerted and independent action."
+        The Court explained that Congress "treated concerted behavior more strictly than unilateral behavior"
+        because "concerted activity inherently is fraught with anticompetitive risk." (560 U.S. at 189-90).
 
 - label: Policy
-  instructions: Capture explicit policy considerations the court invokes. Use a concise name, short description, and the relevant discipline.
+  instructions: |
+    A legal policy is the underlying justifications or social/economic goals the court cites to support its reasoning, distinct from the black-letter legal rule (doctrine) itself (e.g., 'promoting finality of judgments,' 'deterring corporate misconduct,' 'protecting consumers').
+    Capture explicit policy considerations the court invokes. 
+    Use a concise name, short description, and the relevant discipline.
   examples:
-    - name: "Encouraging prompt product recalls"
-      description: "Liability rules should not deter swift disclosure of defects."
+    - name: "Prevention of Cartel Evasion"
+      description: >
+        The Court warned that if profit-sharing alone immunized joint ventures,
+        "any cartel 'could evade the antitrust laws simply by creating a joint venture"
+        to serve as the exclusive seller of their competing products.' (560 U.S. at 201-02,
+        citing Judge Sotomayor's concurrence in MLB Properties).
       discipline: economics
-    - name: "Finality of arbitration awards"
-      description: "Limiting judicial review preserves efficiency and party autonomy."
-      discipline: "law & economics"
-
-- label: Law
-  instructions: List the specific constitutional provisions, statutes, regulations, rules, contracts, or cases cited. Use the official name and include the operative text; provide the type and citation.
-  examples:
-    - name: "U.C.C. § 2-314—Implied Warranty of Merchantability"
-      text: "Goods must be fit for the ordinary purposes for which such goods are used."
-      type: statute
-      citation: "U.C.C. § 2-314"
-    - name: "Cal. Civ. Proc. Code § 425.16—Anti-SLAPP"
-      text: "Allows early dismissal of suits arising from protected speech on public issues."
-      type: statute
-      citation: "Cal. Civ. Proc. Code § 425.16"
+    - name: "Prevention of Concentration"
+      description: >
+        The Court emphasized that the 1950 amendment to Section 7 was designed to reach mergers "in their incipiency."
+        "[I]t is apparent that a keystone in the erection of a barrier to what Congress saw was the rising tide of economic concentration,
+        was its provision of authority for arresting mergers at a time when the trend to a lessening of competition in a line of commerce was still in its incipiency.
+        Congress saw the process of concentration in American business as a dynamic force; it sought to assure the Federal Trade Commission and the courts the power to brake this force at its outset and before it gathered momentum."
+      discipline: economics
 
 - label: FactPattern
-  instructions: Abstract the recurring scenario that the issue relates to. Use a succinct name and a short description.
+  instructions: |
+    A fact pattern is a recurring, generalized category of real-world events or situations that gives rise to the legal issue. Focus on the type of interaction, stripping away specific party names and dates (e.g., 'Employee termination after whistleblowing,' 'Online contract formation via clickwrap,' 'Traffic stop based on anonymous tip').
+    Abstract the recurring scenario that the issue relates to. 
+    Use a succinct name and a short description.
   examples:
     - name: "Medical Device Off-Label Promotion"
       description: "Manufacturer communications to physicians about unapproved uses."
@@ -101,27 +319,22 @@
       description: "Platform control over workers resembles employment relationship."
 
 - label: Relief
-  instructions: Extract the relief awarded or sought as defined by the schema. Use the standardized type and a short description.
+  instructions: |
+    Extract the relief awarded or sought as defined by the schema. Use the standardized type and a short description.
   examples:
     - description: "Order restraining competitor from using misappropriated trade secrets."
     - description: "Declaration that insurer owes no duty to defend under the policy."
 
 - label: ReliefType
-  instructions: Select the type(s) of relief awarded or sought as defined by the schema. Use the standardized type.
+  instructions: |
+    Select the type(s) of relief awarded or sought as defined by the schema. Use the standardized type.
   examples:
     - type: injunction
     - type: declaratory
 
 - label: Jurisdiction
-  instructions: Choose the relevant jurisdiction entity. Use the official jurisdiction name.
+  instructions: |
+    Choose the relevant jurisdiction entity. Use the official jurisdiction name.
   examples:
     - name: "U.S. Supreme Court"
     - name: "California Court of Appeal, First District"
-
-- label: Forum
-  instructions: Select the adjudicative body where the matter was heard (court, agency, board). Use the forum name and type.
-  examples:
-    - name: "U.S. District Court for the Southern District of New York"
-      type: "federal trial court"
-    - name: "National Labor Relations Board"
-      type: "administrative agency"

@@ -35,8 +35,10 @@ export default function CaseEditorPage() {
     edges: UnifiedEdge[]
   }>({ nodes: [], edges: [] })
   
-  // displayData removed as a stateful dependency; we derive UI solely from graphState + viewConfig
+  // Structured display data from backend (for rendering)
+  const [displayData, setDisplayData] = useState<any>(null)
   const [viewConfig, setViewConfig] = useState<any>(null)
+  const [isViewMode, setIsViewMode] = useState(true) // Default to view mode
   const [saving, setSaving] = useState(false)
   const [submittingKg, setSubmittingKg] = useState(false)
   const [error, setError] = useState('')
@@ -92,7 +94,7 @@ export default function CaseEditorPage() {
       setData(rawData.case)
       setViewConfig(display.success ? display.viewConfig : null)
       
-      // Use raw extracted graph directly - no need to extract from display!
+      // Use raw extracted graph for editing (flat nodes/edges)
       const extracted = rawData.case?.extracted || { nodes: [], edges: [] }
       
       setGraphState({
@@ -106,6 +108,12 @@ export default function CaseEditorPage() {
           status: 'active' as const 
         }))
       })
+      
+      // Store the structured display data for rendering
+      if (display.success && display.data) {
+        setDisplayData(display.data)
+        console.log('Display data received:', display.data)
+      }
       
       setHasUnsavedChanges(false)
     })()
@@ -165,10 +173,13 @@ export default function CaseEditorPage() {
       const d = await res.json()
       setData(d.case)
       
-      // Refetch display data after save for updated viewConfig
+      // Refetch display data after save for updated viewConfig and structured data
       const displayRes = await fetch(`/api/cases/${id}/display`)
       const display = await displayRes.json()
       setViewConfig(display.success ? display.viewConfig : null)
+      if (display.success && display.data) {
+        setDisplayData(display.data)
+      }
       
       // Rebuild unified state from fresh raw data
       const extracted = d.case?.extracted || { nodes: [], edges: [] }
@@ -249,87 +260,43 @@ export default function CaseEditorPage() {
       .map(({ status, ...edge }) => edge) // Strip metadata
   }, [graphState])
   
-  // Extract holdings structure from view config
-  const holdingsStructure = useMemo(() => {
-    return viewConfig?.holdings?.structure || {}
-  }, [viewConfig])
-  
-  // Derive holdings structure purely from graphState + viewConfig
-  const holdingsData = useMemo(() => {
-    const holdingNodes = (nodesArray || []).filter((n: any) => n.label === 'Holding')
+  // Extract structure key and root label from view config (first non-topLevel root)
+  const structureInfo = useMemo(() => {
+    if (!viewConfig) return { key: null, rootLabel: null, structure: {} }
     
-    const buildRelated = (
-      nodeId: string, 
-      relLabel: string, 
-      direction: 'outgoing' | 'incoming' = 'outgoing'
-    ) => {
-      const relEdges = direction === 'outgoing'
-        ? edgesArray.filter(e => e.from === nodeId && e.label === relLabel)
-        : edgesArray.filter(e => e.to === nodeId && e.label === relLabel)
-      return relEdges
-        .map(edge => nodesArray.find(n => n.temp_id === (direction === 'outgoing' ? edge.to : edge.from)))
-        .filter(Boolean)
-    }
-    
-    return holdingNodes.map((holding: any) => {
-      const rulings = buildRelated(holding.temp_id, 'SETS', 'incoming')
-      const ruling = rulings[0] || null
-      
-      const issues = buildRelated(holding.temp_id, 'ON_ISSUE')
-      const issue = issues[0] || null
-      
-      const args = buildRelated(holding.temp_id, 'EVALUATED_IN', 'incoming')
-      
-      return {
-        holding,
-        ruling: ruling ? {
-          ...ruling,
-          reliefTypes: buildRelated(ruling.temp_id, 'RESULTS_IN')
-        } : null,
-        issue: issue ? {
-          ...issue,
-          doctrines: buildRelated(issue.temp_id, 'RELATES_TO_DOCTRINE'),
-          policies: buildRelated(issue.temp_id, 'RELATES_TO_POLICY'),
-          factPatterns: buildRelated(issue.temp_id, 'RELATES_TO_FACTPATTERN')
-        } : null,
-        arguments: args.map((arg: any) => ({
-          arguments: arg,
-          laws: buildRelated(arg.temp_id, 'RELIES_ON_LAW'),
-          facts: buildRelated(arg.temp_id, 'RELIES_ON_FACT').map((fact: any) => ({
-            facts: fact,
-            witnesses: buildRelated(fact.temp_id, 'SUPPORTED_BY_WITNESS'),
-            evidence: buildRelated(fact.temp_id, 'SUPPORTED_BY_EVIDENCE'),
-            judicialNotice: buildRelated(fact.temp_id, 'SUPPORTED_BY_JUDICIAL_NOTICE')
-          }))
-        }))
-      }
-    })
-  }, [nodesArray, edgesArray])
-  
-  // Detect shared Issues across multiple Holdings
-  const sharedIssues = useMemo(() => {
-    const issueUsage: Record<string, string[]> = {} // issue temp_id -> holding temp_ids
-    
-    holdingsData.forEach((h: any) => {
-      const issue = h.issue
-      if (issue && issue.temp_id) {
-        const issueId = issue.temp_id
-        const holdingId = h.holding?.temp_id
-        if (holdingId) {
-        if (!issueUsage[issueId]) issueUsage[issueId] = []
-          issueUsage[issueId].push(holdingId)
+    for (const [key, value] of Object.entries(viewConfig)) {
+      if (key === 'topLevel' || key === 'description') continue
+      if (typeof value === 'object' && value !== null && 'root' in value) {
+        return {
+          key,
+          rootLabel: (value as any).root,
+          structure: (value as any).structure || {}
         }
       }
-    })
+    }
+    return { key: null, rootLabel: null, structure: {} }
+  }, [viewConfig])
+  
+  // Extract root structure from view config
+  const rootStructure = useMemo(() => {
+    return structureInfo.structure
+  }, [structureInfo])
+  
+  // Use backend-structured display data directly
+  const rootEntities = useMemo(() => {
+    if (!displayData || !structureInfo.key) return []
     
-    // Return only Issues used in multiple Holdings
-    return Object.entries(issueUsage)
-      .filter(([, holdingIds]) => holdingIds.length > 1)
-      .reduce((acc, [issueId, holdingIds]) => {
-        acc[issueId] = holdingIds
-        return acc
-      }, {} as Record<string, string[]>)
-  }, [holdingsData])
+    // Backend returns data like: { issues: [...], case: {...}, proceedings: [...], ... }
+    // We want the root collection (e.g., "issues")
+    const rootCollection = displayData[structureInfo.key]
+    
+    if (!Array.isArray(rootCollection)) return []
+    
+    return rootCollection
+  }, [displayData, structureInfo])
+  
+  // Alias for backward compatibility with existing code
+  const holdingsData = rootEntities
   const pickNodeName = (node: GraphNode): string | undefined => {
     const props = (node?.properties ?? {}) as Record<string, unknown>
     const candidates = ['name', 'title', 'text', 'case_name']
@@ -613,7 +580,7 @@ export default function CaseEditorPage() {
     )
   }
 
-  const Field = ({ label, value, path, depth = 0 }: { label: string, value: any, path: (string|number)[], depth?: number }) => {
+  const Field = ({ label, value, path, depth = 0, isViewMode = false }: { label: string, value: any, path: (string|number)[], depth?: number, isViewMode?: boolean }) => {
     const indentStyle = useMemo(() => ({ marginLeft: depth * 16 }), [depth])
     
     // Get schema definition for this property
@@ -638,6 +605,20 @@ export default function CaseEditorPage() {
     // Edge endpoints: show node labels in a dropdown, store temp_id
     if ((label === 'from' || label === 'to') && nodeOptions.length > 0) {
       const valueId = value == null ? '' : String(value)
+      
+      // View mode: show as text
+      if (isViewMode) {
+        return (
+          <div className="w-full" style={indentStyle}>
+            <label className="block text-xs font-medium text-gray-700 mt-2 mb-0.5">{formatLabel(label)}</label>
+            <div className="text-xs text-gray-900 py-1">
+              {nodeIdToDisplay[valueId] || valueId || <span className="text-gray-400 italic">Not set</span>}
+            </div>
+          </div>
+        )
+      }
+      
+      // Edit mode: show dropdown
       return (
         <div className="w-full" style={indentStyle}>
           <label className="block text-xs font-medium text-gray-700 mt-2 mb-0.5">{formatLabel(label)}</label>
@@ -664,6 +645,21 @@ export default function CaseEditorPage() {
       
       // Render dropdown for enums (select with options)
       if (inputType === 'select' && Array.isArray(options) && options.length > 0) {
+        // View mode: show as text
+        if (isViewMode) {
+          return (
+            <div className="w-full" style={indentStyle}>
+              <label className="block text-xs font-medium text-gray-700 mt-2 mb-0.5">
+                {displayLabel}{required ? ' *' : ''}
+              </label>
+              <div className="text-xs text-gray-900 py-1">
+                {local || <span className="text-gray-400 italic">Not selected</span>}
+              </div>
+            </div>
+          )
+        }
+        
+        // Edit mode: show dropdown
         return (
           <div className="w-full" style={indentStyle}>
             <label className="block text-xs font-medium text-gray-700 mt-2 mb-0.5">
@@ -688,6 +684,21 @@ export default function CaseEditorPage() {
       
       // Render date picker for dates
       if (inputType === 'date') {
+        // View mode: show as text
+        if (isViewMode) {
+          return (
+            <div className="w-full" style={indentStyle}>
+              <label className="block text-xs font-medium text-gray-700 mt-2 mb-0.5">
+                {displayLabel}{required ? ' *' : ''}
+              </label>
+              <div className="text-xs text-gray-900 py-1">
+                {local || <span className="text-gray-400 italic">Not set</span>}
+              </div>
+            </div>
+          )
+        }
+        
+        // Edit mode: show date input
         const commit = () => setValueAtPath(path, local)
         return (
           <div className="w-full" style={indentStyle}>
@@ -707,7 +718,22 @@ export default function CaseEditorPage() {
       
       // Render number input for numbers
       if (inputType === 'number' || typeof value === 'number') {
-      const commit = () => {
+        // View mode: show as text
+        if (isViewMode) {
+          return (
+            <div className="w-full" style={indentStyle}>
+              <label className="block text-xs font-medium text-gray-700 mt-2 mb-0.5">
+                {displayLabel}{required ? ' *' : ''}
+              </label>
+              <div className="text-xs text-gray-900 py-1">
+                {local || <span className="text-gray-400 italic">Not set</span>}
+              </div>
+            </div>
+          )
+        }
+        
+        // Edit mode: show number input
+        const commit = () => {
           const parsed = local === '' ? '' : Number(local)
           setValueAtPath(path, parsed)
         }
@@ -729,6 +755,22 @@ export default function CaseEditorPage() {
       
       // Render textarea for long text or textarea input type
       const isLongText = inputType === 'textarea' || (typeof value === 'string' && (value.length > 120 || value.includes('\n')))
+      
+      // View mode: show as text
+      if (isViewMode) {
+        return (
+          <div className="w-full" style={indentStyle}>
+            <label className="block text-xs font-medium text-gray-700 mt-2 mb-0.5">
+              {displayLabel}{required ? ' *' : ''}
+            </label>
+            <div className="text-xs text-gray-900 py-1 whitespace-pre-wrap">
+              {local || <span className="text-gray-400 italic">Not set</span>}
+            </div>
+          </div>
+        )
+      }
+      
+      // Edit mode: show input/textarea
       const commit = () => setValueAtPath(path, local)
       
       return (
@@ -759,6 +801,22 @@ export default function CaseEditorPage() {
 
     if (typeof value === 'boolean') {
       const displayLabel = uiConfig?.label || formatLabel(label)
+      
+      // View mode: show as text
+      if (isViewMode) {
+        return (
+          <div className="flex items-center justify-between" style={indentStyle}>
+            <label className="text-xs font-medium text-gray-700">
+              {displayLabel}{required ? ' *' : ''}
+            </label>
+            <span className="text-xs text-gray-900">
+              {value ? 'Yes' : 'No'}
+            </span>
+          </div>
+        )
+      }
+      
+      // Edit mode: show checkbox
       return (
         <div className="flex items-center justify-between" style={indentStyle}>
           <label className="text-xs font-medium text-gray-700">
@@ -782,7 +840,7 @@ export default function CaseEditorPage() {
             <div className="text-xs text-gray-500" style={{ marginLeft: 16 }}>Empty array</div>
           )}
           {value.map((item, idx) => (
-            <Field key={idx} label={`Item ${idx + 1}`} value={item} path={[...path, idx]} depth={depth + 1} />
+            <Field key={idx} label={`Item ${idx + 1}`} value={item} path={[...path, idx]} depth={depth + 1} isViewMode={isViewMode} />
           ))}
         </div>
       )
@@ -791,7 +849,7 @@ export default function CaseEditorPage() {
     if (typeof value === 'object') {
       return (
         <div className="space-y-2" style={indentStyle}>
-          <ObjectFields obj={value as Record<string, any>} path={path} depth={depth} />
+          <ObjectFields obj={value as Record<string, any>} path={path} depth={depth} isViewMode={isViewMode} />
         </div>
       )
     }
@@ -808,7 +866,7 @@ export default function CaseEditorPage() {
     )
   }
 
-  const ObjectFields = ({ obj, path, depth = 0 }: { obj: Record<string, any>, path: (string | number)[], depth?: number }) => {
+  const ObjectFields = ({ obj, path, depth = 0, isViewMode = false }: { obj: Record<string, any>, path: (string | number)[], depth?: number, isViewMode?: boolean }) => {
     const entries = Object.entries(obj || {}).filter(([k, v]) => {
       if (k === 'temp_id') return false
       // Hide empty nested objects like properties: {}
@@ -819,7 +877,7 @@ export default function CaseEditorPage() {
     return (
       <div className="space-y-2">
         {entries.map(([k, v]) => (
-          <Field key={k} label={k} value={v} path={[...path, k]} depth={depth} />
+          <Field key={k} label={k} value={v} path={[...path, k]} depth={depth} isViewMode={isViewMode} />
         ))}
       </div>
     )
@@ -1319,14 +1377,17 @@ export default function CaseEditorPage() {
             <div className="text-sm font-semibold text-gray-900">{displayLabel}</div>
             {badge}
           </div>
-          <NodeActionMenu 
-            nodeId={node.temp_id}
-            parentId={parentId}
-          />
+          {!isViewMode && (
+            <NodeActionMenu 
+              nodeId={node.temp_id}
+              parentId={parentId}
+            />
+          )}
         </div>
         <ObjectFields 
           obj={node.properties || {}} 
           path={['nodes', nodesArray.findIndex(n => n.temp_id === node.temp_id), 'properties']} 
+          isViewMode={isViewMode}
         />
         {children}
       </div>
@@ -1337,61 +1398,58 @@ export default function CaseEditorPage() {
   const renderNestedStructureSidebar = (
     data: any,
     structureConfig: Record<string, any>,
-    holdingId?: string,
+    rootId?: string,
     depth: number = 0
   ): React.ReactElement[] => {
     const elements: React.ReactElement[] = []
     
     for (const [key, config] of Object.entries(structureConfig)) {
-      if (config.self || key === 'holding') continue // Skip self-references
+      if (config.self) continue // Skip self-references
       
       const value = data[key]
       if (!value) continue
       
-      // Filter out deleted and orphaned items to prevent showing removed nodes
+      // Handle both single and array values
       const itemsAll = Array.isArray(value) ? value : [value]
-      // Handle nested structures: arguments have {arguments: node, ...}, facts have {facts: node, ...}
+      
+      // Generic filtering - just check if it's a node object with temp_id
       const items = itemsAll.filter((item: any) => {
-        // Extract the actual node from nested structure
-        const node = (key === 'arguments' && item.arguments) || (key === 'facts' && item.facts) || item
-        return node && node.temp_id && 
-          !deletedNodeIds.has(node.temp_id) && 
-          !orphanedNodeIds.has(node.temp_id)
+        return item && item.temp_id && 
+          !deletedNodeIds.has(item.temp_id) && 
+          !orphanedNodeIds.has(item.temp_id)
       })
-      const isCollapsible = ['arguments', 'facts'].includes(key)
+      
+      // Make collapsible if it's a multiple (arrays have multiple items)
+      const isCollapsible = Array.isArray(value)
       
       items.forEach((item: any, idx: number) => {
-        // Extract the actual node from nested structure
-        const node = (key === 'arguments' && item.arguments) || (key === 'facts' && item.facts) || item
-        if (!node || !node.temp_id) return
+        if (!item || !item.temp_id) return
         
-        const expanded = isCollapsible && 
-          (key === 'arguments' ? expandedArgs.has(node.temp_id) : expandedFacts.has(node.temp_id))
-        
-        const toggleFn = key === 'arguments' ? toggleArg : toggleFact
+        // Check if this node is expanded using a generic key
+        const isExpanded = isCollapsible && expandedFacts.has(item.temp_id)
         
         elements.push(
-          <div key={`${key}-${node.temp_id}`} className="space-y-1">
+          <div key={`${key}-${item.temp_id}`} className="space-y-1">
             <div className="flex items-center gap-1">
               {isCollapsible && (
                 <div
-                  onClick={() => toggleFn(node.temp_id)}
+                  onClick={() => toggleFact(item.temp_id)}
                   className="px-1 cursor-pointer text-gray-500 hover:text-gray-700"
                 >
-                  <span className="text-xs">{expanded ? '▼' : '▶'}</span>
+                  <span className="text-xs">{isExpanded ? '▼' : '▶'}</span>
                 </div>
               )}
               <div
-                onClick={() => scrollToNodeById(node.temp_id, holdingId)}
+                onClick={() => scrollToNodeById(item.temp_id, rootId)}
                 className="flex-1 px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-600 cursor-pointer"
               >
-                {formatLabel(key === 'arguments' ? 'argument' : key === 'facts' ? 'fact' : node.label || key)} {idx + 1}
+                {formatLabel(item.label || key)} {idx + 1}
               </div>
             </div>
             
-            {(expanded || !isCollapsible) && config.include && (
+            {(isExpanded || !isCollapsible) && config.include && (
               <div className="pl-5 space-y-1">
-                {renderNestedStructureSidebar(item, config.include, holdingId, depth + 1)}
+                {renderNestedStructureSidebar(item, config.include, rootId, depth + 1)}
               </div>
             )}
           </div>
@@ -1406,6 +1464,35 @@ export default function CaseEditorPage() {
     <div className="min-h-screen flex">
       {/* Sidebar Navigation */}
       <div className="w-64 border-r bg-gray-50 flex-shrink-0 sticky top-0 max-h-screen overflow-y-auto">
+        {/* View/Edit Mode Toggle */}
+        <div className="p-4 border-b bg-white">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-gray-700">Mode:</span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setIsViewMode(true)}
+                className={`px-3 py-1 text-xs rounded ${
+                  isViewMode 
+                    ? 'bg-blue-600 text-white' 
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                View
+              </button>
+              <button
+                onClick={() => setIsViewMode(false)}
+                className={`px-3 py-1 text-xs rounded ${
+                  !isViewMode 
+                    ? 'bg-blue-600 text-white' 
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                Edit
+              </button>
+            </div>
+          </div>
+        </div>
+        
         <div className="p-4 space-y-4">
           <div>
             <h2 className="text-xs font-semibold text-gray-900 mb-3">Case Overview</h2>
@@ -1451,21 +1538,24 @@ export default function CaseEditorPage() {
           
           <div>
             <h2 className="text-xs font-semibold text-gray-900 mb-3">
-              Holdings ({holdingsData.length})
+              {structureInfo.key ? formatLabel(structureInfo.key) : 'Items'} ({holdingsData.length})
             </h2>
             <div className="space-y-3">
-              {holdingsData.map((h: any, idx: number) => {
-                const holding = h.holding
-                if (!holding) return null
+              {holdingsData.map((entity: any, idx: number) => {
+                // Get the first key with "self" property to find the root entity key
+                const rootEntityKey = Object.entries(rootStructure).find(([, cfg]: [string, any]) => cfg.self)?.[0]
+                const root = rootEntityKey ? entity[rootEntityKey] : entity[Object.keys(entity)[0]]
                 
-                const name = pickNodeName(holding) || `Holding ${idx + 1}`
-                const isActive = activeHoldingId === holding.temp_id
+                if (!root) return null
+                
+                const name = pickNodeName(root) || `${structureInfo.rootLabel} ${idx + 1}`
+                const isActive = activeHoldingId === root.temp_id
                 
                 return (
-                  <div key={holding.temp_id} className="space-y-1.5">
-                    {/* Holding */}
+                  <div key={root.temp_id} className="space-y-1.5">
+                    {/* Root entity */}
                     <div
-                      onClick={() => scrollToHolding(holding.temp_id)}
+                      onClick={() => scrollToHolding(root.temp_id)}
                       className={`px-2 py-1.5 rounded text-xs cursor-pointer ${
                         isActive ? 'bg-blue-100 text-blue-900 font-medium' : 'hover:bg-gray-100 text-gray-700'
                       }`}
@@ -1476,19 +1566,19 @@ export default function CaseEditorPage() {
                     {/* Dynamic content based on structure config */}
                     <div className="pl-4 space-y-1.5 border-l border-gray-300 ml-2">
                         <div
-                        onClick={() => scrollToNodeById(holding.temp_id, holding.temp_id)}
+                        onClick={() => scrollToNodeById(root.temp_id, root.temp_id)}
                           className="px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-600 cursor-pointer"
                         >
-                          Holding Details
+                          {structureInfo.rootLabel} Details
                         </div>
                         
-                      {holdingsStructure && renderNestedStructureSidebar(h, holdingsStructure, holding.temp_id)}
+                      {rootStructure && renderNestedStructureSidebar(entity, rootStructure, root.temp_id)}
                             </div>
                                       </div>
                                       )
-                                    })}
-                                  </div>
-                              </div>
+                              })}
+                        </div>
+                      </div>
         </div>
       </div>
 
@@ -1521,7 +1611,7 @@ export default function CaseEditorPage() {
                     { proceedings: proceedingNodes }
                   )
                   if (proceedingNodes.length === 0 && state) {
-                    return (
+                    return !isViewMode ? (
                       <RelationshipAction
                         state={state}
                         parentNodeLabel={parentLabel}
@@ -1529,13 +1619,13 @@ export default function CaseEditorPage() {
                         onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, parentNode?.temp_id)}
                         onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, parentNode?.temp_id)}
                       />
-                    )
+                    ) : null
                   }
                   return (
                     <div>
                       <SectionHeader
                         title="Proceedings"
-                        actionButton={state && (
+                        actionButton={!isViewMode && state && (
                           <RelationshipAction
                             state={state}
                             parentNodeLabel={parentLabel}
@@ -1567,7 +1657,7 @@ export default function CaseEditorPage() {
                     { forums: forumsForParent }
                   )
                   if (forumNodes.length === 0 && state) {
-                    return (
+                    return !isViewMode ? (
                       <RelationshipAction
                         state={state}
                         parentNodeLabel={parentLabel}
@@ -1575,13 +1665,13 @@ export default function CaseEditorPage() {
                         onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, parentNode?.temp_id)}
                         onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, parentNode?.temp_id)}
                       />
-                    )
+                    ) : null
                   }
                   return (
                     <div>
                       <SectionHeader
                         title="Forums"
-                        actionButton={state && (
+                        actionButton={!isViewMode && state && (
                           <RelationshipAction
                             state={state}
                             parentNodeLabel={parentLabel}
@@ -1629,7 +1719,7 @@ export default function CaseEditorPage() {
                     { parties: partiesForParent }
                   )
                   if (partyNodes.length === 0 && state) {
-                    return (
+                    return !isViewMode ? (
                       <RelationshipAction
                         state={state}
                         parentNodeLabel={parentLabel}
@@ -1637,13 +1727,13 @@ export default function CaseEditorPage() {
                         onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, parentNode?.temp_id)}
                         onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, parentNode?.temp_id)}
                       />
-                    )
+                    ) : null
                   }
                   return (
                     <div>
                       <SectionHeader
                         title="Parties"
-                        actionButton={state && (
+                        actionButton={!isViewMode && state && (
                           <RelationshipAction
                             state={state}
                             parentNodeLabel={parentLabel}
@@ -1664,58 +1754,56 @@ export default function CaseEditorPage() {
               </div>
             </div>
 
-            {/* Holdings Sections */}
-            {holdingsData.map((holdingData: any, idx: number) => {
-              const holding = holdingData.holding
+            {/* Root Entity Sections */}
+            {holdingsData.map((entityData: any, idx: number) => {
+              // Find the root entity (the one with self: true in structure)
+              const rootEntityKey = Object.entries(rootStructure).find(([, cfg]: [string, any]) => cfg.self)?.[0]
+              const rootEntity = rootEntityKey ? entityData[rootEntityKey] : entityData[Object.keys(entityData)[0]]
               
-              // Skip this entire holding if the holding itself is deleted/orphaned
-              if (!holding || deletedNodeIds.has(holding.temp_id) || orphanedNodeIds.has(holding.temp_id)) {
+              // Skip this entire entity if the root itself is deleted/orphaned
+              if (!rootEntity || deletedNodeIds.has(rootEntity.temp_id) || orphanedNodeIds.has(rootEntity.temp_id)) {
                 return null
               }
               
-              // Filter out deleted/orphaned ruling and issue
-              const ruling = holdingData.ruling && !deletedNodeIds.has(holdingData.ruling.temp_id) && !orphanedNodeIds.has(holdingData.ruling.temp_id) ? holdingData.ruling : null
-              const reliefTypes = filterActiveNodes(holdingData.ruling?.reliefTypes || [])
-              const issue = holdingData.issue && !deletedNodeIds.has(holdingData.issue.temp_id) && !orphanedNodeIds.has(holdingData.issue.temp_id) ? holdingData.issue : null
-              const doctrines = filterActiveNodes(holdingData.issue?.doctrines || [])
-              const policies = filterActiveNodes(holdingData.issue?.policies || [])
-              const factPatterns = filterActiveNodes(holdingData.issue?.factPatterns || [])
-              // Arguments have nested structure {arguments: node, laws: [...], facts: [...]}, filter by the nested node
-              const args = (holdingData.arguments || []).filter((argData: any) => {
-                const arg = argData.arguments || argData
-                return arg?.temp_id && !deletedNodeIds.has(arg.temp_id) && !orphanedNodeIds.has(arg.temp_id)
-              })
+              // Extract nested entities from the structured data based on the actual structure
+              // Backend returns: { issue: {...}, ruling: {...} } as siblings
+              const ruling = entityData.ruling && !deletedNodeIds.has(entityData.ruling.temp_id) ? entityData.ruling : null
+              const reliefs = filterActiveNodes(ruling?.relief || [])
+              const issue = rootEntity // In new structure, issue IS the root entity
+              const args = filterActiveNodes(ruling?.arguments || [])
+              const holding = rootEntity // Alias for backward compatibility
+              const holdingData = entityData // Alias for backward compatibility
               
-              const holdingName = pickNodeName(holding) || `Holding ${idx + 1}`
-              const isShared = issue && sharedIssues[issue.temp_id]
+              const entityName = pickNodeName(rootEntity) || `${structureInfo.rootLabel} ${idx + 1}`
               
               return (
                 <div 
-                  key={holding.temp_id} 
-                  id={`holding-${holding.temp_id}`}
+                  key={rootEntity.temp_id} 
+                  id={`holding-${rootEntity.temp_id}`}
                   className="scroll-mt-4 border-b pb-8 last:border-b-0"
                 >
-                  {/* Holding Header */}
+                  {/* Root Entity Header */}
                   <div className="mb-4">
-                    <h2 className="text-lg font-semibold text-gray-900">{holdingName}</h2>
+                    <h2 className="text-lg font-semibold text-gray-900">{entityName}</h2>
                   </div>
                   
-                  {/* Holding Details */}
+                  {/* Root Entity Details */}
           <div className="space-y-4">
-                    <NodeCard node={holding} label="Holding Details" depth={0} />
+                    <NodeCard node={rootEntity} label={`${structureInfo.rootLabel} Details`} depth={0} />
                     
                     {/* Ruling */}
                     {ruling && (
                       <NodeCard node={ruling} label="Ruling" depth={0}>
-                        {/* Relief Types */}
+                        {/* Laws */}
                         {(() => {
-                          const rulingStructure = holdingsStructure?.ruling?.include || {}
-                          const state = analyzeRelationship(ruling, 'reliefTypes', rulingStructure, schema, holdingData.ruling)
+                          const rulingStructure = rootStructure?.ruling?.include || {}
+                          const laws = filterActiveNodes(ruling?.law || [])
+                          const state = analyzeRelationship(ruling, 'law', rulingStructure, schema, { law: laws })
                           return (
                             <div className="mt-4">
                               <SectionHeader
-                                title="Relief Types"
-                                actionButton={state && (
+                                title="Laws"
+                                actionButton={!isViewMode && state && (
                                   <RelationshipAction
                                     state={state}
                                     parentNodeLabel="Ruling"
@@ -1726,12 +1814,12 @@ export default function CaseEditorPage() {
                                 )}
                               />
                               <div className="space-y-4">
-                                {reliefTypes.map((relief: any, relIdx: number) => (
+                                {laws.map((law: any, lawIdx: number) => (
                                   <NodeCard 
-                                    key={relief.temp_id} 
-                                    node={relief} 
-                                    label="Relief Type" 
-                                    index={relIdx} 
+                                    key={law.temp_id} 
+                                    node={law} 
+                                    label="Law" 
+                                    index={lawIdx} 
                                     depth={1}
                                     parentId={ruling.temp_id}
                                   />
@@ -1740,371 +1828,226 @@ export default function CaseEditorPage() {
                             </div>
                           )
                         })()}
+                        
+                        {/* Relief (intermediate layer) */}
+                        {(() => {
+                          const rulingStructure = rootStructure?.ruling?.include || {}
+                          const state = analyzeRelationship(ruling, 'relief', rulingStructure, schema, { relief: reliefs })
+                          return (
+                            <div className="mt-4">
+                              <SectionHeader
+                                title="Relief"
+                                actionButton={!isViewMode && state && (
+                                  <RelationshipAction
+                                    state={state}
+                                    parentNodeLabel="Ruling"
+                                    position="inline"
+                                    onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, ruling.temp_id)}
+                                    onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, ruling.temp_id)}
+                                  />
+                                )}
+                              />
+                              <div className="space-y-4">
+                                {reliefs.map((relief: any, relIdx: number) => {
+                                  const reliefType = relief.reliefTypes && !deletedNodeIds.has(relief.reliefTypes.temp_id) ? relief.reliefTypes : null
+                                  const reliefStructure = rulingStructure?.relief?.include || {}
+                                  const reliefTypeState = analyzeRelationship(relief, 'reliefTypes', reliefStructure, schema, { reliefTypes: reliefType })
+                                  
+                                  return (
+                                    <NodeCard 
+                                      key={relief.temp_id} 
+                                      node={relief} 
+                                      label="Relief" 
+                                      index={relIdx} 
+                                      depth={1}
+                                      parentId={ruling.temp_id}
+                                    >
+                                      {/* Relief Type (single) */}
+                                      {reliefType ? (
+                                        <div className="mt-4">
+                                          <NodeCard 
+                                            node={reliefType} 
+                                            label="Relief Type" 
+                                            depth={2}
+                                            parentId={relief.temp_id}
+                                          />
+                                        </div>
+                                      ) : !isViewMode && reliefTypeState && (
+                                        <div className="mt-4">
+                                          <RelationshipAction
+                                            state={reliefTypeState}
+                                            parentNodeLabel="Relief"
+                                            position="centered"
+                                            onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, relief.temp_id)}
+                                            onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, relief.temp_id)}
+                                          />
+                                        </div>
+                                      )}
+                                    </NodeCard>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          )
+                        })()}
+                        
+                        {/* Arguments */}
+                        {(() => {
+                          return (
+                            <>
+                              {args.length > 0 && (
+                                <div className="mt-6 pt-6 border-t-2 border-gray-200 space-y-4">
+                                  {args.map((argData: any, argIdx: number) => {
+                                    // Backend returns structured argument data
+                                    const arg = argData.arguments || argData
+                                    const doctrines = filterActiveNodes(argData.doctrine || [])
+                                    const policies = filterActiveNodes(argData.policy || [])
+                                    const factPatterns = filterActiveNodes(argData.factPattern || [])
+                                    
+                                    return (
+                                      <NodeCard key={arg.temp_id} node={arg} label="Argument" index={argIdx} depth={1}>
+                                        <div className="mt-4 space-y-6">
+                                          {/* Doctrines Section */}
+                                          {(() => {
+                                            const argStructure = rootStructure?.ruling?.include?.arguments?.include || {}
+                                            const state = analyzeRelationship(arg, 'doctrine', argStructure, schema, argData)
+                                            return (
+                                              <div>
+                                                <SectionHeader
+                                                  title="Doctrines"
+                                                  actionButton={!isViewMode && state && (
+                                                    <RelationshipAction
+                                                      state={state}
+                                                      parentNodeLabel="Argument"
+                                                      position="inline"
+                                                      onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, arg.temp_id)}
+                                                      onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, arg.temp_id)}
+                                                    />
+                                                  )}
+                                                />
+                                                <div className="space-y-4">
+                                                  {doctrines.map((doc: any, docIdx: number) => (
+                                                    <NodeCard 
+                                                      key={doc.temp_id} 
+                                                      node={doc} 
+                                                      label="Doctrine" 
+                                                      index={docIdx} 
+                                                      depth={2}
+                                                      parentId={arg.temp_id}
+                                                    />
+                                                  ))}
+                                                </div>
+                                              </div>
+                                            )
+                                          })()}
+                                          
+                                          {/* Policies Section */}
+                                          {(() => {
+                                            const argStructure = rootStructure?.ruling?.include?.arguments?.include || {}
+                                            const state = analyzeRelationship(arg, 'policy', argStructure, schema, argData)
+                                            return (
+                                              <div>
+                                                <SectionHeader
+                                                  title="Policies"
+                                                  actionButton={!isViewMode && state && (
+                                                    <RelationshipAction
+                                                      state={state}
+                                                      parentNodeLabel="Argument"
+                                                      position="inline"
+                                                      onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, arg.temp_id)}
+                                                      onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, arg.temp_id)}
+                                                    />
+                                                  )}
+                                                />
+                                                <div className="space-y-4">
+                                                  {policies.map((pol: any, polIdx: number) => (
+                                                    <NodeCard 
+                                                      key={pol.temp_id} 
+                                                      node={pol} 
+                                                      label="Policy" 
+                                                      index={polIdx} 
+                                                      depth={2}
+                                                      parentId={arg.temp_id}
+                                                    />
+                                                  ))}
+                                                </div>
+                                              </div>
+                                            )
+                                          })()}
+                                          
+                                          {/* Fact Patterns Section */}
+                                          {(() => {
+                                            const argStructure = rootStructure?.ruling?.include?.arguments?.include || {}
+                                            const state = analyzeRelationship(arg, 'factPattern', argStructure, schema, argData)
+                                            return (
+                                              <div>
+                                                <SectionHeader
+                                                  title="Fact Patterns"
+                                                  actionButton={!isViewMode && state && (
+                                                    <RelationshipAction
+                                                      state={state}
+                                                      parentNodeLabel="Argument"
+                                                      position="inline"
+                                                      onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, arg.temp_id)}
+                                                      onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, arg.temp_id)}
+                                                    />
+                                                  )}
+                                                />
+                                                <div className="space-y-4">
+                                                  {factPatterns.map((fp: any, fpIdx: number) => (
+                                                    <NodeCard 
+                                                      key={fp.temp_id} 
+                                                      node={fp} 
+                                                      label="Fact Pattern" 
+                                                      index={fpIdx} 
+                                                      depth={2}
+                                                      parentId={arg.temp_id}
+                                                    />
+                                                  ))}
+                                                </div>
+                                              </div>
+                                            )
+                                          })()}
+                                        </div>
+                                      </NodeCard>
+                                    )
+                                  })}
+                                </div>
+                              )}
+                              {/* Add Argument button */}
+                              {!isViewMode && (() => {
+                                const rulingStructure = rootStructure?.ruling?.include || {}
+                                const state = analyzeRelationship(ruling, 'arguments', rulingStructure, schema, { arguments: args })
+                                if (!state) return null
+                                return (
+                                  <div className={args.length > 0 ? "mt-3" : "mt-4"}>
+                                    <RelationshipAction
+                                      state={state}
+                                      parentNodeLabel="Ruling"
+                                      position={args.length === 0 ? 'centered' : 'inline'}
+                                      onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, ruling.temp_id)}
+                                      onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, ruling.temp_id)}
+                                    />
+                                  </div>
+                                )
+                              })()}
+                            </>
+                          )
+                        })()}
                       </NodeCard>
                     )}
                     {/* Add Ruling button if no ruling exists */}
-                    {!ruling && (() => {
-                      const state = analyzeRelationship(holding, 'ruling', holdingsStructure || {}, schema, holdingData)
+                    {!isViewMode && !ruling && issue && (() => {
+                      const state = analyzeRelationship(issue, 'ruling', rootStructure || {}, schema, { ruling: null })
                       if (!state) return null
                       return (
                         <RelationshipAction
                           state={state}
-                          parentNodeLabel="Holding"
+                          parentNodeLabel="Issue"
                           position="centered"
-                          onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, holding.temp_id)}
-                          onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, holding.temp_id)}
+                          onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, issue.temp_id)}
+                          onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, issue.temp_id)}
                         />
-                      )
-                    })()}
-                    
-                    {/* Issue */}
-                    {issue && (
-                      <NodeCard 
-                        node={issue} 
-                        label="Issue" 
-                        depth={0}
-                        badge={isShared && (
-                              <div className="text-[10px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full">
-                                Shared across {sharedIssues[issue.temp_id].length} holdings
-                              </div>
-                            )}
-                      >
-                        {/* Doctrines, Policies, Fact Patterns */}
-                        <div className="mt-4 space-y-6">
-                          {/* Doctrines Section */}
-                          {(() => {
-                            const issueStructure = holdingsStructure?.issue?.include || {}
-                            const state = analyzeRelationship(issue, 'doctrines', issueStructure, schema, holdingData.issue)
-                            return (
-                              <div>
-                                <SectionHeader
-                                  title="Doctrines"
-                                  actionButton={state && (
-                                    <RelationshipAction
-                                      state={state}
-                                      parentNodeLabel="Issue"
-                                      position="inline"
-                                      onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, issue.temp_id)}
-                                      onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, issue.temp_id)}
-                                    />
-                                  )}
-                                />
-                                <div className="space-y-4">
-                                  {doctrines.map((doc: any, docIdx: number) => (
-                                    <NodeCard 
-                                      key={doc.temp_id} 
-                                      node={doc} 
-                                      label="Doctrine" 
-                                      index={docIdx} 
-                                      depth={1}
-                                      parentId={issue.temp_id}
-                                    />
-                                  ))}
-                                </div>
-                              </div>
-                            )
-                          })()}
-                          
-                          {/* Policies Section */}
-                          {(() => {
-                            const issueStructure = holdingsStructure?.issue?.include || {}
-                            const state = analyzeRelationship(issue, 'policies', issueStructure, schema, holdingData.issue)
-                            return (
-                              <div>
-                                <SectionHeader
-                                  title="Policies"
-                                  actionButton={state && (
-                                    <RelationshipAction
-                                      state={state}
-                                      parentNodeLabel="Issue"
-                                      position="inline"
-                                      onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, issue.temp_id)}
-                                      onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, issue.temp_id)}
-                                    />
-                                  )}
-                                />
-                                <div className="space-y-4">
-                                  {policies.map((pol: any, polIdx: number) => (
-                                    <NodeCard 
-                                      key={pol.temp_id} 
-                                      node={pol} 
-                                      label="Policy" 
-                                      index={polIdx} 
-                                      depth={1}
-                                      parentId={issue.temp_id}
-                                    />
-                                  ))}
-                                </div>
-                              </div>
-                            )
-                          })()}
-                          
-                          {/* Fact Patterns Section */}
-                          {(() => {
-                            const issueStructure = holdingsStructure?.issue?.include || {}
-                            const state = analyzeRelationship(issue, 'factPatterns', issueStructure, schema, holdingData.issue)
-                            return (
-                              <div>
-                                <SectionHeader
-                                  title="Fact Patterns"
-                                  actionButton={state && (
-                                    <RelationshipAction
-                                      state={state}
-                                      parentNodeLabel="Issue"
-                                      position="inline"
-                                      onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, issue.temp_id)}
-                                      onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, issue.temp_id)}
-                                    />
-                                  )}
-                                />
-                                <div className="space-y-4">
-                                  {factPatterns.map((fp: any, fpIdx: number) => (
-                                    <NodeCard 
-                                      key={fp.temp_id} 
-                                      node={fp} 
-                                      label="Fact Pattern" 
-                                      index={fpIdx} 
-                                      depth={1}
-                                      parentId={issue.temp_id}
-                                    />
-                                  ))}
-                                </div>
-                              </div>
-                            )
-                          })()}
-                        </div>
-                      </NodeCard>
-                    )}
-                    {/* Add Issue button if no issue exists */}
-                    {!issue && (() => {
-                      const state = analyzeRelationship(holding, 'issue', holdingsStructure || {}, schema, holdingData)
-                      if (!state) return null
-                      return (
-                        <RelationshipAction
-                          state={state}
-                          parentNodeLabel="Holding"
-                          position="centered"
-                          onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, holding.temp_id)}
-                          onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, holding.temp_id)}
-                        />
-                      )
-                    })()}
-                    
-                    {/* Arguments */}
-                    {args.length > 0 && (
-                      <div className="mt-6 pt-6 border-t-2 border-gray-200 space-y-4">
-                        {args.map((argData: any, argIdx: number) => {
-                          // Backend returns: { arguments: node, laws: [...], facts: [...] }
-                          const arg = argData.arguments || argData
-                          const laws = filterActiveNodes(argData.laws || [])
-                          // Facts have nested structure {facts: node, witnesses: [...], evidence: [...], judicialNotice: [...]}, filter by nested node
-                          const facts = (argData.facts || []).filter((factData: any) => {
-                            const fact = factData.facts || factData
-                            return fact?.temp_id && !deletedNodeIds.has(fact.temp_id) && !orphanedNodeIds.has(fact.temp_id)
-                          })
-                          
-                        return (
-                          <NodeCard key={arg.temp_id} node={arg} label="Argument" index={argIdx} depth={0}>
-                            <div className="mt-4 space-y-6">
-                              {/* Laws Section */}
-                              {(() => {
-                                const argStructure = holdingsStructure?.arguments?.include || {}
-                                const state = analyzeRelationship(arg, 'laws', argStructure, schema, argData)
-                                return (
-                                  <div>
-                                    <SectionHeader
-                                      title="Laws"
-                                      actionButton={state && (
-                                        <RelationshipAction
-                                          state={state}
-                                          parentNodeLabel="Argument"
-                                          position="inline"
-                                          onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, arg.temp_id)}
-                                          onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, arg.temp_id)}
-                                        />
-                                      )}
-                                    />
-                                    <div className="space-y-4">
-                                      {laws.map((law: any, lawIdx: number) => (
-                                        <NodeCard 
-                                          key={law.temp_id} 
-                                          node={law} 
-                                          label="Law" 
-                                          index={lawIdx} 
-                                          depth={1}
-                                          parentId={arg.temp_id}
-                                        />
-                                      ))}
-                                    </div>
-                                  </div>
-                                )
-                              })()}
-                              
-                              {/* Facts Section */}
-                              {(() => {
-                                const argStructure = holdingsStructure?.arguments?.include || {}
-                                const state = analyzeRelationship(arg, 'facts', argStructure, schema, argData)
-                                return (
-                                  <div>
-                                    <SectionHeader
-                                      title="Facts"
-                                      actionButton={state && (
-                                        <RelationshipAction
-                                          state={state}
-                                          parentNodeLabel="Argument"
-                                          position="inline"
-                                          onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, arg.temp_id)}
-                                          onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, arg.temp_id)}
-                                        />
-                                      )}
-                                    />
-                                    <div className="space-y-4">
-                                      {/* Facts with nested support */}
-                                      {facts.map((factData: any, factIdx: number) => {
-                                const fact = factData.facts || factData
-                                const witnesses = filterActiveNodes(factData.witnesses || [])
-                                const evidence = filterActiveNodes(factData.evidence || [])
-                                const judicialNotice = filterActiveNodes(factData.judicialNotice || [])
-                                
-                                return (
-                                  <NodeCard 
-                                    key={fact.temp_id} 
-                                    node={fact} 
-                                    label="Fact" 
-                                    index={factIdx} 
-                                    depth={1}
-                                    parentId={arg.temp_id}
-                                  >
-                                    <div className="mt-4 space-y-6">
-                                      {/* Witnesses Section */}
-                                      {(() => {
-                                        const factStructure = holdingsStructure?.arguments?.include?.facts?.include || {}
-                                        const state = analyzeRelationship(fact, 'witnesses', factStructure, schema, factData)
-                                        return (
-                                          <div>
-                                            <SectionHeader
-                                              title="Witnesses"
-                                              actionButton={state && (
-                                                <RelationshipAction
-                                                  state={state}
-                                                  parentNodeLabel="Fact"
-                                                  position="inline"
-                                                  onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, fact.temp_id)}
-                                                  onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, fact.temp_id)}
-                                                />
-                                              )}
-                                            />
-                                            <div className="space-y-4">
-                                              {witnesses.map((wit: any, witIdx: number) => (
-                                                <NodeCard 
-                                                  key={wit.temp_id} 
-                                                  node={wit} 
-                                                  label="Witness" 
-                                                  index={witIdx} 
-                                                  depth={2}
-                                                  parentId={fact.temp_id}
-                                                />
-                                              ))}
-                                            </div>
-                                          </div>
-                                        )
-                                      })()}
-                                      
-                                      {/* Evidence Section */}
-                                      {(() => {
-                                        const factStructure = holdingsStructure?.arguments?.include?.facts?.include || {}
-                                        const state = analyzeRelationship(fact, 'evidence', factStructure, schema, factData)
-                                        return (
-                                          <div>
-                                            <SectionHeader
-                                              title="Evidence"
-                                              actionButton={state && (
-                                                <RelationshipAction
-                                                  state={state}
-                                                  parentNodeLabel="Fact"
-                                                  position="inline"
-                                                  onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, fact.temp_id)}
-                                                  onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, fact.temp_id)}
-                                                />
-                                              )}
-                                            />
-                                            <div className="space-y-4">
-                                              {evidence.map((ev: any, evIdx: number) => (
-                                                <NodeCard 
-                                                  key={ev.temp_id} 
-                                                  node={ev} 
-                                                  label="Evidence" 
-                                                  index={evIdx} 
-                                                  depth={2}
-                                                  parentId={fact.temp_id}
-                                                />
-                                              ))}
-                                            </div>
-                                          </div>
-                                        )
-                                      })()}
-                                      
-                                      {/* Judicial Notice Section */}
-                                      {(() => {
-                                        const factStructure = holdingsStructure?.arguments?.include?.facts?.include || {}
-                                        const state = analyzeRelationship(fact, 'judicialNotice', factStructure, schema, factData)
-                                        return (
-                                          <div>
-                                            <SectionHeader
-                                              title="Judicial Notice"
-                                              actionButton={state && (
-                                                <RelationshipAction
-                                                  state={state}
-                                                  parentNodeLabel="Fact"
-                                                  position="inline"
-                                                  onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, fact.temp_id)}
-                                                  onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, fact.temp_id)}
-                                                />
-                                              )}
-                                            />
-                                            <div className="space-y-4">
-                                              {judicialNotice.map((jn: any, jnIdx: number) => (
-                                                <NodeCard 
-                                                  key={jn.temp_id} 
-                                                  node={jn} 
-                                                  label="Judicial Notice" 
-                                                  index={jnIdx} 
-                                                  depth={2}
-                                                  parentId={fact.temp_id}
-                                                />
-                                              ))}
-                                            </div>
-                                          </div>
-                                        )
-                                      })()}
-                                    </div>
-                                  </NodeCard>
-                                )
-                              })}
-                            </div>
-                                  </div>
-                                )
-                              })()}
-                            </div>
-                          </NodeCard>
-                        )
-                      })}
-                      </div>
-                    )}
-                    {/* Add Argument button */}
-                    {(() => {
-                      const state = analyzeRelationship(holding, 'arguments', holdingsStructure || {}, schema, holdingData)
-                      if (!state) return null
-                      return (
-                        <div className={args.length > 0 ? "mt-3" : ""}>
-                          <RelationshipAction
-                            state={state}
-                            parentNodeLabel="Holding"
-                            position={args.length === 0 ? 'centered' : 'inline'}
-                            onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, holding.temp_id)}
-                            onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, holding.temp_id)}
-                          />
-                        </div>
                       )
                     })()}
                   </div>
@@ -2187,28 +2130,30 @@ export default function CaseEditorPage() {
                   </Button>
                 )}
               </div>
-              <div className="flex items-center gap-3">
-                {hasUnsavedChanges && (
-                  <div className="flex items-center gap-2 text-amber-600 text-sm">
-                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                    </svg>
-                    <span className="font-medium">Unsaved changes</span>
-                  </div>
-                )}
-                {orphanedNodes.length > 0 && (
-                  <div className="flex items-center gap-2 text-red-600 text-sm">
-                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-                    </svg>
-                    <span className="font-medium">{orphanedNodes.length} orphaned node{orphanedNodes.length !== 1 ? 's' : ''} will be deleted</span>
-                  </div>
-                )}
-                <Button onClick={onSave} disabled={saving || submittingKg}>{saving ? 'Saving...' : 'Save'}</Button>
-                <Button onClick={submitToKg} disabled={saving || submittingKg}>
-                  {submittingKg ? 'Submitting…' : 'Submit to KG'}
-                </Button>
-              </div>
+              {!isViewMode && (
+                <div className="flex items-center gap-3">
+                  {hasUnsavedChanges && (
+                    <div className="flex items-center gap-2 text-amber-600 text-sm">
+                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                      </svg>
+                      <span className="font-medium">Unsaved changes</span>
+                    </div>
+                  )}
+                  {orphanedNodes.length > 0 && (
+                    <div className="flex items-center gap-2 text-red-600 text-sm">
+                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                      </svg>
+                      <span className="font-medium">{orphanedNodes.length} orphaned node{orphanedNodes.length !== 1 ? 's' : ''} will be deleted</span>
+                    </div>
+                  )}
+                  <Button onClick={onSave} disabled={saving || submittingKg}>{saving ? 'Saving...' : 'Save'}</Button>
+                  <Button onClick={submitToKg} disabled={saving || submittingKg}>
+                    {submittingKg ? 'Submitting…' : 'Submit to KG'}
+                  </Button>
+                </div>
+              )}
             </div>
           </div>
         </div>

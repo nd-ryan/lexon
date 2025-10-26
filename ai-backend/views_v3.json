@@ -27,10 +27,10 @@
         "from": "Forum"
       }
     },
-    "holdings": {
-      "root": "Holding",
+    "issues": {
+      "root": "Issue",
       "structure": {
-        "holding": {
+        "issue": {
           "self": true
         },
         "ruling": {
@@ -38,54 +38,37 @@
           "direction": "incoming",
           "single": true,
           "include": {
-            "reliefTypes": {
-              "via": "RESULTS_IN",
-              "label": "ReliefType"
-            }
-          }
-        },
-        "issue": {
-          "via": "ON_ISSUE",
-          "single": true,
-          "include": {
-            "doctrines": {
-              "via": "RELATES_TO_DOCTRINE",
-              "label": "Doctrine"
-            },
-            "policies": {
-              "via": "RELATES_TO_POLICY",
-              "label": "Policy"
-            },
-            "factPatterns": {
-              "via": "RELATES_TO_FACTPATTERN",
-              "label": "FactPattern"
-            }
-          }
-        },
-        "arguments": {
-          "via": "EVALUATED_IN",
-          "direction": "incoming",
-          "label": "Argument",
-          "include": {
-            "laws": {
+            "law": {
               "via": "RELIES_ON_LAW",
               "label": "Law"
             },
-            "facts": {
-              "via": "RELIES_ON_FACT",
-              "label": "Fact",
+            "relief": {
+              "via": "RESULTS_IN",
+              "label": "Relief",
               "include": {
-                "witnesses": {
-                  "via": "SUPPORTED_BY_WITNESS",
-                  "label": "Witness"
+                "reliefTypes": {
+                  "via": "IS_TYPE",
+                  "label": "ReliefType",
+                  "single": true
+                }
+              }
+            },
+            "arguments": {
+              "via": "EVALUATED_IN",
+              "direction": "incoming",
+              "label": "Argument",
+              "include": {
+                "doctrine": {
+                  "via": "RELATES_TO_DOCTRINE",
+                  "label": "Doctrine"
                 },
-                "evidence": {
-                  "via": "SUPPORTED_BY_EVIDENCE",
-                  "label": "Evidence"
+                "factPattern": {
+                  "via": "RELATES_TO_FACTPATTERN",
+                  "label": "FactPattern"
                 },
-                "judicialNotice": {
-                  "via": "SUPPORTED_BY_JUDICIAL_NOTICE",
-                  "label": "JudicialNotice"
+                "policy": {
+                  "via": "RELATES_TO_POLICY",
+                  "label": "Policy"
                 }
               }
             }
@@ -95,4 +78,3 @@
     }
   }
 }
-
