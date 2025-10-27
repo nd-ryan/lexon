@@ -62,7 +62,6 @@ export default function CaseEditorPage() {
   } | null>(null)
   // Local edit widgets commit on blur to avoid full re-render per keystroke
   const [activeHoldingId, setActiveHoldingId] = useState<string | null>(null)
-  const [expandedArgs, setExpandedArgs] = useState<Set<string>>(new Set())
   const [expandedFacts, setExpandedFacts] = useState<Set<string>>(new Set())
   const [viewingConnectionsNodeId, setViewingConnectionsNodeId] = useState<string | null>(null)
   const [deletingNodeId, setDeletingNodeId] = useState<string | null>(null)
@@ -1298,17 +1297,7 @@ export default function CaseEditorPage() {
   }
   
   // Toggle argument expansion
-  const toggleArg = (argId: string) => {
-    setExpandedArgs(prev => {
-      const next = new Set(prev)
-      if (next.has(argId)) {
-        next.delete(argId)
-      } else {
-        next.add(argId)
-      }
-      return next
-    })
-  }
+  
   
   // Toggle fact expansion
   const toggleFact = (factId: string) => {
@@ -1771,8 +1760,6 @@ export default function CaseEditorPage() {
               const reliefs = filterActiveNodes(ruling?.relief || [])
               const issue = rootEntity // In new structure, issue IS the root entity
               const args = filterActiveNodes(ruling?.arguments || [])
-              const holding = rootEntity // Alias for backward compatibility
-              const holdingData = entityData // Alias for backward compatibility
               
               const entityName = pickNodeName(rootEntity) || `${structureInfo.rootLabel} ${idx + 1}`
               
