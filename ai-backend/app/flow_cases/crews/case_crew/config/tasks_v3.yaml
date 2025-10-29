@@ -87,36 +87,63 @@ phase1_extract_issue_task:
 
 phase2_select_forum_task:
   description: |
-    Phase 2: Select a matching Forum, if any, from the provided forum catalog based on the case text.
+    Phase 2: Select the Forum (court/tribunal) where this case was heard by matching it to an entry in the provided catalog.
 
-    CRITICAL: Base your selection ONLY on the provided CASE_TEXT. Do not use general knowledge or external information. Select only what is explicitly or implicitly supported by the text.
+    YOUR TASK:
+    1. Read the CASE_TEXT below and identify which court/tribunal heard this case
+    2. Look through the CATALOGS JSON below to find the matching Forum entry
+    3. Return the forum_id from that catalog entry
 
-    INSTRUCTIONS:
+    CRITICAL RULES:
+    - You MUST select a forum_id from the catalog below
+    - DO NOT leave the selection empty unless absolutely no match exists
+    - Look for courts mentioned in the case text (e.g., "Supreme Court", "District Court", "Court of Appeals")
+    - The forum_id is the UUID string in the catalog entry
+    - Return format: { "selected": { "Forum": ["<forum_id_from_catalog>"] } }
+
+    STEP-BY-STEP PROCESS:
+    1. Identify the court name from the case text (look at the beginning of the document)
+    2. Search the Forum catalog for a matching entry by name
+    3. Extract the forum_id value from that entry
+    4. Return: { "selected": { "Forum": ["<that_forum_id>"] } }
+
+    EXAMPLE:
+    If case text mentions "Supreme Court of the United States" and catalog contains:
+    {"name": "U.S. Supreme Court", "type": "court", "forum_id": "abc-123-def"}
+    
+    Then return: { "selected": { "Forum": ["abc-123-def"] } }
+
+    FORUM INSTRUCTIONS:
     {FORUM_INSTRUCTIONS}
 
-    FORUM EXAMPLES:
+    FORUM EXAMPLES (for context only):
     {FORUM_EXAMPLES_JSON}
 
-    Guidance:
-    - YOU MUST ONLY RETURN a forum_id VALUE THAT EXISTS IN THE PROVIDED CATALOG.
-    - Return JSON as { "selected": { "Forum": [forum_id] } } where forum_id is from the catalog.
-    - If no matching Forum is found, return If no match found: [forum_id] is an empty array (e.g., [])
-    - DO NOT create, invent, or return any other values.
-    - Return ONLY the ID field values as they appear in the catalog entries.
-    - NEVER use general knowledge - ONLY select from the catalog IDs provided below.
-
-    CASE_TEXT:
+    CASE_TEXT (identify the court from here):
     {CASE_TEXT}
 
-    CATALOGS:
+    CATALOGS (select the forum_id from here):
     {CATALOGS_JSON}
-  expected_output: "A JSON object { selected: { Forum: [forum_id] } } where forum_id is from the catalog."
+  expected_output: "A JSON object { selected: { Forum: [forum_id] } } where forum_id is a UUID string from the catalog."
 
 phase4_ruling_per_issue_task:
   description: |
     Read the document text and for each Issue, identify the Ruling (court's disposition).
-
+    
     CRITICAL: Extract information ONLY from the provided case text. Do not use general knowledge or external information.
+    
+    DEDUPLICATION - IMPORTANT: Check if an existing ruling from previous batches applies to this issue before creating a new ruling.
+    
+    CONTEXT: Already-created rulings from previous batches:
+    {EXISTING_RULINGS_JSON}
+    
+    If a ruling already exists that applies to this issue:
+    - Return: {"issue_temp_id": "...", "temp_id": "n123", "in_favor": "..."}
+    - DO NOT include "ruling" field when reusing an existing ruling
+    
+    If a new ruling is needed:
+    - Return: {"issue_temp_id": "...", "ruling": {...properties...}, "in_favor": "..."}
+    - DO NOT include "temp_id" field when creating a new ruling
 
     RULING INSTRUCTIONS:
     {RULING_INSTRUCTIONS}
@@ -130,7 +157,7 @@ phase4_ruling_per_issue_task:
     - For each issue, identify the Ruling (court's disposition/decision on that issue) from the case text.
     - A single ruling may apply to multiple issues if they share the same disposition.
     - For each issue's ruling, identify which party the ruling favored (in_favor: plaintiff|defendant|appellant|appellee|petitioner|respondent).
-    - Return JSON as: { "rulings": [ { "issue_temp_id": string, "ruling": {...properties...}, "in_favor": string }, ... ] }.
+    - Return JSON as: { "rulings": [ { "issue_temp_id": string, "ruling": {...properties...} OR "temp_id": string, "in_favor": string }, ... ] }.
     - Use the temp_id from the provided ISSUES_JSON for "issue_temp_id" - do not generate new temp_ids.
     - The "ruling" object should match Ruling schema properties exactly.
     - Enforce types, enums, and date formats exactly as specified.
@@ -146,13 +173,25 @@ phase4_ruling_per_issue_task:
     ISSUES_JSON:
     {ISSUES_JSON}
 
-  expected_output: "A JSON object { rulings: [ { issue_temp_id: string, ruling: {...}, in_favor: string }, ... ] }"
+  expected_output: "A JSON object { rulings: [ { issue_temp_id: string, ruling: {...} OR temp_id: string, in_favor: string }, ... ] }"
 
 phase5_arguments_per_ruling_task:
   description: |
     For each Ruling, extract ALL Arguments evaluated in that ruling.
 
     CRITICAL: Extract information ONLY from the provided case text. Do not use general legal knowledge.
+    
+    IMPORTANT: Each ruling can have any number of arguments. Extract every argument mentioned or analyzed, not just the main ones.
+    
+    DEDUPLICATION - IMPORTANT: Check if an existing argument from previous batches matches before creating a new argument.
+    
+    CONTEXT: Already-created arguments from previous batches:
+    {EXISTING_ARGUMENTS_JSON}
+    
+    For each argument in the ruling:
+    - If it matches an existing argument, return: {"temp_id": "n123", "status": "Accepted"|"Rejected"}
+    - If it's a new argument, return: {"properties": {...}, "status": "Accepted"|"Rejected"}
+    - DO NOT include both "temp_id" and "properties" in the same argument object
 
     IMPORTANT: The RULING_EXAMPLES_JSON below shows full ruling objects paired with their arguments for context only. Your output should only reference rulings by their temp_id from RULINGS_JSON, not reproduce the full ruling object.
 
@@ -164,10 +203,10 @@ phase5_arguments_per_ruling_task:
 
     Guidance:
     - For each argument, indicate:
-      * properties: all Argument schema properties (text, raised_by, label, etc.)
+      * properties: all Argument schema properties (text, raised_by, label, etc.) OR temp_id: existing argument temp_id
       * status: whether it was "Accepted" or "Rejected" by the ruling
     - Note: The 'status' field is NOT a property of the Argument node itself. Keep it separate in the JSON object.
-    - Return JSON as: { "results": [ { "ruling_temp_id": string, "arguments": [ { properties: <Argument properties>, status: "Accepted"|"Rejected" }, ... ] } ] }.
+    - Return JSON as: { "results": [ { "ruling_temp_id": string, "arguments": [ { properties: <Argument properties> OR temp_id: string, status: "Accepted"|"Rejected" }, ... ] } ] }.
     - Extract from case text only; do not invent arguments.
 
     ARGUMENT SCHEMA:
@@ -178,7 +217,7 @@ phase5_arguments_per_ruling_task:
 
     RULINGS_JSON:
     {RULINGS_JSON}
-  expected_output: "A JSON object { results: [ { ruling_temp_id: string, arguments: [{ properties: {...}, status: string }, ...] } ] }"
+  expected_output: "A JSON object { results: [ { ruling_temp_id: string, arguments: [{ properties: {...} OR temp_id: string, status: string }, ...] } ] }"
 
 phase6_laws_per_ruling_task:
   description: |

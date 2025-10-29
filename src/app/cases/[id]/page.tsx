@@ -20,6 +20,7 @@ interface UnifiedNode extends GraphNode {
 
 interface UnifiedEdge extends GraphEdge {
   status: 'active' | 'deleted'
+  properties?: Record<string, any>
 }
 
 export default function CaseEditorPage() {
@@ -66,6 +67,8 @@ export default function CaseEditorPage() {
   const [viewingConnectionsNodeId, setViewingConnectionsNodeId] = useState<string | null>(null)
   const [deletingNodeId, setDeletingNodeId] = useState<string | null>(null)
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
+  const [partiesExpanded, setPartiesExpanded] = useState(false)
+  const [partiesSectionExpanded, setPartiesSectionExpanded] = useState(false)
 
   useEffect(() => {
     // Debug: track when edit modal state changes
@@ -608,10 +611,10 @@ export default function CaseEditorPage() {
       // View mode: show as text
       if (isViewMode) {
         return (
-          <div className="w-full" style={indentStyle}>
-            <label className="block text-xs font-medium text-gray-700 mt-2 mb-0.5">{formatLabel(label)}</label>
-            <div className="text-xs text-gray-900 py-1">
-              {nodeIdToDisplay[valueId] || valueId || <span className="text-gray-400 italic">Not set</span>}
+          <div className="w-full mb-3" style={indentStyle}>
+            <label className="block text-[10px] uppercase tracking-wide font-medium text-gray-500 mb-1">{formatLabel(label)}</label>
+            <div className="text-sm text-gray-900">
+              {nodeIdToDisplay[valueId] || valueId || <span className="text-gray-400 italic text-xs">Not set</span>}
             </div>
           </div>
         )
@@ -620,7 +623,9 @@ export default function CaseEditorPage() {
       // Edit mode: show dropdown
       return (
         <div className="w-full" style={indentStyle}>
-          <label className="block text-xs font-medium text-gray-700 mt-2 mb-0.5">{formatLabel(label)}</label>
+          <label className="block text-xs font-medium text-gray-700 mt-2 mb-0.5">
+            {formatLabel(label)}{required ? ' *' : ''}
+          </label>
           <select
             className="w-full rounded-md border border-gray-300 bg-white px-2 py-1 text-xs shadow-sm focus:border-gray-400 focus:outline-none"
             value={valueId}
@@ -647,12 +652,12 @@ export default function CaseEditorPage() {
         // View mode: show as text
         if (isViewMode) {
           return (
-            <div className="w-full" style={indentStyle}>
-              <label className="block text-xs font-medium text-gray-700 mt-2 mb-0.5">
-                {displayLabel}{required ? ' *' : ''}
+            <div className="w-full mb-3" style={indentStyle}>
+              <label className="block text-[10px] uppercase tracking-wide font-medium text-gray-500 mb-1">
+                {displayLabel}
               </label>
-              <div className="text-xs text-gray-900 py-1">
-                {local || <span className="text-gray-400 italic">Not selected</span>}
+              <div className="text-sm text-gray-900">
+                {local || <span className="text-gray-400 italic text-xs">Not selected</span>}
               </div>
             </div>
           )
@@ -686,12 +691,12 @@ export default function CaseEditorPage() {
         // View mode: show as text
         if (isViewMode) {
           return (
-            <div className="w-full" style={indentStyle}>
-              <label className="block text-xs font-medium text-gray-700 mt-2 mb-0.5">
-                {displayLabel}{required ? ' *' : ''}
+            <div className="w-full mb-3" style={indentStyle}>
+              <label className="block text-[10px] uppercase tracking-wide font-medium text-gray-500 mb-1">
+                {displayLabel}
               </label>
-              <div className="text-xs text-gray-900 py-1">
-                {local || <span className="text-gray-400 italic">Not set</span>}
+              <div className="text-sm text-gray-900">
+                {local || <span className="text-gray-400 italic text-xs">Not set</span>}
               </div>
             </div>
           )
@@ -720,12 +725,12 @@ export default function CaseEditorPage() {
         // View mode: show as text
         if (isViewMode) {
           return (
-            <div className="w-full" style={indentStyle}>
-              <label className="block text-xs font-medium text-gray-700 mt-2 mb-0.5">
-                {displayLabel}{required ? ' *' : ''}
+            <div className="w-full mb-3" style={indentStyle}>
+              <label className="block text-[10px] uppercase tracking-wide font-medium text-gray-500 mb-1">
+                {displayLabel}
               </label>
-              <div className="text-xs text-gray-900 py-1">
-                {local || <span className="text-gray-400 italic">Not set</span>}
+              <div className="text-sm text-gray-900">
+                {local || <span className="text-gray-400 italic text-xs">Not set</span>}
               </div>
             </div>
           )
@@ -758,12 +763,12 @@ export default function CaseEditorPage() {
       // View mode: show as text
       if (isViewMode) {
         return (
-          <div className="w-full" style={indentStyle}>
-            <label className="block text-xs font-medium text-gray-700 mt-2 mb-0.5">
-              {displayLabel}{required ? ' *' : ''}
+          <div className="w-full mb-3" style={indentStyle}>
+            <label className="block text-[10px] uppercase tracking-wide font-medium text-gray-500 mb-1">
+              {displayLabel}
             </label>
-            <div className="text-xs text-gray-900 py-1 whitespace-pre-wrap">
-              {local || <span className="text-gray-400 italic">Not set</span>}
+            <div className="text-sm text-gray-900 whitespace-pre-wrap leading-relaxed">
+              {local || <span className="text-gray-400 italic text-xs">Not set</span>}
             </div>
           </div>
         )
@@ -804,11 +809,11 @@ export default function CaseEditorPage() {
       // View mode: show as text
       if (isViewMode) {
         return (
-          <div className="flex items-center justify-between" style={indentStyle}>
-            <label className="text-xs font-medium text-gray-700">
-              {displayLabel}{required ? ' *' : ''}
+          <div className="flex items-start justify-between mb-3" style={indentStyle}>
+            <label className="text-[10px] uppercase tracking-wide font-medium text-gray-500">
+              {displayLabel}
             </label>
-            <span className="text-xs text-gray-900">
+            <span className="text-sm text-gray-900">
               {value ? 'Yes' : 'No'}
             </span>
           </div>
@@ -917,6 +922,31 @@ export default function CaseEditorPage() {
   const getNodeTypeLabel = (nodeId: string): string => {
     const node = graphState.nodes.find((n: any) => n.temp_id === nodeId)
     return node?.label || 'Node'
+  }
+
+  // Get argument status from EVALUATED_IN edge
+  const getArgumentStatus = (argumentId: string, rulingId: string): string | null => {
+    const edge = graphState.edges.find(
+      (e: any) => e.from === argumentId && e.to === rulingId && e.label === 'EVALUATED_IN' && e.status === 'active'
+    )
+    return edge?.properties?.status || null
+  }
+
+  // Update argument status on EVALUATED_IN edge
+  const setArgumentStatus = (argumentId: string, rulingId: string, status: string) => {
+    setGraphState(prev => ({
+      ...prev,
+      edges: prev.edges.map(e => {
+        if (e.from === argumentId && e.to === rulingId && e.label === 'EVALUATED_IN') {
+          return {
+            ...e,
+            properties: { ...e.properties, status }
+          }
+        }
+        return e
+      })
+    }))
+    setHasUnsavedChanges(true)
   }
 
   // Helper: Find all descendants (children, grandchildren, etc.) of a node
@@ -1339,6 +1369,7 @@ export default function CaseEditorPage() {
     index, 
     depth = 0, 
     badge,
+    statusBadge,
     children,
     parentId
   }: { 
@@ -1347,6 +1378,7 @@ export default function CaseEditorPage() {
     index?: number; 
     depth?: number; 
     badge?: React.ReactNode;
+    statusBadge?: React.ReactNode;
     children?: React.ReactNode;
     parentId?: string;
   }) => {
@@ -1366,12 +1398,15 @@ export default function CaseEditorPage() {
             <div className="text-sm font-semibold text-gray-900">{displayLabel}</div>
             {badge}
           </div>
-          {!isViewMode && (
-            <NodeActionMenu 
-              nodeId={node.temp_id}
-              parentId={parentId}
-            />
-          )}
+          <div className="flex items-center gap-2">
+            {statusBadge}
+            {!isViewMode && (
+              <NodeActionMenu 
+                nodeId={node.temp_id}
+                parentId={parentId}
+              />
+            )}
+          </div>
         </div>
         <ObjectFields 
           obj={node.properties || {}} 
@@ -1414,13 +1449,27 @@ export default function CaseEditorPage() {
       items.forEach((item: any, idx: number) => {
         if (!item || !item.temp_id) return
         
+        // Check if this node has any children to show
+        const hasChildren = config.include && Object.keys(config.include).length > 0 && 
+          Object.entries(config.include).some(([childKey, childConfig]: [string, any]) => {
+            if (childConfig.self) return false
+            const childValue = item[childKey]
+            if (!childValue) return false
+            const childItems = Array.isArray(childValue) ? childValue : [childValue]
+            return childItems.some((child: any) => 
+              child && child.temp_id && 
+              !deletedNodeIds.has(child.temp_id) && 
+              !orphanedNodeIds.has(child.temp_id)
+            )
+          })
+        
         // Check if this node is expanded using a generic key
         const isExpanded = isCollapsible && expandedFacts.has(item.temp_id)
         
         elements.push(
           <div key={`${key}-${item.temp_id}`} className="space-y-1">
             <div className="flex items-center gap-1">
-              {isCollapsible && (
+              {isCollapsible && hasChildren && (
                 <div
                   onClick={() => toggleFact(item.temp_id)}
                   className="px-1 cursor-pointer text-gray-500 hover:text-gray-700"
@@ -1430,13 +1479,15 @@ export default function CaseEditorPage() {
               )}
               <div
                 onClick={() => scrollToNodeById(item.temp_id, rootId)}
-                className="flex-1 px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-600 cursor-pointer"
+                className={`flex-1 px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-600 cursor-pointer break-words ${
+                  !isCollapsible || !hasChildren ? 'ml-0' : ''
+                }`}
               >
                 {formatLabel(item.label || key)} {idx + 1}
               </div>
             </div>
             
-            {(isExpanded || !isCollapsible) && config.include && (
+            {(isExpanded || !isCollapsible) && hasChildren && (
               <div className="pl-5 space-y-1">
                 {renderNestedStructureSidebar(item, config.include, rootId, depth + 1)}
               </div>
@@ -1489,7 +1540,7 @@ export default function CaseEditorPage() {
               {caseNode && (
                 <div
                   onClick={() => scrollToNodeById(caseNode.temp_id)}
-                  className="px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-600 cursor-pointer"
+                  className="px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-600 cursor-pointer break-words"
                 >
                   Case
                 </div>
@@ -1498,7 +1549,7 @@ export default function CaseEditorPage() {
                 <div key={proc.temp_id}>
                   <div
                     onClick={() => scrollToNodeById(proc.temp_id)}
-                    className="px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-600 cursor-pointer"
+                    className="px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-600 cursor-pointer break-words"
                   >
                     Proceeding {idx + 1}
                   </div>
@@ -1508,20 +1559,41 @@ export default function CaseEditorPage() {
                 <div
                   key={forum.temp_id}
                   onClick={() => scrollToNodeById(forum.temp_id)}
-                  className="px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-600 cursor-pointer"
+                  className="px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-600 cursor-pointer break-words"
                 >
                   Forum {idx + 1}
                 </div>
               ))}
-              {partyNodes.map((party: any, idx: number) => (
-                <div
-                  key={party.temp_id}
-                  onClick={() => scrollToNodeById(party.temp_id)}
-                  className="px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-600 cursor-pointer"
-                >
-                  Party {idx + 1}
+              {partyNodes.length > 0 && (
+                <div>
+                  <div
+                    onClick={() => setPartiesExpanded(!partiesExpanded)}
+                    className="flex items-center gap-1 px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-600 cursor-pointer"
+                  >
+                    <span className="text-xs">{partiesExpanded ? '▼' : '▶'}</span>
+                    <span>Parties ({partyNodes.length})</span>
+                  </div>
+                  {partiesExpanded && (
+                    <div className="pl-4 space-y-1 mt-1">
+                      {partyNodes.map((party: any, idx: number) => {
+                        const partyName = pickNodeName(party) || `Party ${idx + 1}`
+                        return (
+                          <div
+                            key={party.temp_id}
+                            onClick={() => {
+                              setPartiesSectionExpanded(true)
+                              setTimeout(() => scrollToNodeById(party.temp_id), 100)
+                            }}
+                            className="px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-600 cursor-pointer break-words"
+                          >
+                            {partyName}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
                 </div>
-              ))}
+              )}
             </div>
           </div>
           
@@ -1537,7 +1609,13 @@ export default function CaseEditorPage() {
                 
                 if (!root) return null
                 
-                const name = pickNodeName(root) || `${structureInfo.rootLabel} ${idx + 1}`
+                // For Issue nodes, show "Issue {n}: {label}", otherwise use pickNodeName
+                const issueLabel = root.label === 'Issue' && root.properties?.label 
+                  ? root.properties.label 
+                  : null
+                const name = issueLabel 
+                  ? `${structureInfo.rootLabel} ${idx + 1}: ${issueLabel}`
+                  : pickNodeName(root) || `${structureInfo.rootLabel} ${idx + 1}`
                 const isActive = activeHoldingId === root.temp_id
                 
                 return (
@@ -1549,14 +1627,14 @@ export default function CaseEditorPage() {
                         isActive ? 'bg-blue-100 text-blue-900 font-medium' : 'hover:bg-gray-100 text-gray-700'
                       }`}
                     >
-                      <div className="truncate">{name}</div>
+                      <div className="break-words">{name}</div>
                     </div>
                     
                     {/* Dynamic content based on structure config */}
                     <div className="pl-4 space-y-1.5 border-l border-gray-300 ml-2">
                         <div
                         onClick={() => scrollToNodeById(root.temp_id, root.temp_id)}
-                          className="px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-600 cursor-pointer"
+                          className="px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-600 cursor-pointer break-words"
                         >
                           {structureInfo.rootLabel} Details
                         </div>
@@ -1574,7 +1652,9 @@ export default function CaseEditorPage() {
       {/* Main Content */}
       <div className="flex-1 flex flex-col bg-gray-50">
         <div className="p-6 space-y-6 text-xs flex-1 overflow-y-auto">
-          <h1 className="text-2xl font-semibold tracking-tight">Edit Case</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {caseNode ? pickNodeName(caseNode) || 'Case' : 'Case'}
+          </h1>
         {error && (
           <div className="rounded-md border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-700">{error}</div>
         )}
@@ -1720,23 +1800,35 @@ export default function CaseEditorPage() {
                   }
                   return (
                     <div>
-                      <SectionHeader
-                        title="Parties"
-                        actionButton={!isViewMode && state && (
-                          <RelationshipAction
-                            state={state}
-                            parentNodeLabel={parentLabel}
-                            position="inline"
-                            onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, parentNode?.temp_id)}
-                            onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, parentNode?.temp_id)}
-                          />
-                        )}
-                      />
-                      <div className="space-y-4">
-                        {partyNodes.map((party: any, idx: number) => (
-                          <NodeCard key={party.temp_id} node={party} label="Party" index={idx} depth={0} />
-                        ))}
+                      <div className="flex items-center justify-between mb-3">
+                        <div 
+                          onClick={() => setPartiesSectionExpanded(!partiesSectionExpanded)}
+                          className="flex items-center gap-2 cursor-pointer hover:text-gray-900"
+                        >
+                          <span className="text-sm">{partiesSectionExpanded ? '▼' : '▶'}</span>
+                          <h3 className="text-sm font-semibold text-gray-700">
+                            Parties ({partyNodes.length})
+                          </h3>
+                        </div>
+                        <div>
+                          {!isViewMode && state && (
+                            <RelationshipAction
+                              state={state}
+                              parentNodeLabel={parentLabel}
+                              position="inline"
+                              onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, parentNode?.temp_id)}
+                              onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, parentNode?.temp_id)}
+                            />
+                          )}
+                        </div>
                       </div>
+                      {partiesSectionExpanded && (
+                        <div className="space-y-4">
+                          {partyNodes.map((party: any, idx: number) => (
+                            <NodeCard key={party.temp_id} node={party} label="Party" index={idx} depth={0} />
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )
                 })()}
@@ -1761,7 +1853,13 @@ export default function CaseEditorPage() {
               const issue = rootEntity // In new structure, issue IS the root entity
               const args = filterActiveNodes(ruling?.arguments || [])
               
-              const entityName = pickNodeName(rootEntity) || `${structureInfo.rootLabel} ${idx + 1}`
+              // For Issue nodes, show "Issue {n}: {label}", otherwise use pickNodeName
+              const issueLabel = rootEntity.label === 'Issue' && rootEntity.properties?.label 
+                ? rootEntity.properties.label 
+                : null
+              const entityName = issueLabel 
+                ? `${structureInfo.rootLabel} ${idx + 1}: ${issueLabel}`
+                : pickNodeName(rootEntity) || `${structureInfo.rootLabel} ${idx + 1}`
               
               return (
                 <div 
@@ -1890,9 +1988,40 @@ export default function CaseEditorPage() {
                                     const doctrines = filterActiveNodes(argData.doctrine || [])
                                     const policies = filterActiveNodes(argData.policy || [])
                                     const factPatterns = filterActiveNodes(argData.factPattern || [])
+                                    const argumentStatus = getArgumentStatus(arg.temp_id, ruling.temp_id)
                                     
                                     return (
-                                      <NodeCard key={arg.temp_id} node={arg} label="Argument" index={argIdx} depth={1}>
+                                      <NodeCard 
+                                        key={arg.temp_id} 
+                                        node={arg} 
+                                        label="Argument" 
+                                        index={argIdx} 
+                                        depth={1}
+                                        parentId={ruling.temp_id}
+                                        statusBadge={
+                                          isViewMode ? (
+                                            argumentStatus && (
+                                              <span className={`px-2 py-1 rounded text-xs font-medium ${
+                                                argumentStatus === 'Accepted' 
+                                                  ? 'bg-green-100 text-green-800' 
+                                                  : 'bg-red-100 text-red-800'
+                                              }`}>
+                                                {argumentStatus}
+                                              </span>
+                                            )
+                                          ) : (
+                                            <select
+                                              className="px-2 py-1 rounded border border-gray-300 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                              value={argumentStatus || ''}
+                                              onChange={(e) => setArgumentStatus(arg.temp_id, ruling.temp_id, e.target.value)}
+                                            >
+                                              <option value="">Select status...</option>
+                                              <option value="Accepted">Accepted</option>
+                                              <option value="Rejected">Rejected</option>
+                                            </select>
+                                          )
+                                        }
+                                      >
                                         <div className="mt-4 space-y-6">
                                           {/* Doctrines Section */}
                                           {(() => {

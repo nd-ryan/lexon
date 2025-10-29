@@ -1,8 +1,12 @@
 {
   "batch_sizes": {
+    "phase4_issues": 1,
+    "phase5_rulings": 1,
     "phase7_arguments": 3
   },
   "comments": {
+    "phase4_issues": "Process one issue per batch for Ruling extraction. Allows AI to deduplicate rulings across issues.",
+    "phase5_rulings": "Process one ruling per batch for Argument extraction. Allows AI to deduplicate arguments across rulings.",
     "phase7_arguments": "Batch size for assigning Doctrine/Policy/FactPattern concepts to Arguments. Set to 3 to process arguments in small batches. New concepts created in each batch are appended to catalogs before the next batch, ensuring de-duplication across batches."
   }
 }

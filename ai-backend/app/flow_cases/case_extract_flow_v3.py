@@ -211,15 +211,34 @@ class CaseExtractFlow(Flow[CaseExtractState]):
         """
         selected: Dict[str, List[str]] = {}
         try:
-            text = str(result)
-            data = json.loads(text) if isinstance(result, str) else (result if isinstance(result, dict) else json.loads(str(result)))
+            # First check if result has pydantic attribute (CrewOutput with Pydantic model)
+            if hasattr(result, 'pydantic'):
+                pydantic_result = result.pydantic
+                # Check if pydantic result has model_dump method
+                if hasattr(pydantic_result, 'model_dump'):
+                    data = pydantic_result.model_dump()
+                elif hasattr(pydantic_result, 'dict'):
+                    data = pydantic_result.dict()
+                else:
+                    # Try to access as dict directly
+                    data = dict(pydantic_result) if hasattr(pydantic_result, '__dict__') else {}
+            # Fall back to JSON parsing for string/dict results
+            elif isinstance(result, str):
+                data = json.loads(result)
+            elif isinstance(result, dict):
+                data = result
+            else:
+                # Try JSON parsing as last resort
+                data = json.loads(str(result))
+            
+            # Extract selected field
             sel = data.get("selected") if isinstance(data, dict) else None
             if isinstance(sel, dict):
                 for k, v in sel.items():
                     if isinstance(k, str) and isinstance(v, list):
                         selected[k] = [str(x) for x in v]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to parse selection response: {e}")
         return selected
 
     def validate_relationship_properties(self, source_label: str, rel_label: str, props: Dict[str, Any]) -> Dict[str, Any]:
@@ -715,21 +734,6 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             from .crews.case_crew.case_crew_v3 import CaseCrew as _CaseCrew
             # Build catalog for Forum only
             catalogs = self.build_catalog_for_labels(["Forum"])
-
-            # Select Forum based on case text
-            crew_sel = _CaseCrew(
-                self.state.file_path,
-                self.state.filename,
-                self.state.case_id,
-                tools=[],
-                replacements={
-                    "CASE_TEXT": self.state.document_text or "",
-                    "CATALOGS_JSON": json.dumps(catalogs, ensure_ascii=False),
-                },
-            )
-
-            # Build catalog for Forum only
-            catalogs = self.build_catalog_for_labels(["Forum"])
             
             # Get Forum instructions and examples from flow_map
             forum_instructions, forum_examples_json = _get_label_instructions_and_examples("Forum", self.state.node_instructions_by_label)
@@ -756,7 +760,23 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             edges_before = len(self.state.edges_accumulated or [])
             nodes_before = len(self.state.nodes_accumulated or [])
             result_sel = single_crew_sel.kickoff()
+            
+            # Debug logging - show raw AI output before parsing
+            logger.info(f"Phase 2: Raw AI result type: {type(result_sel)}")
+            if hasattr(result_sel, 'pydantic'):
+                logger.info(f"Phase 2: Has pydantic attribute, value: {result_sel.pydantic}")
+            if hasattr(result_sel, 'raw'):
+                logger.info(f"Phase 2: Has raw attribute, value: {result_sel.raw}")
+            logger.info(f"Phase 2: String representation: {str(result_sel)}")
+            
             selected = self.parse_selection_response(result_sel)
+            
+            # Debug logging for forum selection
+            logger.info(f"Phase 2: AI selected forum_ids: {selected}")
+            logger.info(f"Phase 2: Forum catalog size: {len(catalogs.get('Forum', []))}")
+            if catalogs.get('Forum'):
+                sample = catalogs['Forum'][:3]
+                logger.info(f"Phase 2: Sample catalog entries: {sample}")
 
             # Create selected Forum nodes by ID lookup
             next_idx = 1 + len(self.state.nodes_accumulated or [])
@@ -1029,8 +1049,8 @@ class CaseExtractFlow(Flow[CaseExtractState]):
 
     @listen(phase3_extract_parties)
     def phase4_extract_ruling_per_issue(self, _: Dict[str, Any]) -> Dict[str, Any]:
-        # Phase 4: extract one Ruling per Issue; create Proceeding→Ruling and Ruling→Issue edges
-        logger.info("Phase 4: extracting Ruling per Issue (one-to-one)")
+        # Phase 4: extract one Ruling per Issue (batched with AI-driven deduplication); create Proceeding→Ruling and Ruling→Issue edges
+        logger.info("Phase 4: extracting Ruling per Issue (batched with AI deduplication)")
         if self.state.progress_callback:
             try:
                 self.state.progress_callback("Phase 4 in progress: Extracting rulings", "phase4", 40)
@@ -1038,6 +1058,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 logger.warning(f"Failed to publish progress: {e}")
         try:
             from .crews.case_crew.case_crew_v3 import CaseCrew as _CaseCrew
+            from typing import Union
             
             # Collect all Issues
             issues = [
@@ -1048,6 +1069,9 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             if not issues:
                 logger.info("Phase 4: no Issue nodes present; skipping Ruling extraction")
                 return {"status": "phase4_skipped"}
+            
+            # Get batch size from config (default: 1 issue per batch)
+            batch_size = (self.state.flow_config or {}).get("batch_sizes", {}).get("phase4_issues", 1)
             
             # Get cached node instructions for Ruling (O(1) lookup)
             ruling_instructions, ruling_examples_json = _get_label_instructions_and_examples("Ruling", self.state.node_instructions_by_label)
@@ -1062,141 +1086,162 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 ruling_spec_text = render_spec_text({"labels": [ruling_def_props_only]})
             
             ruling_model = (self.state.models_by_label or {}).get("Ruling")
-            
-            # Build issues payload
-            issues_payload = {"issues": issues}
-            
-            # Build replacements for YAML task template
-            replacements = {
-                "CASE_TEXT": self.state.document_text or "",
-                "ISSUES_JSON": json.dumps(issues_payload, ensure_ascii=False),
-                "RULING_INSTRUCTIONS": ruling_instructions,
-                "RULING_EXAMPLES_JSON": ruling_examples_json,
-                "RULING_SPEC_TEXT": ruling_spec_text,
-            }
-            
-            # Create crew with replacements
-            crew = _CaseCrew(
-                self.state.file_path,
-                self.state.filename,
-                self.state.case_id,
-                tools=[],
-                replacements=replacements,
-            )
-            
-            # Create task with Pydantic output model
-            # Build dynamic response model using schema-derived RulingPropertiesModel
             if ruling_model is None:
                 raise ValueError("Phase 4: Ruling model not found in state; schema must be available for phase4")
             
-            # Create RulingPerIssueResult with schema-derived ruling model
-            ruling_per_issue_result = create_model(
-                'RulingPerIssueResult',
-                issue_temp_id=(str, ...),
-                ruling=(ruling_model, ...),
-                in_favor=(Optional[str], None),
-            )
-            # Create batch response model
-            ruling_batch_response = create_model(
-                'RulingPerIssueBatchResponse',
-                rulings=(List[ruling_per_issue_result], ...),
-            )
-            
-            task = crew.phase4_ruling_per_issue_task(ruling_batch_response)
-            single_crew = Crew(
-                agents=[crew.phase1_extract_agent()],
-                tasks=[task],
-                process=Process.sequential,
-            )
-            
-            edges_before = len(self.state.edges_accumulated or [])
-            nodes_before = len(self.state.nodes_accumulated or [])
-            result = single_crew.kickoff()
-            
-            # Parse result from Pydantic model - expect format: { "rulings": [{"issue_temp_id": str, "ruling": {...}, "in_favor": str}] }
-            if hasattr(result, 'pydantic'):
-                data = result.pydantic.model_dump() if hasattr(result.pydantic, 'model_dump') else result.pydantic
-            elif hasattr(result, 'model_dump'):
-                data = result.model_dump()
-            else:
-                data = self.parse_crew_result(result)
-            rulings_list = data.get("rulings") if isinstance(data, dict) else None
-            if not isinstance(rulings_list, list):
-                rulings_list = []
+            # Split issues into batches
+            total_issues = len(issues)
+            num_batches = (total_issues + batch_size - 1) // batch_size  # Ceiling division
+            logger.info(f"Phase 4: Processing {total_issues} issues in {num_batches} batch(es) of size {batch_size}")
             
             proceeding_temp_id = self.find_first_temp_id("Proceeding")
             next_idx = 1 + len(self.state.nodes_accumulated or [])
+            nodes_before = len(self.state.nodes_accumulated or [])
+            edges_before = len(self.state.edges_accumulated or [])
             
-            # Track created Rulings for deduplication (same Ruling can apply to multiple Issues)
-            ruling_signatures: Dict[str, str] = {}  # signature -> temp_id
-            
-            # Process each ruling (one per issue)
-            for entry in rulings_list:
-                if not isinstance(entry, dict):
-                    continue
+            # Process issues in batches
+            for batch_num in range(num_batches):
+                start_idx = batch_num * batch_size
+                end_idx = min(start_idx + batch_size, total_issues)
+                batch_issues = issues[start_idx:end_idx]
                 
-                issue_temp_id = entry.get("issue_temp_id")
-                ruling_props = entry.get("ruling")
-                in_favor = entry.get("in_favor")  # For SETS relationship property
+                logger.info(f"Phase 4: Processing batch {batch_num + 1}/{num_batches} ({len(batch_issues)} issues)")
                 
-                if not isinstance(ruling_props, dict):
-                    logger.warning(f"Phase 4: Ruling for issue {issue_temp_id} is not a dict")
-                    continue
+                # Build context of already-created Rulings for AI deduplication
+                existing_rulings = [
+                    {"temp_id": n.get("temp_id"), "properties": n.get("properties") or {}}
+                    for n in (self.state.nodes_accumulated or [])
+                    if isinstance(n, dict) and n.get("label") == "Ruling" and isinstance(n.get("temp_id"), str)
+                ]
                 
-                # Validate Ruling properties
-                ruling_properties = self.validate_with_model(ruling_props, ruling_model)
+                # Build replacements for YAML task template
+                replacements = {
+                    "CASE_TEXT": self.state.document_text or "",
+                    "ISSUES_JSON": json.dumps({"issues": batch_issues}, ensure_ascii=False),
+                    "EXISTING_RULINGS_JSON": json.dumps({"rulings": existing_rulings}, ensure_ascii=False),
+                    "RULING_INSTRUCTIONS": ruling_instructions,
+                    "RULING_EXAMPLES_JSON": ruling_examples_json,
+                    "RULING_SPEC_TEXT": ruling_spec_text,
+                }
                 
-                # Dedup Ruling by signature (label + type)
-                ruling_sig = f"{ruling_properties.get('label', '')}|{ruling_properties.get('type', '')}".strip()
-                if ruling_sig and ruling_sig in ruling_signatures:
-                    # Reuse existing Ruling
-                    ruling_temp_id = ruling_signatures[ruling_sig]
-                    logger.debug(f"Phase 4: Reusing existing Ruling ({ruling_temp_id})")
+                # Create crew with replacements
+                crew = _CaseCrew(
+                    self.state.file_path,
+                    self.state.filename,
+                    self.state.case_id,
+                    tools=[],
+                    replacements=replacements,
+                )
+                
+                # Create Pydantic output model that accepts either temp_id OR ruling properties
+                # For reuse: {"issue_temp_id": "...", "temp_id": "n123", "in_favor": "..."}
+                # For new: {"issue_temp_id": "...", "ruling": {...}, "in_favor": "..."}
+                ruling_per_issue_result = create_model(
+                    'RulingPerIssueResult',
+                    issue_temp_id=(str, ...),
+                    temp_id=(Optional[str], None),
+                    ruling=(Optional[ruling_model], None),
+                    in_favor=(Optional[str], None),
+                )
+                ruling_batch_response = create_model(
+                    'RulingPerIssueBatchResponse',
+                    rulings=(List[ruling_per_issue_result], ...),
+                )
+                
+                task = crew.phase4_ruling_per_issue_task(ruling_batch_response)
+                single_crew = Crew(
+                    agents=[crew.phase1_extract_agent()],
+                    tasks=[task],
+                    process=Process.sequential,
+                )
+                
+                result = single_crew.kickoff()
+                
+                # Parse result from Pydantic model
+                if hasattr(result, 'pydantic'):
+                    data = result.pydantic.model_dump() if hasattr(result.pydantic, 'model_dump') else result.pydantic
+                elif hasattr(result, 'model_dump'):
+                    data = result.model_dump()
                 else:
-                    # Create new Ruling
-                    ruling_temp_id = f"n{next_idx}"
-                    next_idx += 1
-                    ruling_node = {"temp_id": ruling_temp_id, "label": "Ruling", "properties": ruling_properties}
-                    self.state.nodes_accumulated.append(ruling_node)
-                    if ruling_sig:
-                        ruling_signatures[ruling_sig] = ruling_temp_id
+                    data = self.parse_crew_result(result)
+                rulings_list = data.get("rulings") if isinstance(data, dict) else None
+                if not isinstance(rulings_list, list):
+                    rulings_list = []
+                
+                # Process each ruling result
+                for entry in rulings_list:
+                    if not isinstance(entry, dict):
+                        continue
                     
-                    # Create edge: Proceeding → Ruling (RESULTS_IN) - only once per unique Ruling
-                    if proceeding_temp_id:
-                        rel_label_results_in = get_relationship_label_for_edge("Proceeding", "Ruling", self.state.rels_by_label or {})
-                        if rel_label_results_in:
+                    issue_temp_id = entry.get("issue_temp_id")
+                    reuse_temp_id = entry.get("temp_id")
+                    ruling_props = entry.get("ruling")
+                    in_favor = entry.get("in_favor")
+                    
+                    ruling_temp_id = None
+                    
+                    # Check if AI is reusing an existing ruling
+                    if isinstance(reuse_temp_id, str) and reuse_temp_id:
+                        # Verify the temp_id exists in our accumulated nodes
+                        if any(n.get("temp_id") == reuse_temp_id and n.get("label") == "Ruling" 
+                               for n in (self.state.nodes_accumulated or []) if isinstance(n, dict)):
+                            ruling_temp_id = reuse_temp_id
+                            logger.debug(f"Phase 4 batch {batch_num + 1}: Reusing existing Ruling ({ruling_temp_id}) for issue {issue_temp_id}")
+                        else:
+                            logger.warning(f"Phase 4 batch {batch_num + 1}: AI returned invalid temp_id {reuse_temp_id}; will try to create new ruling")
+                    
+                    # If not reusing, create new ruling
+                    if ruling_temp_id is None:
+                        if not isinstance(ruling_props, dict):
+                            logger.warning(f"Phase 4 batch {batch_num + 1}: No valid ruling data for issue {issue_temp_id}")
+                            continue
+                        
+                        # Validate Ruling properties
+                        ruling_properties = self.validate_with_model(ruling_props, ruling_model)
+                        
+                        # Create new Ruling
+                        ruling_temp_id = f"n{next_idx}"
+                        next_idx += 1
+                        ruling_node = {"temp_id": ruling_temp_id, "label": "Ruling", "properties": ruling_properties}
+                        self.state.nodes_accumulated.append(ruling_node)
+                        logger.debug(f"Phase 4 batch {batch_num + 1}: Created new Ruling ({ruling_temp_id}) for issue {issue_temp_id}")
+                        
+                        # Create edge: Proceeding → Ruling (RESULTS_IN) - only for new rulings
+                        if proceeding_temp_id:
+                            rel_label_results_in = get_relationship_label_for_edge("Proceeding", "Ruling", self.state.rels_by_label or {})
+                            if rel_label_results_in:
+                                # Check if edge already exists
+                                existing = any(
+                                    e.get("from") == proceeding_temp_id and e.get("to") == ruling_temp_id and e.get("label") == rel_label_results_in
+                                    for e in (self.state.edges_accumulated or []) if isinstance(e, dict)
+                                )
+                                if not existing:
+                                    self.state.edges_accumulated.append({
+                                        "from": proceeding_temp_id,
+                                        "to": ruling_temp_id,
+                                        "label": rel_label_results_in,
+                                        "properties": {}
+                                    })
+                    
+                    # Create edge: Ruling → Issue (SETS) with in_favor property (for both new and reused rulings)
+                    if isinstance(issue_temp_id, str) and issue_temp_id and isinstance(ruling_temp_id, str):
+                        rel_label_sets = get_relationship_label_for_edge("Ruling", "Issue", self.state.rels_by_label or {})
+                        if rel_label_sets:
                             # Check if edge already exists
                             existing = any(
-                                e.get("from") == proceeding_temp_id and e.get("to") == ruling_temp_id and e.get("label") == rel_label_results_in
+                                e.get("from") == ruling_temp_id and e.get("to") == issue_temp_id and e.get("label") == rel_label_sets
                                 for e in (self.state.edges_accumulated or []) if isinstance(e, dict)
                             )
                             if not existing:
+                                # Validate in_favor property against schema
+                                raw_sets_props = {"in_favor": in_favor} if isinstance(in_favor, str) else {}
+                                validated_sets_props = self.validate_relationship_properties("Ruling", rel_label_sets, raw_sets_props)
                                 self.state.edges_accumulated.append({
-                                    "from": proceeding_temp_id,
-                                    "to": ruling_temp_id,
-                                    "label": rel_label_results_in,
-                                    "properties": {}
+                                    "from": ruling_temp_id,
+                                    "to": issue_temp_id,
+                                    "label": rel_label_sets,
+                                    "properties": validated_sets_props
                                 })
-                
-                # Create edge: Ruling → Issue (SETS) with in_favor property
-                if isinstance(issue_temp_id, str) and issue_temp_id:
-                    rel_label_sets = get_relationship_label_for_edge("Ruling", "Issue", self.state.rels_by_label or {})
-                    if rel_label_sets:
-                        # Check if edge already exists
-                        existing = any(
-                            e.get("from") == ruling_temp_id and e.get("to") == issue_temp_id and e.get("label") == rel_label_sets
-                            for e in (self.state.edges_accumulated or []) if isinstance(e, dict)
-                        )
-                        if not existing:
-                            # Validate in_favor property against schema
-                            raw_sets_props = {"in_favor": in_favor} if isinstance(in_favor, str) else {}
-                            validated_sets_props = self.validate_relationship_properties("Ruling", rel_label_sets, raw_sets_props)
-                            self.state.edges_accumulated.append({
-                                "from": ruling_temp_id,
-                                "to": issue_temp_id,
-                                "label": rel_label_sets,
-                                "properties": validated_sets_props
-                            })
             
             try:
                 nodes_after = len(self.state.nodes_accumulated or [])
@@ -1212,8 +1257,8 @@ class CaseExtractFlow(Flow[CaseExtractState]):
 
     @listen(phase4_extract_ruling_per_issue)
     def phase5_extract_arguments_per_ruling(self, _: Dict[str, Any]) -> Dict[str, Any]:
-        # Phase 5: extract Arguments per Ruling with status for relationship; create Argument nodes and edges
-        logger.info("Phase 5: extracting Arguments per Ruling")
+        # Phase 5: extract Arguments per Ruling (batched with AI-driven deduplication); create Argument nodes and edges
+        logger.info("Phase 5: extracting Arguments per Ruling (batched with AI deduplication)")
         if self.state.progress_callback:
             try:
                 self.state.progress_callback("Phase 5 in progress: Extracting arguments per ruling", "phase5", 50)
@@ -1221,6 +1266,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 logger.warning(f"Failed to publish progress: {e}")
         try:
             from .crews.case_crew.case_crew_v3 import CaseCrew as _CaseCrew
+            from typing import Union
             
             # Collect all Rulings
             rulings = [
@@ -1231,6 +1277,9 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             if not rulings:
                 logger.info("Phase 5: no Ruling nodes present; skipping Arguments extraction")
                 return {"status": "phase5_skipped"}
+            
+            # Get batch size from config (default: 1 ruling per batch)
+            batch_size = (self.state.flow_config or {}).get("batch_sizes", {}).get("phase5_rulings", 1)
             
             # Get cached node instructions for Argument (O(1) lookup)
             argument_instructions, argument_examples_json = _get_label_instructions_and_examples("Argument", self.state.node_instructions_by_label)
@@ -1248,121 +1297,161 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             if argument_model is None:
                 raise ValueError("Phase 5: Argument model not found in state; schema must be available for phase5")
             
-            # Build rulings payload
-            rulings_payload = {"rulings": rulings}
-            
-            # Build replacements for YAML task template
-            replacements = {
-                "CASE_TEXT": self.state.document_text or "",
-                "RULINGS_JSON": json.dumps(rulings_payload, ensure_ascii=False),
-                "ARGUMENT_INSTRUCTIONS": argument_instructions,
-                "ARGUMENT_EXAMPLES_JSON": argument_examples_json,
-                "ARGUMENT_SPEC_TEXT": argument_spec_text,
-            }
-            
-            # Create crew with replacements
-            crew = _CaseCrew(
-                self.state.file_path,
-                self.state.filename,
-                self.state.case_id,
-                tools=[],
-                replacements=replacements,
-            )
-            
-            # Create dynamic response model using schema-derived Argument model
-            # Similar to phase4 approach with ruling/in_favor, we have argument/status
-            argument_with_status = create_model(
-                'ArgumentWithStatus',
-                properties=(argument_model, ...),
-                status=(Optional[str], None),
-            )
-            ruling_arguments_result = create_model(
-                'RulingArgumentsResult',
-                ruling_temp_id=(str, ...),
-                arguments=(List[argument_with_status], ...),
-            )
-            arguments_batch_response = create_model(
-                'ArgumentsPerRulingBatchResponse',
-                results=(List[ruling_arguments_result], ...),
-            )
-            
-            task = crew.phase5_arguments_per_ruling_task(arguments_batch_response)
-            single_crew = Crew(
-                agents=[crew.phase1_extract_agent()],
-                tasks=[task],
-                process=Process.sequential,
-            )
-            
-            edges_before = len(self.state.edges_accumulated or [])
-            nodes_before = len(self.state.nodes_accumulated or [])
-            result = single_crew.kickoff()
-            
-            # Parse result from Pydantic model
-            if hasattr(result, 'pydantic'):
-                data = result.pydantic.model_dump() if hasattr(result.pydantic, 'model_dump') else result.pydantic
-            elif hasattr(result, 'model_dump'):
-                data = result.model_dump()
-            else:
-                data = self.parse_crew_result(result)
-            results_list = data.get("results") if isinstance(data, dict) else None
-            if not isinstance(results_list, list):
-                results_list = []
+            # Split rulings into batches
+            total_rulings = len(rulings)
+            num_batches = (total_rulings + batch_size - 1) // batch_size  # Ceiling division
+            logger.info(f"Phase 5: Processing {total_rulings} rulings in {num_batches} batch(es) of size {batch_size}")
             
             next_idx = 1 + len(self.state.nodes_accumulated or [])
+            nodes_before = len(self.state.nodes_accumulated or [])
+            edges_before = len(self.state.edges_accumulated or [])
             arguments_created = 0
             edges_created = 0
             
-            # Process each ruling's arguments
-            for entry in results_list:
-                if not isinstance(entry, dict):
-                    continue
+            # Process rulings in batches
+            for batch_num in range(num_batches):
+                start_idx = batch_num * batch_size
+                end_idx = min(start_idx + batch_size, total_rulings)
+                batch_rulings = rulings[start_idx:end_idx]
                 
-                ruling_temp_id = entry.get("ruling_temp_id")
-                arguments_list = entry.get("arguments") or []
+                logger.info(f"Phase 5: Processing batch {batch_num + 1}/{num_batches} ({len(batch_rulings)} rulings)")
                 
-                if not isinstance(ruling_temp_id, str):
-                    logger.warning(f"Phase 5: ruling_temp_id is not a string")
-                    continue
+                # Build context of already-created Arguments for AI deduplication
+                existing_arguments = [
+                    {"temp_id": n.get("temp_id"), "properties": n.get("properties") or {}}
+                    for n in (self.state.nodes_accumulated or [])
+                    if isinstance(n, dict) and n.get("label") == "Argument" and isinstance(n.get("temp_id"), str)
+                ]
                 
-                # Create Arguments and Argument → Ruling edges
-                rel_label_eval = get_relationship_label_for_edge("Argument", "Ruling", self.state.rels_by_label or {})
+                # Build replacements for YAML task template
+                replacements = {
+                    "CASE_TEXT": self.state.document_text or "",
+                    "RULINGS_JSON": json.dumps({"rulings": batch_rulings}, ensure_ascii=False),
+                    "EXISTING_ARGUMENTS_JSON": json.dumps({"arguments": existing_arguments}, ensure_ascii=False),
+                    "ARGUMENT_INSTRUCTIONS": argument_instructions,
+                    "ARGUMENT_EXAMPLES_JSON": argument_examples_json,
+                    "ARGUMENT_SPEC_TEXT": argument_spec_text,
+                }
                 
-                for arg_item in arguments_list:
-                    if not isinstance(arg_item, dict):
+                # Create crew with replacements
+                crew = _CaseCrew(
+                    self.state.file_path,
+                    self.state.filename,
+                    self.state.case_id,
+                    tools=[],
+                    replacements=replacements,
+                )
+                
+                # Create Pydantic output model that accepts either temp_id OR argument properties
+                # For reuse: {"temp_id": "n123", "status": "Accepted"|"Rejected"}
+                # For new: {"properties": {...}, "status": "Accepted"|"Rejected"}
+                argument_with_status = create_model(
+                    'ArgumentWithStatus',
+                    temp_id=(Optional[str], None),
+                    properties=(Optional[argument_model], None),
+                    status=(Optional[str], None),
+                )
+                ruling_arguments_result = create_model(
+                    'RulingArgumentsResult',
+                    ruling_temp_id=(str, ...),
+                    arguments=(List[argument_with_status], ...),
+                )
+                arguments_batch_response = create_model(
+                    'ArgumentsPerRulingBatchResponse',
+                    results=(List[ruling_arguments_result], ...),
+                )
+                
+                task = crew.phase5_arguments_per_ruling_task(arguments_batch_response)
+                single_crew = Crew(
+                    agents=[crew.phase1_extract_agent()],
+                    tasks=[task],
+                    process=Process.sequential,
+                )
+                
+                result = single_crew.kickoff()
+                
+                # Parse result from Pydantic model
+                if hasattr(result, 'pydantic'):
+                    data = result.pydantic.model_dump() if hasattr(result.pydantic, 'model_dump') else result.pydantic
+                elif hasattr(result, 'model_dump'):
+                    data = result.model_dump()
+                else:
+                    data = self.parse_crew_result(result)
+                results_list = data.get("results") if isinstance(data, dict) else None
+                if not isinstance(results_list, list):
+                    results_list = []
+                
+                # Process each ruling's arguments
+                for entry in results_list:
+                    if not isinstance(entry, dict):
                         continue
                     
-                    # Handle both structured objects and plain dicts
-                    if "properties" in arg_item:
+                    ruling_temp_id = entry.get("ruling_temp_id")
+                    arguments_list = entry.get("arguments") or []
+                    
+                    if not isinstance(ruling_temp_id, str):
+                        logger.warning(f"Phase 5 batch {batch_num + 1}: ruling_temp_id is not a string")
+                        continue
+                    
+                    # Get relationship label
+                    rel_label_eval = get_relationship_label_for_edge("Argument", "Ruling", self.state.rels_by_label or {})
+                    
+                    # Process each argument
+                    for arg_item in arguments_list:
+                        if not isinstance(arg_item, dict):
+                            continue
+                        
+                        reuse_temp_id = arg_item.get("temp_id")
                         arg_props = arg_item.get("properties")
                         arg_status = arg_item.get("status")
-                    else:
-                        arg_props = {k: v for k, v in arg_item.items() if k != "status"}
-                        arg_status = arg_item.get("status")
-                    
-                    if not isinstance(arg_props, dict):
-                        continue
-                    
-                    # Validate Argument properties
-                    arg_properties = self.validate_with_model(arg_props, argument_model)
-                    
-                    arg_temp_id = f"n{next_idx}"
-                    next_idx += 1
-                    arg_node = {"temp_id": arg_temp_id, "label": "Argument", "properties": arg_properties}
-                    self.state.nodes_accumulated.append(arg_node)
-                    arguments_created += 1
-                    
-                    # Create edge: Argument → Ruling (EVALUATED_IN) with status property
-                    if rel_label_eval:
-                        # Validate status property against schema
-                        raw_eval_props = {"status": arg_status} if isinstance(arg_status, str) else {}
-                        validated_eval_props = self.validate_relationship_properties("Argument", rel_label_eval, raw_eval_props)
-                        self.state.edges_accumulated.append({
-                            "from": arg_temp_id,
-                            "to": ruling_temp_id,
-                            "label": rel_label_eval,
-                            "properties": validated_eval_props
-                        })
-                        edges_created += 1
+                        
+                        arg_temp_id = None
+                        
+                        # Check if AI is reusing an existing argument
+                        if isinstance(reuse_temp_id, str) and reuse_temp_id:
+                            # Verify the temp_id exists in our accumulated nodes
+                            if any(n.get("temp_id") == reuse_temp_id and n.get("label") == "Argument" 
+                                   for n in (self.state.nodes_accumulated or []) if isinstance(n, dict)):
+                                arg_temp_id = reuse_temp_id
+                                logger.debug(f"Phase 5 batch {batch_num + 1}: Reusing existing Argument ({arg_temp_id}) for ruling {ruling_temp_id}")
+                            else:
+                                logger.warning(f"Phase 5 batch {batch_num + 1}: AI returned invalid temp_id {reuse_temp_id}; will try to create new argument")
+                        
+                        # If not reusing, create new argument
+                        if arg_temp_id is None:
+                            if not isinstance(arg_props, dict):
+                                logger.warning(f"Phase 5 batch {batch_num + 1}: No valid argument data for ruling {ruling_temp_id}")
+                                continue
+                            
+                            # Validate Argument properties
+                            arg_properties = self.validate_with_model(arg_props, argument_model)
+                            
+                            # Create new Argument
+                            arg_temp_id = f"n{next_idx}"
+                            next_idx += 1
+                            arg_node = {"temp_id": arg_temp_id, "label": "Argument", "properties": arg_properties}
+                            self.state.nodes_accumulated.append(arg_node)
+                            arguments_created += 1
+                            logger.debug(f"Phase 5 batch {batch_num + 1}: Created new Argument ({arg_temp_id}) for ruling {ruling_temp_id}")
+                        
+                        # Create edge: Argument → Ruling (EVALUATED_IN) with status property (for both new and reused arguments)
+                        if rel_label_eval and isinstance(arg_temp_id, str):
+                            # Check if edge already exists
+                            existing = any(
+                                e.get("from") == arg_temp_id and e.get("to") == ruling_temp_id and e.get("label") == rel_label_eval
+                                for e in (self.state.edges_accumulated or []) if isinstance(e, dict)
+                            )
+                            if not existing:
+                                # Validate status property against schema
+                                raw_eval_props = {"status": arg_status} if isinstance(arg_status, str) else {}
+                                validated_eval_props = self.validate_relationship_properties("Argument", rel_label_eval, raw_eval_props)
+                                self.state.edges_accumulated.append({
+                                    "from": arg_temp_id,
+                                    "to": ruling_temp_id,
+                                    "label": rel_label_eval,
+                                    "properties": validated_eval_props
+                                })
+                                edges_created += 1
             
             try:
                 nodes_after = len(self.state.nodes_accumulated or [])
