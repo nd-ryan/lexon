@@ -62,3 +62,11 @@ phase9_party_agent:
     Return a parties list and a roles mapping to drive Case->Party INVOLVES edges.
 
 
+phase9_domain_agent:
+  role: "Domain Classifier"
+  goal: "Determine the legal domain category for a case based on its content."
+  backstory: |
+    You analyze legal case documents to classify them into the appropriate
+    subject area domain. You select from the provided catalog or options.
+
+

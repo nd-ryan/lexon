@@ -2294,14 +2294,184 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             return {"status": "phase8_skipped"}
 
     @listen(phase8_generate_relief_and_assign_types)
-    def phase9_validate_and_repair(self, _: Dict[str, Any]) -> Dict[str, Any]:
-        # Phase 9: Quick validation mode: just return the data without deep validation
+    def phase9_select_domain(self, _: Dict[str, Any]) -> Dict[str, Any]:
+        # Phase 9: select Domain from catalog or schema options; create Domain node and edge to Case
+        logger.info("Phase 9: selecting Domain")
+        if self.state.progress_callback:
+            try:
+                self.state.progress_callback("Phase 9 in progress: Selecting domain", "phase9", 75)
+            except Exception as e:
+                logger.warning(f"Failed to publish progress: {e}")
+        try:
+            from .crews.case_crew.case_crew_v3 import CaseCrew as _CaseCrew
+            
+            # Build catalog for Domain
+            catalogs = self.build_catalog_for_labels(["Domain"])
+            domain_catalog = catalogs.get("Domain", [])
+            
+            # Determine selection mode and build prompt replacements
+            if domain_catalog:
+                # Catalog mode: AI selects domain_id from catalog
+                logger.info(f"Phase 9: Using catalog mode with {len(domain_catalog)} domains")
+                selection_mode = f"Select ONE domain_id from the catalog below:\n{json.dumps(catalogs, ensure_ascii=False)}"
+                use_catalog = True
+            else:
+                # Options mode: AI selects from schema options
+                logger.info("Phase 9: Using schema options mode (no catalog entries)")
+                # Extract domain options from schema
+                domain_options = []
+                labels_src = (self.state.schema_spec or {}).get("labels", []) if isinstance(self.state.schema_spec, dict) else []
+                for ldef in labels_src:
+                    if isinstance(ldef, dict) and ldef.get("label") == "Domain":
+                        props = ldef.get("properties", {})
+                        if isinstance(props, dict):
+                            name_prop = props.get("name", {})
+                            if isinstance(name_prop, dict):
+                                ui_config = name_prop.get("ui", {})
+                                if isinstance(ui_config, dict):
+                                    opts = ui_config.get("options", [])
+                                    if isinstance(opts, list):
+                                        domain_options = opts
+                                        break
+                
+                if not domain_options:
+                    domain_options = ["Free Speech", "Antitrust"]  # Fallback defaults
+                
+                logger.info(f"Phase 9: Domain options from schema: {domain_options}")
+                selection_mode = f"Select ONE domain name from these options:\n{json.dumps(domain_options, ensure_ascii=False)}"
+                use_catalog = False
+            
+            # Create crew with replacements
+            crew = _CaseCrew(
+                self.state.file_path,
+                self.state.filename,
+                self.state.case_id,
+                tools=[],
+                replacements={
+                    "DOMAIN_SELECTION_MODE": selection_mode,
+                    "CASE_TEXT": self.state.document_text or "",
+                },
+            )
+            
+            # Create response model - expecting a simple selection
+            if use_catalog:
+                # Reuse SelectionResponse model for catalog mode
+                response_model = SelectionResponse
+            else:
+                # Simple string response for options mode
+                from pydantic import create_model
+                response_model = create_model('DomainResponse', domain_name=(str, ...))
+            
+            task = crew.phase9_select_domain_task(response_model)
+            single_crew = Crew(
+                agents=[crew.phase9_domain_agent()],
+                tasks=[task],
+                process=Process.sequential,
+            )
+            
+            nodes_before = len(self.state.nodes_accumulated or [])
+            edges_before = len(self.state.edges_accumulated or [])
+            result = single_crew.kickoff()
+            
+            # Parse result based on mode
+            selected_domain_id_or_name = None
+            if use_catalog:
+                # Parse as SelectionResponse
+                selected = self.parse_selection_response(result)
+                domain_ids = selected.get("Domain") or []
+                if domain_ids and len(domain_ids) > 0:
+                    selected_domain_id_or_name = domain_ids[0]
+                    logger.info(f"Phase 9: AI selected domain_id: {selected_domain_id_or_name}")
+            else:
+                # Parse as simple string response
+                if hasattr(result, 'pydantic'):
+                    data = result.pydantic.model_dump() if hasattr(result.pydantic, 'model_dump') else result.pydantic
+                elif hasattr(result, 'model_dump'):
+                    data = result.model_dump()
+                else:
+                    data = self.parse_crew_result(result)
+                selected_domain_id_or_name = data.get("domain_name") if isinstance(data, dict) else None
+                logger.info(f"Phase 9: AI selected domain name: {selected_domain_id_or_name}")
+            
+            if not selected_domain_id_or_name:
+                logger.warning("Phase 9: No domain selected by AI; skipping")
+                return {"status": "phase9_skipped"}
+            
+            # Create Domain node
+            next_idx = 1 + len(self.state.nodes_accumulated or [])
+            domain_temp_id = f"n{next_idx}"
+            
+            if use_catalog:
+                # Find domain in catalog by ID
+                domain_entry = None
+                for row in domain_catalog:
+                    if isinstance(row, dict) and str(row.get("domain_id")) == str(selected_domain_id_or_name):
+                        domain_entry = row
+                        break
+                
+                if not domain_entry:
+                    logger.warning(f"Phase 9: Domain ID '{selected_domain_id_or_name}' not found in catalog; skipping")
+                    return {"status": "phase9_skipped"}
+                
+                # Use all properties from catalog
+                props_meta = (self.state.props_meta_by_label or {}).get("Domain", {})
+                allowed_keys = [k for k in props_meta.keys() if isinstance(k, str)]
+                domain_props: Dict[str, Any] = {}
+                for k in allowed_keys:
+                    if domain_entry.get(k) is not None:
+                        domain_props[k] = domain_entry.get(k)
+                # Ensure ID fields are included
+                for k, v in domain_entry.items():
+                    if isinstance(k, str) and k.endswith("_id") and v is not None:
+                        domain_props[k] = str(v) if not isinstance(v, (int, float, bool)) else v
+            else:
+                # Use name only from options mode
+                domain_props = {"name": selected_domain_id_or_name}
+            
+            # Add Domain node
+            domain_node = {"temp_id": domain_temp_id, "label": "Domain", "properties": domain_props}
+            self.state.nodes_accumulated.append(domain_node)
+            logger.info(f"Phase 9: Created Domain node {domain_temp_id} with properties: {domain_props}")
+            
+            # Find Case node to create edge
+            case_temp_id = self.find_first_temp_id("Case")
+            if case_temp_id:
+                # Create edge: Domain → Case (CONTAINS)
+                rel_label = get_relationship_label_for_edge("Domain", "Case", self.state.rels_by_label or {})
+                if rel_label:
+                    self.state.edges_accumulated.append({
+                        "from": domain_temp_id,
+                        "to": case_temp_id,
+                        "label": rel_label,
+                        "properties": {}
+                    })
+                    logger.info(f"Phase 9: Created edge Domain → Case ({rel_label})")
+                else:
+                    logger.warning("Phase 9: No relationship label found for Domain → Case")
+            else:
+                logger.warning("Phase 9: No Case node found; cannot create Domain → Case edge")
+            
+            try:
+                nodes_after = len(self.state.nodes_accumulated or [])
+                edges_after = len(self.state.edges_accumulated or [])
+                logger.info(f"Phase 9: completed (nodes_added={max(0, nodes_after - nodes_before)}, edges_added={max(0, edges_after - edges_before)})")
+            except Exception:
+                logger.info("Phase 9: Domain selection completed")
+            
+            return {"status": "phase9_done"}
+        except Exception as e:
+            logger.warning(f"Phase 9: Domain selection failed: {e}")
+            return {"status": "phase9_skipped"}
+
+    @listen(phase9_select_domain)
+    def phase10_validate_and_repair(self, _: Dict[str, Any]) -> Dict[str, Any]:
+        # Phase 10: Quick validation mode: just return the data without deep validation
         # The flow phases already enforce schema rules, so validation is mainly for catching edge cases
         import os
         skip_validation = os.getenv("SKIP_CASE_VALIDATION", "false").lower() in ("true", "1", "yes")
         
         if skip_validation:
-            logger.info("Phase 9 (Validation): skipped (SKIP_CASE_VALIDATION=true)")
+            logger.info("Phase 10 (Validation): skipped (SKIP_CASE_VALIDATION=true)")
             return {
                 "case_name": self.state.filename,
                 "nodes": self.state.nodes_accumulated or [],
@@ -2318,7 +2488,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
         if not models_by_label or not rels_by_label or not props_meta_by_label:
             return {"case_name": self.state.filename, "nodes": self.state.nodes_accumulated or [], "edges": self.state.edges_accumulated or []}
 
-        logger.info("Phase 9 (Validation): starting")
+        logger.info("Phase 10 (Validation): starting")
         
         # Unwrap 'raw' field if present (CrewAI sometimes wraps structured output)
         nodes = self.state.nodes_accumulated or []
@@ -2363,18 +2533,18 @@ class CaseExtractFlow(Flow[CaseExtractState]):
         
         # Log validation results
         if errors:
-            logger.warning(f"Phase 8 (Validation): found {len(errors)} errors")
-            logger.warning(f"Phase 8 (Validation): first 5 errors: {errors[:5]}")
+            logger.warning(f"Phase 10 (Validation): found {len(errors)} errors")
+            logger.warning(f"Phase 10 (Validation): first 5 errors: {errors[:5]}")
             logger.info(f"Validation: cleaned output has {len(cleaned.get('nodes', []))} nodes, {len(cleaned.get('edges', []))} edges")
         
         if not errors:
             try:
                 logger.info(f"Validation: passed (nodes={len(cleaned.get('nodes', []))}, edges={len(cleaned.get('edges', []))})")
             except Exception:
-                logger.info("Phase 8 (Validation): passed with no errors")
+                logger.info("Phase 10 (Validation): passed with no errors")
             return cleaned
 
         # Return cleaned output with validation errors logged
         # Note: LLM repair was removed because it was slow (~5min) and removed all edges
-        logger.warning(f"Phase 8 (Validation): returning cleaned output with {len(errors)} errors, {len(cleaned.get('edges', []))} edges retained")
+        logger.warning(f"Phase 10 (Validation): returning cleaned output with {len(errors)} errors, {len(cleaned.get('edges', []))} edges retained")
         return cleaned

@@ -405,4 +405,17 @@ phase9_party_task:
   expected_output: "A JSON object { parties: [...], case_roles: [...] }."
 
 
+phase9_select_domain_task:
+  description: |
+    Analyze the case text and determine which domain (subject area) this case belongs to.
+    
+    {DOMAIN_SELECTION_MODE}
+    
+    CASE TEXT:
+    {CASE_TEXT}
+    
+    Return the selected domain identifier.
+  expected_output: "Selected domain identifier (domain_id or domain name)"
+
+
 

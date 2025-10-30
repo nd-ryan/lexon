@@ -28,7 +28,9 @@ class CaseCrew:
       → uses phase1_extract_agent + phase7_argument_concepts_task
     - Phase 8: Relief and ReliefType
       → uses phase1_extract_agent + phase8_relief_and_type_task
-    - Phase 9: Validation
+    - Phase 9: Domain selection
+      → uses phase9_domain_agent + phase9_select_domain_task
+    - Phase 10: Validation
       → validation only, no crew tasks needed
     """
     agents: List[BaseAgent]
@@ -279,6 +281,29 @@ class CaseCrew:
         return Task(
             config=task_spec,
             agent=self.phase9_party_agent(),
+        )
+
+    @agent
+    def phase9_domain_agent(self) -> Agent:
+        """Agent for Phase 9: selecting Domain from catalog or options"""
+        llm = LLM(model=self.LLM_MODEL, temperature=self.LLM_TEMPERATURE)
+        return Agent(
+            config=self.agents_config['phase9_domain_agent'],  # type: ignore[index]
+            tools=[],
+            llm=llm
+        )
+
+    def phase9_select_domain_task(self, output_model: Type[BaseModel]) -> Task:
+        """Task for Phase 9: select Domain from catalog or options"""
+        task_spec = self.tasks_config['phase9_select_domain_task'].copy()  # type: ignore[index]
+        desc = task_spec['description']
+        for k, v in self.replacements.items():
+            desc = desc.replace('{' + str(k) + '}', str(v))
+        task_spec['description'] = desc
+        return Task(
+            config=task_spec,
+            agent=self.phase9_domain_agent(),
+            output_pydantic=output_model
         )
 
     

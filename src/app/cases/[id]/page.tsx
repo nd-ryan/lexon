@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'next/navigation'
 import type { CaseGraph, GraphEdge, GraphNode, Schema } from '@/types/case-graph'
 import Button from '@/components/ui/button'
-import { Pencil, Trash2 } from 'lucide-react'
+import { Trash2 } from 'lucide-react'
 import { useAppStore } from '@/lib/store/appStore'
 import AddNodeModal from '@/components/cases/AddNodeModal.client'
 import SelectNodeModal from '@/components/cases/SelectNodeModal.client'
@@ -63,8 +63,9 @@ export default function CaseEditorPage() {
   } | null>(null)
   // Local edit widgets commit on blur to avoid full re-render per keystroke
   const [activeHoldingId, setActiveHoldingId] = useState<string | null>(null)
+  const [activeNodeId, setActiveNodeId] = useState<string | null>(null)
+  const [activeNodeContext, setActiveNodeContext] = useState<string | null>(null) // Track context (rootId) of selected node
   const [expandedFacts, setExpandedFacts] = useState<Set<string>>(new Set())
-  const [viewingConnectionsNodeId, setViewingConnectionsNodeId] = useState<string | null>(null)
   const [deletingNodeId, setDeletingNodeId] = useState<string | null>(null)
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [partiesExpanded, setPartiesExpanded] = useState(false)
@@ -262,6 +263,19 @@ export default function CaseEditorPage() {
       .map(({ status, ...edge }) => edge) // Strip metadata
   }, [graphState])
   
+  // Domain state extraction
+  const domainNode = useMemo(() => {
+    return graphState.nodes.find(n => n.label === 'Domain' && n.status === 'active')
+  }, [graphState])
+
+  const domainName = String(domainNode?.properties?.name || 'Unknown')
+
+  // Get domain options from schema
+  const domainOptions = useMemo(() => {
+    const domainLabel = schema?.find(l => l.label === 'Domain')
+    return domainLabel?.properties?.name?.ui?.options || ['Free Speech', 'Antitrust']
+  }, [schema])
+  
   // Extract structure key and root label from view config (first non-topLevel root)
   const structureInfo = useMemo(() => {
     if (!viewConfig) return { key: null, rootLabel: null, structure: {} }
@@ -426,6 +440,86 @@ export default function CaseEditorPage() {
     [graphState]
   )
 
+  // Global numbering map for nodes by type (e.g., all Arguments numbered 1, 2, 3... across entire case)
+  const globalNodeNumbering = useMemo(() => {
+    const numbering: Record<string, Record<string, number>> = {}
+    const activeNodes = graphState.nodes.filter(n => n.status === 'active')
+    
+    // Group nodes by label
+    const nodesByLabel: Record<string, Array<{ temp_id: string, firstSeen: number }>> = {}
+    
+    // Walk through display data to collect nodes in order they appear
+    const seenNodes = new Set<string>()
+    const nodeOrder: Array<{ temp_id: string, label: string }> = []
+    
+    const collectNodes = (data: any) => {
+      if (!data || typeof data !== 'object') return
+      
+      if (data.temp_id && !seenNodes.has(data.temp_id)) {
+        const node = activeNodes.find(n => n.temp_id === data.temp_id)
+        if (node) {
+          seenNodes.add(data.temp_id)
+          nodeOrder.push({ temp_id: data.temp_id, label: node.label })
+        }
+      }
+      
+      // Recurse through object/array properties
+      if (Array.isArray(data)) {
+        data.forEach(collectNodes)
+      } else if (typeof data === 'object') {
+        Object.values(data).forEach(collectNodes)
+      }
+    }
+    
+    // Collect from display data
+    if (displayData) {
+      collectNodes(displayData)
+    }
+    
+    // Build numbering from collected order
+    nodeOrder.forEach(({ temp_id, label }) => {
+      if (!nodesByLabel[label]) {
+        nodesByLabel[label] = []
+      }
+      nodesByLabel[label].push({ temp_id, firstSeen: nodesByLabel[label].length })
+    })
+    
+    // Create final numbering map
+    Object.entries(nodesByLabel).forEach(([label, nodes]) => {
+      numbering[label] = {}
+      nodes.forEach((node, idx) => {
+        numbering[label][node.temp_id] = idx + 1
+      })
+    })
+    
+    return numbering
+  }, [graphState, displayData])
+
+  // Detect which nodes are reused (appear multiple times in the graph structure)
+  const reusedNodes = useMemo(() => {
+    const reused = new Set<string>()
+    const nodeParents: Record<string, Set<string>> = {}
+    
+    // Count unique parents for each node
+    graphState.edges
+      .filter(e => e.status === 'active')
+      .forEach(edge => {
+        if (!nodeParents[edge.to]) {
+          nodeParents[edge.to] = new Set()
+        }
+        nodeParents[edge.to].add(edge.from)
+      })
+    
+    // Mark nodes with multiple parents as reused
+    Object.entries(nodeParents).forEach(([nodeId, parents]) => {
+      if (parents.size > 1) {
+        reused.add(nodeId)
+      }
+    })
+    
+    return reused
+  }, [graphState])
+
   useEffect(() => {
     // eslint-disable-next-line no-console
     console.log('Case editor schema:', schema)
@@ -508,6 +602,22 @@ export default function CaseEditorPage() {
     if (!labelDef?.properties) return null
     
     return labelDef.properties[propName]
+  }
+
+  // Helper to get relationship property schema from schema
+  const getRelationshipPropertySchema = (
+    sourceLabel: string, 
+    relLabel: string, 
+    propName: string
+  ): any => {
+    if (!schema) return null
+    const schemaArray = Array.isArray(schema) ? schema : []
+    const sourceDef = schemaArray.find((s: any) => s?.label === sourceLabel)
+    if (!sourceDef?.relationships?.[relLabel]) return null
+    const relDef = sourceDef.relationships[relLabel]
+    if (typeof relDef === 'string') return null
+    if (typeof relDef !== 'object' || relDef === null) return null
+    return (relDef as any).properties?.[propName] || null
   }
 
   // Derive Case, Proceedings, Parties, Forums, Jurisdictions from graphState + viewConfig
@@ -889,6 +999,8 @@ export default function CaseEditorPage() {
   // Scroll to holding
   const scrollToHolding = (holdingId: string) => {
     setActiveHoldingId(holdingId)
+    setActiveNodeId(holdingId)
+    setActiveNodeContext(holdingId) // Set context to the holding itself
     const el = document.getElementById(`holding-${holdingId}`)
     if (el) {
       el.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -896,32 +1008,22 @@ export default function CaseEditorPage() {
   }
   
   // Scroll to any node in sidebar navigation
-  const scrollToNodeById = (nodeId: string, holdingId?: string) => {
+  const scrollToNodeById = (nodeId: string, holdingId?: string, context?: string) => {
     if (holdingId) setActiveHoldingId(holdingId)
+    setActiveNodeId(nodeId)
+    setActiveNodeContext(context || holdingId || null)
     const el = document.getElementById(`node-${nodeId}`)
     if (el) {
       el.scrollIntoView({ behavior: 'smooth', block: 'start' })
     }
   }
 
-  // Get all edges related to a node (incoming and outgoing)
+  // Get all edges related to a node (incoming and outgoing) - used for orphaned nodes display
   const getNodeConnections = (nodeId: string) => {
     const edges = graphState.edges.filter(e => e.status === 'active')
     const outgoing = edges.map((e: any, idx: number) => ({ ...e, idx })).filter((e: any) => e.from === nodeId)
     const incoming = edges.map((e: any, idx: number) => ({ ...e, idx })).filter((e: any) => e.to === nodeId)
     return { outgoing, incoming }
-  }
-
-  // Get node display name helper
-  const getNodeDisplayName = (nodeId: string) => {
-    const node = graphState.nodes.find((n: any) => n.temp_id === nodeId)
-    return node ? pickNodeName(node) : nodeId
-  }
-
-  // Get node type label helper
-  const getNodeTypeLabel = (nodeId: string): string => {
-    const node = graphState.nodes.find((n: any) => n.temp_id === nodeId)
-    return node?.label || 'Node'
   }
 
   // Get argument status from EVALUATED_IN edge
@@ -942,6 +1044,72 @@ export default function CaseEditorPage() {
             ...e,
             properties: { ...e.properties, status }
           }
+        }
+        return e
+      })
+    }))
+    setHasUnsavedChanges(true)
+  }
+
+  // Get INVOLVES role property
+  const getPartyRole = (proceedingId: string, partyId: string): string | null => {
+    const edge = graphState.edges.find(
+      (e: any) => e.from === proceedingId && e.to === partyId && e.label === 'INVOLVES' && e.status === 'active'
+    )
+    return edge?.properties?.role || null
+  }
+
+  // Set INVOLVES role property
+  const setPartyRole = (proceedingId: string, partyId: string, role: string) => {
+    setGraphState(prev => ({
+      ...prev,
+      edges: prev.edges.map(e => {
+        if (e.from === proceedingId && e.to === partyId && e.label === 'INVOLVES') {
+          return { ...e, properties: { ...e.properties, role } }
+        }
+        return e
+      })
+    }))
+    setHasUnsavedChanges(true)
+  }
+
+  // Get SETS in_favor property
+  const getRulingInFavor = (rulingId: string, issueId: string): string | null => {
+    const edge = graphState.edges.find(
+      (e: any) => e.from === rulingId && e.to === issueId && e.label === 'SETS' && e.status === 'active'
+    )
+    return edge?.properties?.in_favor || null
+  }
+
+  // Set SETS in_favor property
+  const setRulingInFavor = (rulingId: string, issueId: string, inFavor: string) => {
+    setGraphState(prev => ({
+      ...prev,
+      edges: prev.edges.map(e => {
+        if (e.from === rulingId && e.to === issueId && e.label === 'SETS') {
+          return { ...e, properties: { ...e.properties, in_favor: inFavor } }
+        }
+        return e
+      })
+    }))
+    setHasUnsavedChanges(true)
+  }
+
+  // Get RESULTS_IN relief_status property
+  const getReliefStatus = (rulingId: string, reliefId: string): string | null => {
+    const edge = graphState.edges.find(
+      (e: any) => e.from === rulingId && e.to === reliefId && e.label === 'RESULTS_IN' && e.status === 'active'
+    )
+    return edge?.properties?.relief_status || null
+  }
+
+  // Set RESULTS_IN relief_status property
+  const setReliefStatus = (rulingId: string, reliefId: string, status: string) => {
+    setGraphState(prev => ({
+      ...prev,
+      edges: prev.edges.map(e => {
+        if (e.from === rulingId && e.to === reliefId && e.label === 'RESULTS_IN') {
+          return { ...e, properties: { ...e.properties, relief_status: status } }
         }
         return e
       })
@@ -1024,7 +1192,6 @@ export default function CaseEditorPage() {
     
     setHasUnsavedChanges(true)
     setDeletingNodeId(null)
-    setViewingConnectionsNodeId(null)
   }
   
   // Restore an orphaned node (make it active again)
@@ -1241,6 +1408,51 @@ export default function CaseEditorPage() {
     setHasUnsavedChanges(true)
   }
 
+  // Handle domain selection change
+  const handleDomainChange = (domainName: string) => {
+    const caseNode = graphState.nodes.find(n => n.label === 'Case' && n.status === 'active')
+    if (!caseNode) return
+    
+    // Try to find domain in catalog first
+    let domainProps: Record<string, any> = { name: domainName }
+    if (catalogNodes && Array.isArray(catalogNodes)) {
+      const catalogDomain = catalogNodes.find(n => 
+        n.label === 'Domain' && n.properties?.name === domainName
+      )
+      if (catalogDomain) {
+        domainProps = catalogDomain.properties
+      }
+    }
+    
+    setGraphState(prev => {
+      // Remove old domain node and edge
+      const filteredNodes = prev.nodes.filter(n => n.label !== 'Domain')
+      const filteredEdges = prev.edges.filter(e => 
+        !(e.label === 'CONTAINS' && e.to === caseNode.temp_id)
+      )
+      
+      // Add new domain node and edge
+      const domainTempId = `n${Date.now()}`
+      return {
+        nodes: [...filteredNodes, {
+          temp_id: domainTempId,
+          label: 'Domain',
+          properties: domainProps,
+          status: 'active' as const,
+          source: 'user-created' as const
+        }],
+        edges: [...filteredEdges, {
+          from: domainTempId,
+          to: caseNode.temp_id,
+          label: 'CONTAINS',
+          status: 'active' as const
+        }]
+      }
+    })
+    
+    setHasUnsavedChanges(true)
+  }
+
   // Node Action Menu Component
   const NodeActionMenu = ({ 
     nodeId, 
@@ -1250,8 +1462,6 @@ export default function CaseEditorPage() {
     parentId?: string
   }) => {
     const [menuOpen, setMenuOpen] = useState(false)
-    const { outgoing, incoming } = getNodeConnections(nodeId)
-    const totalConnections = outgoing.length + incoming.length
     const showUnlink = shouldShowUnlink(nodeId, parentId)
     const parentLabel = parentId ? getParentLabel(parentId) : ''
 
@@ -1279,19 +1489,6 @@ export default function CaseEditorPage() {
               onClick={() => setMenuOpen(false)}
             />
             <div className="absolute right-0 top-full mt-1 w-56 bg-white rounded-lg shadow-lg border z-20 py-1">
-              <button
-                onClick={() => {
-                  setViewingConnectionsNodeId(nodeId)
-                  setMenuOpen(false)
-                }}
-                className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2 cursor-pointer"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                </svg>
-                <span>View connections</span>
-                <span className="ml-auto text-xs text-gray-500">({totalConnections})</span>
-              </button>
               {showUnlink ? (
                 <button
                   onClick={() => {
@@ -1362,6 +1559,168 @@ export default function CaseEditorPage() {
     )
   }
 
+  // Helper to capitalize first letter
+  const capitalizeFirst = (str: string | null): string => {
+    if (!str) return ''
+    return str.charAt(0).toUpperCase() + str.slice(1)
+  }
+
+  // Get global number for a node
+  const getGlobalNodeNumber = (nodeId: string, nodeLabel: string): number | null => {
+    return globalNodeNumbering[nodeLabel]?.[nodeId] ?? null
+  }
+
+  // Reused Node Icon Component
+  const ReusedNodeIcon = ({ tooltip = "This item is used multiple times in this case" }: { tooltip?: string }) => {
+    return (
+      <div className="relative inline-flex group">
+        <svg 
+          className="w-3.5 h-3.5 text-gray-500" 
+          fill="none" 
+          stroke="currentColor" 
+          viewBox="0 0 24 24"
+        >
+          <path 
+            strokeLinecap="round" 
+            strokeLinejoin="round" 
+            strokeWidth={2} 
+            d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" 
+          />
+        </svg>
+        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all pointer-events-none z-50">
+          {tooltip}
+          <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-1 border-4 border-transparent border-t-gray-900"></div>
+        </div>
+      </div>
+    )
+  }
+
+  // Relationship Property Field Component
+  // Returns a badge for view mode (to be used as statusBadge prop) or form field for edit mode
+  const RelationshipPropertyField = ({
+    sourceId,
+    targetId,
+    relLabel,
+    propName,
+    sourceLabel,
+    isViewMode,
+    label
+  }: {
+    sourceId: string
+    targetId: string
+    relLabel: string
+    propName: string
+    sourceLabel: string
+    isViewMode: boolean
+    label: string
+  }) => {
+    // Get property schema
+    const propSchema = getRelationshipPropertySchema(sourceLabel, relLabel, propName)
+    const options = propSchema?.ui?.options || []
+    const displayLabel = propSchema?.ui?.label || label
+    
+    // Get current value based on relLabel
+    let currentValue: string | null = null
+    let setValue: (value: string) => void
+    
+    if (relLabel === 'INVOLVES') {
+      currentValue = getPartyRole(sourceId, targetId)
+      setValue = (v) => setPartyRole(sourceId, targetId, v)
+    } else if (relLabel === 'SETS') {
+      currentValue = getRulingInFavor(sourceId, targetId)
+      setValue = (v) => setRulingInFavor(sourceId, targetId, v)
+    } else if (relLabel === 'EVALUATED_IN') {
+      currentValue = getArgumentStatus(sourceId, targetId)
+      setValue = (v) => setArgumentStatus(sourceId, targetId, v)
+    } else if (relLabel === 'RESULTS_IN') {
+      currentValue = getReliefStatus(sourceId, targetId)
+      setValue = (v) => setReliefStatus(sourceId, targetId, v)
+    } else {
+      return null
+    }
+    
+    // Capitalize first letter of value for display
+    const displayValue = capitalizeFirst(currentValue)
+    
+    if (isViewMode) {
+      if (!currentValue) return null
+      
+      // Determine badge color based on relationship and value
+      let badgeColorClass = 'bg-blue-100 text-blue-800'
+      if (relLabel === 'SETS' || propName === 'in_favor') {
+        // Mustard yellow for in_favor (ruling card has blue background)
+        badgeColorClass = 'bg-yellow-200 text-yellow-900'
+      } else if (relLabel === 'RESULTS_IN' || propName === 'relief_status') {
+        // Color based on relief_status value
+        const statusLower = currentValue.toLowerCase()
+        if (statusLower === 'granted') {
+          badgeColorClass = 'bg-green-100 text-green-800'
+        } else if (statusLower === 'denied') {
+          badgeColorClass = 'bg-red-100 text-red-800'
+        } else if (statusLower === 'partially granted') {
+          badgeColorClass = 'bg-amber-100 text-amber-800'
+        }
+      }
+      
+      // For SETS (in_favor), show label with badge
+      if (relLabel === 'SETS' || propName === 'in_favor') {
+        return (
+          <span className="flex items-center gap-2">
+            <span className="text-xs text-gray-600">{displayLabel}:</span>
+            <span className={`px-2 py-1 rounded text-xs font-medium ${badgeColorClass}`}>
+              {displayValue}
+            </span>
+          </span>
+        )
+      }
+      
+      return (
+        <span className={`px-2 py-1 rounded text-xs font-medium ${badgeColorClass}`}>
+          {displayValue}
+        </span>
+      )
+    }
+    
+    // Edit mode: return form field - for SETS and RESULTS_IN, place in statusBadge position (top right), otherwise inside card
+    if (relLabel === 'SETS' || relLabel === 'RESULTS_IN') {
+      // For SETS (in_favor) and RESULTS_IN (relief_status), show as dropdown with label in top right corner
+      return (
+        <span className="flex items-center gap-2">
+          <label className="text-xs text-gray-600">{displayLabel}:</label>
+          <select
+            className="px-2 py-1 rounded border border-gray-300 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
+            value={currentValue || ''}
+            onChange={(e) => setValue(e.target.value)}
+          >
+            <option value="">Select...</option>
+            {options.map((opt: string) => (
+              <option key={opt} value={opt}>{capitalizeFirst(opt)}</option>
+            ))}
+          </select>
+        </span>
+      )
+    }
+    
+    // For other relationships, return form field to be placed inside card
+    return (
+      <div className="mb-2">
+        <label className="block text-xs font-medium text-gray-700 mb-1">
+          {displayLabel}
+        </label>
+        <select
+          className="w-full rounded-md border border-gray-300 bg-white px-2 py-1 text-xs shadow-sm focus:border-gray-400 focus:outline-none"
+          value={currentValue || ''}
+          onChange={(e) => setValue(e.target.value)}
+        >
+          <option value="">Select {displayLabel}...</option>
+          {options.map((opt: string) => (
+            <option key={opt} value={opt}>{capitalizeFirst(opt)}</option>
+          ))}
+        </select>
+      </div>
+    )
+  }
+
   // Unified node card styling
   const NodeCard = ({ 
     node, 
@@ -1383,7 +1742,13 @@ export default function CaseEditorPage() {
     parentId?: string;
   }) => {
     const indentClass = depth === 0 ? '' : depth === 1 ? 'ml-6' : depth === 2 ? 'ml-12' : 'ml-18'
-    const displayLabel = index !== undefined ? `${label} ${index + 1}` : label
+    
+    // Use global numbering if available, otherwise fall back to local index
+    const globalNum = getGlobalNodeNumber(node.temp_id, node.label)
+    const displayNumber = globalNum !== null ? globalNum : (index !== undefined ? index + 1 : null)
+    const displayLabel = displayNumber !== null ? `${label} ${displayNumber}` : label
+    
+    const isReused = reusedNodes.has(node.temp_id)
     
     // Different backgrounds for nodes with children to show containment
     const hasChildren = !!children
@@ -1396,6 +1761,7 @@ export default function CaseEditorPage() {
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <div className="text-sm font-semibold text-gray-900">{displayLabel}</div>
+            {isReused && <ReusedNodeIcon />}
             {badge}
           </div>
           <div className="flex items-center gap-2">
@@ -1466,24 +1832,39 @@ export default function CaseEditorPage() {
         // Check if this node is expanded using a generic key
         const isExpanded = isCollapsible && expandedFacts.has(item.temp_id)
         
+        const isActiveNode = activeNodeId === item.temp_id
+        const isSelectedInThisContext = isActiveNode && activeNodeContext === rootId
+        const isAlsoHere = isActiveNode && activeNodeContext !== rootId
+        const isReused = reusedNodes.has(item.temp_id)
+        
+        // Get global number for this node
+        const globalNum = getGlobalNodeNumber(item.temp_id, item.label || key)
+        const displayNumber = globalNum !== null ? globalNum : idx + 1
+        
         elements.push(
           <div key={`${key}-${item.temp_id}`} className="space-y-1">
             <div className="flex items-center gap-1">
               {isCollapsible && hasChildren && (
                 <div
                   onClick={() => toggleFact(item.temp_id)}
-                  className="px-1 cursor-pointer text-gray-500 hover:text-gray-700"
+                  className="w-4 flex-shrink-0 cursor-pointer text-gray-500 hover:text-gray-700"
                 >
                   <span className="text-xs">{isExpanded ? '▼' : '▶'}</span>
                 </div>
               )}
+              {(!isCollapsible || !hasChildren) && <div className="w-4 flex-shrink-0" />}
               <div
-                onClick={() => scrollToNodeById(item.temp_id, rootId)}
-                className={`flex-1 px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-600 cursor-pointer break-words ${
-                  !isCollapsible || !hasChildren ? 'ml-0' : ''
+                onClick={() => scrollToNodeById(item.temp_id, rootId, rootId)}
+                className={`flex-1 px-2 py-1 rounded text-xs hover:bg-gray-100 cursor-pointer break-words flex items-center gap-1.5 ${
+                  isSelectedInThisContext 
+                    ? 'bg-blue-100 text-blue-900 font-medium' 
+                    : isAlsoHere
+                    ? 'bg-purple-50 text-purple-700 font-medium'
+                    : 'text-gray-600'
                 }`}
               >
-                {formatLabel(item.label || key)} {idx + 1}
+                <span>{formatLabel(item.label || key)} {displayNumber}</span>
+                {isReused && <ReusedNodeIcon />}
               </div>
             </div>
             
@@ -1539,8 +1920,12 @@ export default function CaseEditorPage() {
             <div className="space-y-1 pl-2">
               {caseNode && (
                 <div
-                  onClick={() => scrollToNodeById(caseNode.temp_id)}
-                  className="px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-600 cursor-pointer break-words"
+                  onClick={() => scrollToNodeById(caseNode.temp_id, undefined, 'overview')}
+                  className={`px-2 py-1 rounded text-xs hover:bg-gray-100 cursor-pointer break-words ${
+                    activeNodeId === caseNode.temp_id
+                      ? 'bg-blue-100 text-blue-900 font-medium'
+                      : 'text-gray-600'
+                  }`}
                 >
                   Case
                 </div>
@@ -1548,8 +1933,12 @@ export default function CaseEditorPage() {
               {proceedingNodes.map((proc: any, idx: number) => (
                 <div key={proc.temp_id}>
                   <div
-                    onClick={() => scrollToNodeById(proc.temp_id)}
-                    className="px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-600 cursor-pointer break-words"
+                    onClick={() => scrollToNodeById(proc.temp_id, undefined, 'overview')}
+                    className={`px-2 py-1 rounded text-xs hover:bg-gray-100 cursor-pointer break-words ${
+                      activeNodeId === proc.temp_id
+                        ? 'bg-blue-100 text-blue-900 font-medium'
+                        : 'text-gray-600'
+                    }`}
                   >
                     Proceeding {idx + 1}
                   </div>
@@ -1558,8 +1947,12 @@ export default function CaseEditorPage() {
               {forumNodes.map((forum: any, idx: number) => (
                 <div
                   key={forum.temp_id}
-                  onClick={() => scrollToNodeById(forum.temp_id)}
-                  className="px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-600 cursor-pointer break-words"
+                  onClick={() => scrollToNodeById(forum.temp_id, undefined, 'overview')}
+                  className={`px-2 py-1 rounded text-xs hover:bg-gray-100 cursor-pointer break-words ${
+                    activeNodeId === forum.temp_id
+                      ? 'bg-blue-100 text-blue-900 font-medium'
+                      : 'text-gray-600'
+                  }`}
                 >
                   Forum {idx + 1}
                 </div>
@@ -1582,9 +1975,13 @@ export default function CaseEditorPage() {
                             key={party.temp_id}
                             onClick={() => {
                               setPartiesSectionExpanded(true)
-                              setTimeout(() => scrollToNodeById(party.temp_id), 100)
+                              setTimeout(() => scrollToNodeById(party.temp_id, undefined, 'overview'), 100)
                             }}
-                            className="px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-600 cursor-pointer break-words"
+                            className={`px-2 py-1 rounded text-xs hover:bg-gray-100 cursor-pointer break-words ${
+                              activeNodeId === party.temp_id
+                                ? 'bg-blue-100 text-blue-900 font-medium'
+                                : 'text-gray-600'
+                            }`}
                           >
                             {partyName}
                           </div>
@@ -1632,15 +2029,8 @@ export default function CaseEditorPage() {
                     
                     {/* Dynamic content based on structure config */}
                     <div className="pl-4 space-y-1.5 border-l border-gray-300 ml-2">
-                        <div
-                        onClick={() => scrollToNodeById(root.temp_id, root.temp_id)}
-                          className="px-2 py-1 rounded text-xs hover:bg-gray-100 text-gray-600 cursor-pointer break-words"
-                        >
-                          {structureInfo.rootLabel} Details
-                        </div>
-                        
                       {rootStructure && renderNestedStructureSidebar(entity, rootStructure, root.temp_id)}
-                            </div>
+                    </div>
                                       </div>
                                       )
                               })}
@@ -1652,9 +2042,28 @@ export default function CaseEditorPage() {
       {/* Main Content */}
       <div className="flex-1 flex flex-col bg-gray-50">
         <div className="p-6 space-y-6 text-xs flex-1 overflow-y-auto">
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {caseNode ? pickNodeName(caseNode) || 'Case' : 'Case'}
-          </h1>
+          {/* Header with case name and domain */}
+          <div className="flex items-center justify-between mb-4">
+            <h1 className="text-2xl font-semibold tracking-tight">
+              {caseNode ? pickNodeName(caseNode) || 'Case' : 'Case'}
+            </h1>
+            {isViewMode ? (
+              <span className="px-3 py-1 bg-blue-500 text-white rounded-full text-sm font-medium">
+                {domainName}
+              </span>
+            ) : (
+              <select 
+                value={(domainNode?.properties?.name as string) || ''}
+                onChange={(e) => handleDomainChange(e.target.value)}
+                className="px-3 py-1 border border-gray-300 rounded bg-white text-sm"
+              >
+                <option value="">Select Domain</option>
+                {domainOptions.map(opt => (
+                  <option key={opt} value={opt}>{opt}</option>
+                ))}
+              </select>
+            )}
+          </div>
         {error && (
           <div className="rounded-md border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-700">{error}</div>
         )}
@@ -1824,9 +2233,44 @@ export default function CaseEditorPage() {
                       </div>
                       {partiesSectionExpanded && (
                         <div className="space-y-4">
-                          {partyNodes.map((party: any, idx: number) => (
-                            <NodeCard key={party.temp_id} node={party} label="Party" index={idx} depth={0} />
-                          ))}
+                          {partyNodes.map((party: any, idx: number) => {
+                            // Find the proceeding this party is connected to
+                            const proceedingNode = parentNode || proceedingNodes[0]
+                            const proceedingId = proceedingNode?.temp_id
+                            
+                            return (
+                              <NodeCard 
+                                key={party.temp_id}
+                                node={party} 
+                                label="Party" 
+                                index={idx} 
+                                depth={0}
+                                statusBadge={proceedingId ? (
+                                  <RelationshipPropertyField
+                                    sourceId={proceedingId}
+                                    targetId={party.temp_id}
+                                    relLabel="INVOLVES"
+                                    propName="role"
+                                    sourceLabel="Proceeding"
+                                    isViewMode={isViewMode}
+                                    label="Role"
+                                  />
+                                ) : undefined}
+                              >
+                                {proceedingId && !isViewMode && (
+                                  <RelationshipPropertyField
+                                    sourceId={proceedingId}
+                                    targetId={party.temp_id}
+                                    relLabel="INVOLVES"
+                                    propName="role"
+                                    sourceLabel="Proceeding"
+                                    isViewMode={isViewMode}
+                                    label="Role"
+                                  />
+                                )}
+                              </NodeCard>
+                            )
+                          })}
                         </div>
                       )}
                     </div>
@@ -1878,7 +2322,22 @@ export default function CaseEditorPage() {
                     
                     {/* Ruling */}
                     {ruling && (
-                      <NodeCard node={ruling} label="Ruling" depth={0}>
+                      <NodeCard 
+                        node={ruling} 
+                        label="Ruling" 
+                        depth={0}
+                        statusBadge={
+                          <RelationshipPropertyField
+                            sourceId={ruling.temp_id}
+                            targetId={rootEntity.temp_id}
+                            relLabel="SETS"
+                            propName="in_favor"
+                            sourceLabel="Ruling"
+                            isViewMode={isViewMode}
+                            label="In Favor"
+                          />
+                        }
+                      >
                         {/* Laws */}
                         {(() => {
                           const rulingStructure = rootStructure?.ruling?.include || {}
@@ -1940,12 +2399,23 @@ export default function CaseEditorPage() {
                                   
                                   return (
                                     <NodeCard 
-                                      key={relief.temp_id} 
+                                      key={relief.temp_id}
                                       node={relief} 
                                       label="Relief" 
                                       index={relIdx} 
                                       depth={1}
                                       parentId={ruling.temp_id}
+                                      statusBadge={
+                                        <RelationshipPropertyField
+                                          sourceId={ruling.temp_id}
+                                          targetId={relief.temp_id}
+                                          relLabel="RESULTS_IN"
+                                          propName="relief_status"
+                                          sourceLabel="Ruling"
+                                          isViewMode={isViewMode}
+                                          label="Relief Status"
+                                        />
+                                      }
                                     >
                                       {/* Relief Type (single) */}
                                       {reliefType ? (
@@ -2275,134 +2745,6 @@ export default function CaseEditorPage() {
         </div>
       </div>
 
-      {/* View Node Connections Modal */}
-      {viewingConnectionsNodeId && (() => {
-        const node = graphState.nodes.find((n: any) => n.temp_id === viewingConnectionsNodeId)
-        if (!node) return null
-        const { outgoing, incoming } = getNodeConnections(viewingConnectionsNodeId)
-        const nodeLabel = node.label || 'Node'
-        const nodeName = pickNodeName(node) || viewingConnectionsNodeId
-
-        return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ position: 'fixed', inset: 0, zIndex: 9999 }}>
-            <div className="absolute inset-0 bg-black/50" onClick={() => setViewingConnectionsNodeId(null)} />
-            <div className="relative z-50 w-full max-w-2xl mx-4 rounded-lg border bg-white p-6 shadow-xl max-h-[80vh] overflow-y-auto">
-              <div className="flex items-start justify-between mb-4">
-                <div>
-                  <h3 className="text-lg font-semibold text-gray-900">{nodeLabel}: {nodeName}</h3>
-                  <p className="text-xs text-gray-600 mt-1">View and manage all connections for this node</p>
-                </div>
-                <button
-                  onClick={() => setViewingConnectionsNodeId(null)}
-                  className="text-gray-400 hover:text-gray-600 cursor-pointer"
-                >
-                  ✕
-                </button>
-              </div>
-
-              {/* Outgoing Relationships */}
-              <div className="mb-6">
-                <h4 className="text-sm font-semibold text-gray-700 mb-3">
-                  Outgoing Connections ({outgoing.length})
-                </h4>
-                {outgoing.length === 0 ? (
-                  <p className="text-xs text-gray-500 italic">No outgoing connections</p>
-                ) : (
-                  <div className="space-y-2">
-                    {outgoing.map((edge: any) => (
-                      <div key={edge.idx} className="flex items-center justify-between bg-gray-50 rounded p-3 text-xs">
-                        <div className="flex-1">
-                          <div className="font-medium text-gray-700">{edge.label}</div>
-                          <div className="text-gray-600 mt-1">
-                            → <span className="text-purple-600 font-medium">[{getNodeTypeLabel(edge.to)}]</span> {getNodeDisplayName(edge.to)}
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => {
-                              setEditingEdgeIdx(edge.idx)
-                              setEditToValue(edge.to)
-                            }}
-                            className="p-1.5 rounded hover:bg-gray-200 text-gray-600 cursor-pointer"
-                            title="Edit relationship"
-                          >
-                            <Pencil className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => setConfirmDeleteIdx(edge.idx)}
-                            className="p-1.5 rounded hover:bg-red-100 text-red-600 cursor-pointer"
-                            title="Delete relationship"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Incoming Relationships */}
-              <div className="mb-6">
-                <h4 className="text-sm font-semibold text-gray-700 mb-3">
-                  Incoming Connections ({incoming.length})
-                </h4>
-                {incoming.length === 0 ? (
-                  <p className="text-xs text-gray-500 italic">No incoming connections</p>
-                ) : (
-                  <div className="space-y-2">
-                    {incoming.map((edge: any) => (
-                      <div key={edge.idx} className="flex items-center justify-between bg-gray-50 rounded p-3 text-xs">
-                        <div className="flex-1">
-                          <div className="font-medium text-gray-700">{edge.label}</div>
-                          <div className="text-gray-600 mt-1">
-                            ← <span className="text-purple-600 font-medium">[{getNodeTypeLabel(edge.from)}]</span> {getNodeDisplayName(edge.from)}
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => {
-                              setEditingEdgeIdx(edge.idx)
-                              setEditToValue(edge.to)
-                            }}
-                            className="p-1.5 rounded hover:bg-gray-200 text-gray-600 cursor-pointer"
-                            title="Edit relationship"
-                          >
-                            <Pencil className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => setConfirmDeleteIdx(edge.idx)}
-                            className="p-1.5 rounded hover:bg-red-100 text-red-600 cursor-pointer"
-                            title="Delete relationship"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Actions */}
-              <div className="flex items-center justify-between pt-4 border-t">
-                <button
-                  onClick={() => setDeletingNodeId(viewingConnectionsNodeId)}
-                  className="px-4 py-2 rounded bg-red-600 text-white text-sm hover:bg-red-700 transition-colors cursor-pointer"
-                >
-                  Delete Node & All Connections
-                </button>
-                <button
-                  onClick={() => setViewingConnectionsNodeId(null)}
-                  className="px-4 py-2 rounded border text-sm hover:bg-gray-50 transition-colors cursor-pointer"
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-          </div>
-        )
-      })()}
 
       {/* Delete Node Confirmation */}
       {deletingNodeId && (() => {
@@ -2410,8 +2752,8 @@ export default function CaseEditorPage() {
         if (!node) return null
         const nodeLabel = node.label || 'Node'
         const nodeName = pickNodeName(node) || deletingNodeId
-        const { outgoing, incoming } = getNodeConnections(deletingNodeId)
-        const totalConnections = outgoing.length + incoming.length
+        const activeEdges = graphState.edges.filter(e => e.status === 'active')
+        const totalConnections = activeEdges.filter((e: any) => e.from === deletingNodeId || e.to === deletingNodeId).length
         
         // Find all descendants that will be orphaned
         const edges = graphState.edges.filter(e => e.status === 'active')

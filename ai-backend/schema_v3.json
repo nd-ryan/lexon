@@ -3,7 +3,7 @@
     "label": "Domain",
     "case_unique": false,
     "can_create_new": false,
-    "ai_ignore": true,
+    "ai_ignore": false,
     "properties": {
       "domain_upload_code": { "type": "STRING", "ui": { "hidden": true } },
       "domain_id": { "type": "STRING", "ui": { "hidden": true } },
