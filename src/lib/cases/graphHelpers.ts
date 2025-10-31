@@ -131,7 +131,7 @@ export function detectReusedNodes(graphState: any): Set<string> {
   
   // Mark nodes that have multiple targets for reuse-indicating relationship types as reused
   Object.entries(nodeOutgoingByRel).forEach(([nodeId, relTargets]) => {
-    Object.entries(relTargets).forEach(([relLabel, targets]) => {
+    Object.entries(relTargets).forEach(([, targets]) => {
       if (targets.size > 1) {
         reused.add(nodeId)
       }
