@@ -6,7 +6,7 @@ interface ReusedNodeIconProps {
   tooltip?: string
 }
 
-export function ReusedNodeIcon({ tooltip = "This item is used multiple times in this case" }: ReusedNodeIconProps) {
+export function ReusedNodeIcon({ tooltip = "Used multiple times" }: ReusedNodeIconProps) {
   return (
     <div className="relative inline-flex group">
       <svg 

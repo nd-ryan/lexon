@@ -92,7 +92,7 @@ export function detectReusedNodes(graphState: any): Set<string> {
   const reused = new Set<string>()
   const nodeParents: Record<string, Set<string>> = {}
   
-  // Count unique parents for each node
+  // Count unique parents for each node (incoming edges)
   graphState.edges
     .filter((e: any) => e.status === 'active')
     .forEach((edge: any) => {
@@ -107,6 +107,35 @@ export function detectReusedNodes(graphState: any): Set<string> {
     if (parents.size > 1) {
       reused.add(nodeId)
     }
+  })
+  
+  // Also detect nodes with multiple outgoing edges of specific relationship types
+  // that indicate reuse when they appear multiple times (e.g., Arguments with 
+  // multiple EVALUATED_IN edges to different Rulings)
+  // Note: We exclude normal one-to-many relationships like INVOLVES, HEARD_IN, etc.
+  const reuseIndicatingRelationships = ['EVALUATED_IN'] // Add other relationship types that indicate reuse
+  
+  const nodeOutgoingByRel: Record<string, Record<string, Set<string>>> = {}
+  
+  graphState.edges
+    .filter((e: any) => e.status === 'active' && reuseIndicatingRelationships.includes(e.label))
+    .forEach((edge: any) => {
+      if (!nodeOutgoingByRel[edge.from]) {
+        nodeOutgoingByRel[edge.from] = {}
+      }
+      if (!nodeOutgoingByRel[edge.from][edge.label]) {
+        nodeOutgoingByRel[edge.from][edge.label] = new Set()
+      }
+      nodeOutgoingByRel[edge.from][edge.label].add(edge.to)
+    })
+  
+  // Mark nodes that have multiple targets for reuse-indicating relationship types as reused
+  Object.entries(nodeOutgoingByRel).forEach(([nodeId, relTargets]) => {
+    Object.entries(relTargets).forEach(([relLabel, targets]) => {
+      if (targets.size > 1) {
+        reused.add(nodeId)
+      }
+    })
   })
   
   return reused

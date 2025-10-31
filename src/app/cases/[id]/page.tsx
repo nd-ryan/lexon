@@ -668,7 +668,7 @@ export default function CaseEditorPage() {
               
               <div className="space-y-6">
                 {/* Case Details */}
-                {caseNode && renderNodeCard(caseNode, 'Case')}
+                {caseNode && renderNodeCard(caseNode, 'Case', { contextId: 'overview' })}
                 
                 {/* Proceedings Section */}
                 {(() => {
@@ -708,7 +708,7 @@ export default function CaseEditorPage() {
                       />
                       <div className="space-y-4">
                         {proceedingNodes.map((proc: any, idx: number) => 
-                          renderNodeCard(proc, 'Proceeding', { index: idx })
+                          renderNodeCard(proc, 'Proceeding', { index: idx, contextId: 'overview' })
                         )}
                       </div>
                     </div>
@@ -764,9 +764,10 @@ export default function CaseEditorPage() {
                           
                           return renderNodeCard(forum, 'Forum', {
                             index: idx,
+                            contextId: 'overview',
                             children: jurisdiction && (
                               <div className="mt-4">
-                                {renderNodeCard(jurisdiction, 'Jurisdiction', { depth: 1 })}
+                                {renderNodeCard(jurisdiction, 'Jurisdiction', { depth: 1, contextId: 'overview' })}
                               </div>
                             )
                           })
@@ -832,6 +833,7 @@ export default function CaseEditorPage() {
                             
                             return renderNodeCard(party, 'Party', {
                               index: idx,
+                              contextId: 'overview',
                               statusBadge: proceedingId ? (
                                 <RelationshipPropertyField
                                   sourceId={proceedingId}
