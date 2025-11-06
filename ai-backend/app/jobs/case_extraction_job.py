@@ -135,10 +135,13 @@ def run_case_extraction(job_id: str, filename: str, file_extension: str, case_id
         
         publish_progress(job_id, "Saving extraction results", "saving", 90)
         
-        # Save results to database
+        # Save results to database (strip embeddings and catalog nodes for storage efficiency)
+        from app.lib.property_filter import strip_embeddings, strip_catalog_nodes
         db = SessionLocal()
         try:
-            case_repo.save_extraction(db.connection(), case_id, result)
+            cleaned_result = strip_embeddings(result)
+            cleaned_result = strip_catalog_nodes(cleaned_result)
+            case_repo.save_extraction(db.connection(), case_id, cleaned_result)
             db.commit()
         finally:
             db.close()

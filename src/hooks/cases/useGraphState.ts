@@ -38,16 +38,22 @@ export function useGraphState(initialNodes: GraphNode[], initialEdges: GraphEdge
 
   // Get active nodes for display (excludes deleted and orphaned)
   const nodesArray = useMemo<GraphNode[]>(() => {
+    // Exclude special node types handled by dedicated selectors (e.g., ReliefType)
+    const EXCLUDED_NODE_TYPES = new Set(['ReliefType', 'Forum', 'Jurisdiction', 'Domain'])
+    
     return graphState.nodes
-      .filter(n => n.status === 'active')
+      .filter(n => n.status === 'active' && !EXCLUDED_NODE_TYPES.has(n.label))
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       .map(({ status, source, ...node }) => node) // Strip metadata
   }, [graphState])
   
   // Unfiltered nodes array for modals (includes orphaned nodes but excludes deleted)
+  // Also excludes special node types handled by dedicated selectors (e.g., ReliefType)
   const nodesArrayForModals = useMemo<GraphNode[]>(() => {
+    const EXCLUDED_FROM_MODALS = new Set(['ReliefType', 'Forum', 'Jurisdiction', 'Domain'])
+    
     return graphState.nodes
-      .filter(n => n.status !== 'deleted')
+      .filter(n => n.status !== 'deleted' && !EXCLUDED_FROM_MODALS.has(n.label))
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       .map(({ status, source, ...node }) => node) // Strip metadata
   }, [graphState])

@@ -193,7 +193,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
         try:
             if model is not None:
                 inst = model(**props)
-                return inst.model_dump(exclude_none=True)
+                return inst.model_dump(exclude_none=False)
             else:
                 return {k: v for k, v in props.items() if isinstance(k, str)}
         except Exception:
@@ -263,7 +263,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
         try:
             # Validate using Pydantic model
             inst = model(**props)
-            return inst.model_dump(exclude_none=True)
+            return inst.model_dump(exclude_none=False)
         except Exception as e:
             logger.warning(f"Failed to validate relationship properties for {source_label}-[{rel_label}]: {e}")
             # Fallback: return simple filtered dict
@@ -516,7 +516,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                             actual_result = result
                         
                         if hasattr(actual_result, 'model_dump'):
-                            properties = actual_result.model_dump(exclude_none=True)
+                            properties = actual_result.model_dump(exclude_none=False)
                         elif isinstance(actual_result, dict):
                             properties = actual_result
                         else:
@@ -575,7 +575,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                             actual_result = result
                         
                         if hasattr(actual_result, 'model_dump'):
-                            properties = actual_result.model_dump(exclude_none=True)
+                            properties = actual_result.model_dump(exclude_none=False)    
                         elif isinstance(actual_result, dict):
                             properties = actual_result
                         else:
@@ -650,7 +650,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                         nodes_added_count = 0
                         for idx, item in enumerate(items):
                             try:
-                                properties = item.model_dump(exclude_none=True)
+                                properties = item.model_dump(exclude_none=False)
                                 node = {"temp_id": f"n{next_idx}", "label": "Issue", "properties": properties}
                                 next_idx += 1
                                 self.state.nodes_accumulated.append(node)
@@ -813,41 +813,56 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                     next_idx += 1
                     self.state.nodes_accumulated.append(node)
 
-            # Create edges: Proceeding → Forum
+            # Create edges: Proceeding → Forum (using Neo4j ID instead of temp_id)
             try:
                 p_id = self.find_first_temp_id("Proceeding")
-                f_id = self.find_first_temp_id("Forum")
+                
+                # Get Forum node and extract its Neo4j ID
+                forum_nodes = [n for n in (self.state.nodes_accumulated or []) if isinstance(n, dict) and n.get("label") == "Forum"]
+                if p_id and forum_nodes:
+                    forum_node = forum_nodes[0]
+                    forum_props = forum_node.get("properties") or {}
+                    forum_neo4j_id = forum_props.get("forum_id")
+                    
+                    if forum_neo4j_id:
+                        rel_proceeding_forum = get_relationship_label_for_edge("Proceeding", "Forum", self.state.rels_by_label or {})
+                        if rel_proceeding_forum:
+                            # Use Neo4j ID instead of temp_id for catalog node reference
+                            self.state.edges_accumulated.append({
+                                "from": p_id, 
+                                "to": str(forum_neo4j_id), 
+                                "label": rel_proceeding_forum, 
+                                "properties": {}
+                            })
+                            logger.info(f"Phase 2: Created edge Proceeding → Forum ({rel_proceeding_forum}) using Neo4j ID")
 
-                if p_id and f_id:
-                    rel_proceeding_forum = get_relationship_label_for_edge("Proceeding", "Forum", self.state.rels_by_label or {})
-                    if rel_proceeding_forum:
-                        self.state.edges_accumulated.append({"from": p_id, "to": f_id, "label": rel_proceeding_forum, "properties": {}})
-                        logger.info(f"Phase 2: Created edge Proceeding → Forum ({rel_proceeding_forum})")
-
-                # Programmatically fetch Jurisdiction for selected Forum
-                if f_id:
-                    forum_nodes = [n for n in (self.state.nodes_accumulated or []) if isinstance(n, dict) and n.get("temp_id") == f_id]
-                    forum_name = None
-                    if forum_nodes:
-                        props = forum_nodes[0].get("properties") or {}
-                        forum_name = props.get("name") or props.get("text") or props.get("description")
-                    if isinstance(forum_name, str) and forum_name.strip():
-                        rel_forum_jurisdiction = get_relationship_label_for_edge("Forum", "Jurisdiction", self.state.rels_by_label or {})
-                        
-                        if rel_forum_jurisdiction:
-                            query = f"MATCH (f:Forum {{name: $name}})-[:{rel_forum_jurisdiction}]->(j:Jurisdiction) RETURN properties(j) AS props LIMIT 1"
-                            rows = neo4j_client.execute_query(query, parameters={"name": forum_name})
-                            if rows:
-                                j_props = rows[0].get("props") if isinstance(rows[0], dict) else None
-                                if isinstance(j_props, dict):
-                                    j_node_id = self.find_first_temp_id("Jurisdiction")
-                                    if not j_node_id:
-                                        j_node_id = f"n{next_idx}"
+                        # Programmatically fetch Jurisdiction for selected Forum
+                        forum_name = forum_props.get("name") or forum_props.get("text") or forum_props.get("description")
+                        if isinstance(forum_name, str) and forum_name.strip():
+                            rel_forum_jurisdiction = get_relationship_label_for_edge("Forum", "Jurisdiction", self.state.rels_by_label or {})
+                            
+                            if rel_forum_jurisdiction:
+                                query = f"MATCH (f:Forum {{name: $name}})-[:{rel_forum_jurisdiction}]->(j:Jurisdiction) RETURN properties(j) AS props LIMIT 1"
+                                rows = neo4j_client.execute_query(query, parameters={"name": forum_name})
+                                if rows:
+                                    j_props = rows[0].get("props") if isinstance(rows[0], dict) else None
+                                    if isinstance(j_props, dict):
+                                        # Add Jurisdiction node to accumulator (will be stripped later)
+                                        j_temp_id = f"n{next_idx}"
                                         next_idx += 1
-                                        self.state.nodes_accumulated.append({"temp_id": j_node_id, "label": "Jurisdiction", "properties": j_props})
-                                    # Forum → Jurisdiction
-                                    self.state.edges_accumulated.append({"from": f_id, "to": j_node_id, "label": rel_forum_jurisdiction, "properties": {}})
-                                    logger.info(f"Phase 2: Created edge Forum → Jurisdiction ({rel_forum_jurisdiction})")
+                                        self.state.nodes_accumulated.append({"temp_id": j_temp_id, "label": "Jurisdiction", "properties": j_props})
+                                        
+                                        # Get Jurisdiction Neo4j ID for edge
+                                        jurisdiction_neo4j_id = j_props.get("jurisdiction_id")
+                                        if jurisdiction_neo4j_id:
+                                            # Use Neo4j IDs for both Forum and Jurisdiction in edge
+                                            self.state.edges_accumulated.append({
+                                                "from": str(forum_neo4j_id), 
+                                                "to": str(jurisdiction_neo4j_id), 
+                                                "label": rel_forum_jurisdiction, 
+                                                "properties": {}
+                                            })
+                                            logger.info(f"Phase 2: Created edge Forum → Jurisdiction ({rel_forum_jurisdiction}) using Neo4j IDs")
             except Exception as e:
                 logger.warning(f"Phase 2: Failed to create edges: {e}")
 
@@ -1700,7 +1715,12 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 """
                 nonlocal next_idx
                 
-                id_field = f"{label.lower()}_id"
+                # Map label names to their ID property names (for compound names)
+                ID_PROPERTY_MAP = {
+                    'ReliefType': 'relief_type_id',
+                    'FactPattern': 'fact_pattern_id',
+                }
+                id_field = ID_PROPERTY_MAP.get(label, f"{label.lower()}_id")
                 
                 # First, try to match by node_id in catalog
                 catalog_entry = None
@@ -2247,7 +2267,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                                 relief_type_temp_id = n.get("temp_id")
                                 break
                     
-                    # Create ReliefType node if it doesn't exist
+                    # Create ReliefType node if it doesn't exist (will be stripped later)
                     if not relief_type_temp_id:
                         relief_type_temp_id = f"n{next_idx}"
                         next_idx += 1
@@ -2264,18 +2284,20 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                         
                         self.state.nodes_accumulated.append({"temp_id": relief_type_temp_id, "label": "ReliefType", "properties": rt_props})
                     
-                    # Create edge: Relief → ReliefType (IS_TYPE)
+                    # Create edge: Relief → ReliefType (IS_TYPE) using Neo4j ID
                     rel_label_is_type = get_relationship_label_for_edge("Relief", "ReliefType", self.state.rels_by_label or {})
                     if rel_label_is_type:
+                        # Use Neo4j ID (relief_type_id) instead of temp_id for catalog node reference
+                        relief_type_neo4j_id = str(relief_type_id)
                         # Check if edge already exists
                         existing = any(
-                            e.get("from") == relief_temp_id and e.get("to") == relief_type_temp_id and e.get("label") == rel_label_is_type
+                            e.get("from") == relief_temp_id and e.get("to") == relief_type_neo4j_id and e.get("label") == rel_label_is_type
                             for e in (self.state.edges_accumulated or []) if isinstance(e, dict)
                         )
                         if not existing:
                             self.state.edges_accumulated.append({
                                 "from": relief_temp_id,
-                                "to": relief_type_temp_id,
+                                "to": relief_type_neo4j_id,
                                 "label": rel_label_is_type,
                                 "properties": {}
                             })
@@ -2295,7 +2317,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
 
     @listen(phase8_generate_relief_and_assign_types)
     def phase9_select_domain(self, _: Dict[str, Any]) -> Dict[str, Any]:
-        # Phase 9: select Domain from catalog or schema options; create Domain node and edge to Case
+        # Phase 9: select Domain from Neo4j catalog; create Domain node and edge to Case
         logger.info("Phase 9: selecting Domain")
         if self.state.progress_callback:
             try:
@@ -2305,64 +2327,34 @@ class CaseExtractFlow(Flow[CaseExtractState]):
         try:
             from .crews.case_crew.case_crew_v3 import CaseCrew as _CaseCrew
             
-            # Build catalog for Domain
+            # Build catalog for Domain from Neo4j
             catalogs = self.build_catalog_for_labels(["Domain"])
             domain_catalog = catalogs.get("Domain", [])
             
-            # Determine selection mode and build prompt replacements
-            if domain_catalog:
-                # Catalog mode: AI selects domain_id from catalog
-                logger.info(f"Phase 9: Using catalog mode with {len(domain_catalog)} domains")
-                selection_mode = f"Select ONE domain_id from the catalog below:\n{json.dumps(catalogs, ensure_ascii=False)}"
-                use_catalog = True
-            else:
-                # Options mode: AI selects from schema options
-                logger.info("Phase 9: Using schema options mode (no catalog entries)")
-                # Extract domain options from schema
-                domain_options = []
-                labels_src = (self.state.schema_spec or {}).get("labels", []) if isinstance(self.state.schema_spec, dict) else []
-                for ldef in labels_src:
-                    if isinstance(ldef, dict) and ldef.get("label") == "Domain":
-                        props = ldef.get("properties", {})
-                        if isinstance(props, dict):
-                            name_prop = props.get("name", {})
-                            if isinstance(name_prop, dict):
-                                ui_config = name_prop.get("ui", {})
-                                if isinstance(ui_config, dict):
-                                    opts = ui_config.get("options", [])
-                                    if isinstance(opts, list):
-                                        domain_options = opts
-                                        break
-                
-                if not domain_options:
-                    domain_options = ["Free Speech", "Antitrust"]  # Fallback defaults
-                
-                logger.info(f"Phase 9: Domain options from schema: {domain_options}")
-                selection_mode = f"Select ONE domain name from these options:\n{json.dumps(domain_options, ensure_ascii=False)}"
-                use_catalog = False
+            if not domain_catalog:
+                logger.warning("Phase 9: No Domain catalog available; skipping domain assignment")
+                return {"status": "phase9_skipped"}
             
-            # Create crew with replacements
+            logger.info(f"Phase 9: Using catalog with {len(domain_catalog)} domains")
+            
+            # Get Domain instructions and examples from flow_map
+            domain_instructions, domain_examples_json = _get_label_instructions_and_examples("Domain", self.state.node_instructions_by_label)
+            
+            # Create crew with catalog
             crew = _CaseCrew(
                 self.state.file_path,
                 self.state.filename,
                 self.state.case_id,
                 tools=[],
                 replacements={
-                    "DOMAIN_SELECTION_MODE": selection_mode,
+                    "DOMAIN_INSTRUCTIONS": domain_instructions,
+                    "DOMAIN_EXAMPLES_JSON": domain_examples_json,
                     "CASE_TEXT": self.state.document_text or "",
+                    "CATALOGS_JSON": json.dumps(catalogs, ensure_ascii=False),
                 },
             )
             
-            # Create response model - expecting a simple selection
-            if use_catalog:
-                # Reuse SelectionResponse model for catalog mode
-                response_model = SelectionResponse
-            else:
-                # Simple string response for options mode
-                from pydantic import create_model
-                response_model = create_model('DomainResponse', domain_name=(str, ...))
-            
-            task = crew.phase9_select_domain_task(response_model)
+            task = crew.phase9_select_domain_task(SelectionResponse)
             single_crew = Crew(
                 agents=[crew.phase9_domain_agent()],
                 tasks=[task],
@@ -2373,60 +2365,42 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             edges_before = len(self.state.edges_accumulated or [])
             result = single_crew.kickoff()
             
-            # Parse result based on mode
-            selected_domain_id_or_name = None
-            if use_catalog:
-                # Parse as SelectionResponse
-                selected = self.parse_selection_response(result)
-                domain_ids = selected.get("Domain") or []
-                if domain_ids and len(domain_ids) > 0:
-                    selected_domain_id_or_name = domain_ids[0]
-                    logger.info(f"Phase 9: AI selected domain_id: {selected_domain_id_or_name}")
-            else:
-                # Parse as simple string response
-                if hasattr(result, 'pydantic'):
-                    data = result.pydantic.model_dump() if hasattr(result.pydantic, 'model_dump') else result.pydantic
-                elif hasattr(result, 'model_dump'):
-                    data = result.model_dump()
-                else:
-                    data = self.parse_crew_result(result)
-                selected_domain_id_or_name = data.get("domain_name") if isinstance(data, dict) else None
-                logger.info(f"Phase 9: AI selected domain name: {selected_domain_id_or_name}")
+            # Parse result as SelectionResponse
+            selected = self.parse_selection_response(result)
+            domain_ids = selected.get("Domain") or []
             
-            if not selected_domain_id_or_name:
+            if not domain_ids or len(domain_ids) == 0:
                 logger.warning("Phase 9: No domain selected by AI; skipping")
                 return {"status": "phase9_skipped"}
             
-            # Create Domain node
+            selected_domain_id = domain_ids[0]
+            logger.info(f"Phase 9: AI selected domain_id: {selected_domain_id}")
+            
+            # Find domain in catalog by ID
+            domain_entry = None
+            for row in domain_catalog:
+                if isinstance(row, dict) and str(row.get("domain_id")) == str(selected_domain_id):
+                    domain_entry = row
+                    break
+            
+            if not domain_entry:
+                logger.warning(f"Phase 9: Domain ID '{selected_domain_id}' not found in catalog; skipping")
+                return {"status": "phase9_skipped"}
+            
+            # Create Domain node with all catalog properties
             next_idx = 1 + len(self.state.nodes_accumulated or [])
             domain_temp_id = f"n{next_idx}"
             
-            if use_catalog:
-                # Find domain in catalog by ID
-                domain_entry = None
-                for row in domain_catalog:
-                    if isinstance(row, dict) and str(row.get("domain_id")) == str(selected_domain_id_or_name):
-                        domain_entry = row
-                        break
-                
-                if not domain_entry:
-                    logger.warning(f"Phase 9: Domain ID '{selected_domain_id_or_name}' not found in catalog; skipping")
-                    return {"status": "phase9_skipped"}
-                
-                # Use all properties from catalog
-                props_meta = (self.state.props_meta_by_label or {}).get("Domain", {})
-                allowed_keys = [k for k in props_meta.keys() if isinstance(k, str)]
-                domain_props: Dict[str, Any] = {}
-                for k in allowed_keys:
-                    if domain_entry.get(k) is not None:
-                        domain_props[k] = domain_entry.get(k)
-                # Ensure ID fields are included
-                for k, v in domain_entry.items():
-                    if isinstance(k, str) and k.endswith("_id") and v is not None:
-                        domain_props[k] = str(v) if not isinstance(v, (int, float, bool)) else v
-            else:
-                # Use name only from options mode
-                domain_props = {"name": selected_domain_id_or_name}
+            props_meta = (self.state.props_meta_by_label or {}).get("Domain", {})
+            allowed_keys = [k for k in props_meta.keys() if isinstance(k, str)]
+            domain_props: Dict[str, Any] = {}
+            for k in allowed_keys:
+                if domain_entry.get(k) is not None:
+                    domain_props[k] = domain_entry.get(k)
+            # Ensure ID fields are included
+            for k, v in domain_entry.items():
+                if isinstance(k, str) and k.endswith("_id") and v is not None:
+                    domain_props[k] = str(v) if not isinstance(v, (int, float, bool)) else v
             
             # Add Domain node
             domain_node = {"temp_id": domain_temp_id, "label": "Domain", "properties": domain_props}
@@ -2436,16 +2410,21 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             # Find Case node to create edge
             case_temp_id = self.find_first_temp_id("Case")
             if case_temp_id:
-                # Create edge: Domain → Case (CONTAINS)
+                # Create edge: Domain → Case (CONTAINS) using Neo4j ID
                 rel_label = get_relationship_label_for_edge("Domain", "Case", self.state.rels_by_label or {})
                 if rel_label:
-                    self.state.edges_accumulated.append({
-                        "from": domain_temp_id,
-                        "to": case_temp_id,
-                        "label": rel_label,
-                        "properties": {}
-                    })
-                    logger.info(f"Phase 9: Created edge Domain → Case ({rel_label})")
+                    # Use Neo4j ID (domain_id) instead of temp_id for catalog node reference
+                    domain_neo4j_id = domain_props.get("domain_id")
+                    if domain_neo4j_id:
+                        self.state.edges_accumulated.append({
+                            "from": str(domain_neo4j_id),
+                            "to": case_temp_id,
+                            "label": rel_label,
+                            "properties": {}
+                        })
+                        logger.info(f"Phase 9: Created edge Domain → Case ({rel_label}) using Neo4j ID")
+                    else:
+                        logger.warning("Phase 9: Domain node missing domain_id; cannot create edge (catalog-only node)")
                 else:
                     logger.warning("Phase 9: No relationship label found for Domain → Case")
             else:

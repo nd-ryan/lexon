@@ -179,10 +179,32 @@ def get_case_display(case_id: str, view: str = "holdingsCentric", db: Session = 
 
 @router.put("/{case_id}")
 def update_case(case_id: str, payload: dict, db: Session = Depends(get_db)):
-    user_id = "editor"  # TODO: integrate auth user
-    updated = case_repo.update_case(db.connection(), case_id, payload, user_id)
-    db.commit()
-    return {"success": True, "case": updated}
+    # Validate catalog IDs before saving
+    from app.lib.catalog_validator import validate_catalog_ids
+    from app.lib.property_filter import strip_embeddings, strip_catalog_nodes
+    
+    try:
+        nodes = payload.get("nodes", [])
+        is_valid, errors = validate_catalog_ids(nodes)
+        
+        if not is_valid:
+            error_msg = f"Invalid catalog references: {'; '.join(errors)}"
+            logger.warning(f"Case {case_id} save failed - validation errors: {error_msg}")
+            raise HTTPException(400, error_msg)
+        
+        user_id = "editor"  # TODO: integrate auth user
+        cleaned_payload = strip_embeddings(payload)
+        cleaned_payload = strip_catalog_nodes(cleaned_payload)
+        updated = case_repo.update_case(db.connection(), case_id, cleaned_payload, user_id)
+        db.commit()
+        logger.info(f"Case {case_id} saved successfully by {user_id}")
+        return {"success": True, "case": updated}
+    except HTTPException:
+        # Re-raise HTTPExceptions (like validation errors) without wrapping
+        raise
+    except Exception as e:
+        logger.error(f"Case {case_id} save failed with unexpected error: {e}", exc_info=True)
+        raise HTTPException(500, f"Failed to save case: {str(e)}")
 
 
 @router.delete("/{case_id}")

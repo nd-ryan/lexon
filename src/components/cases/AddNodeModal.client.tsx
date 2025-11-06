@@ -453,6 +453,7 @@ export default function AddNodeModal({ open, nodeType, schema, existingNodes, pa
                 if (!selectedExistingId) return
                 const existing = existingNodes.find(n => String(n?.temp_id) === String(selectedExistingId))
                 if (!existing) return
+                console.log('AddNodeModal submitting existing node:', existing, 'is_existing:', existing.is_existing)
                 const edges = relSelections
                   .filter(sel => sel.targetTempId && sel.relLabel)
                   .map<GraphEdge>(sel => ({ from: existing.temp_id, to: sel.targetTempId, label: sel.relLabel! }))

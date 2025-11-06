@@ -11,13 +11,17 @@ interface OrphanedNodesSectionProps {
 }
 
 export function OrphanedNodesSection({ orphanedNodes, graphState }: OrphanedNodesSectionProps) {
-  if (orphanedNodes.length === 0) return null
+  // Filter out special node types handled by dedicated selectors (e.g., ReliefType)
+  const EXCLUDED_NODE_TYPES = new Set(['ReliefType'])
+  const displayedOrphanedNodes = orphanedNodes.filter((n: any) => !EXCLUDED_NODE_TYPES.has(n?.label))
+  
+  if (displayedOrphanedNodes.length === 0) return null
 
   return (
     <div className="mt-8 border-t-4 border-red-200 pt-6">
       <div className="mb-4">
         <h2 className="text-lg font-semibold text-red-700">
-          Orphaned Nodes ({orphanedNodes.length})
+          Orphaned Nodes ({displayedOrphanedNodes.length})
         </h2>
         <p className="text-xs text-gray-600 mt-1">
           These nodes were disconnected when their parent was deleted. They will be permanently deleted when you save unless you reassign them.
@@ -28,7 +32,7 @@ export function OrphanedNodesSection({ orphanedNodes, graphState }: OrphanedNode
       </div>
       
       <div className="space-y-3">
-        {orphanedNodes.map((node: any) => {
+        {displayedOrphanedNodes.map((node: any) => {
           const nodeLabel = node.label || 'Unknown'
           const nodeName = pickNodeName(node) || node.temp_id
           const { outgoing, incoming } = getNodeConnections(node.temp_id, graphState)

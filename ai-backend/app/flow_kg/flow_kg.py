@@ -14,6 +14,7 @@ from app.lib.schema_runtime import (
     load_schema_payload,
 )
 from app.lib.embeddings import generate_embedding_sync
+from app.lib.property_filter import CATALOG_ONLY_NODES
 from pydantic import BaseModel
 
 
@@ -33,7 +34,7 @@ def to_snake_case(label: str) -> str:
 
 
 def get_id_prop_for_label(label: str, schema_payload: Any) -> str:
-    """Return the *_id property name for a label based on schema.json.
+    """Return the *_id property name for a label based on schema_v3.json.
 
     Preference order:
       1) <snake_label>_id if present in schema
@@ -67,6 +68,7 @@ class KGState(BaseModel):
     embedding_config: Dict[str, List[str]] = {}
     original_input: Dict[str, Any] = {}  # Store original input for validation
     id_mapping: Dict[str, str] = {}  # Store temp_id -> uuid mapping for validation
+    catalog_node_references: Dict[str, str] = {}  # Store original catalog node IDs referenced in edges: edge_ref -> expected_uuid
 
 
 class KGFlow(Flow[KGState]):
@@ -81,6 +83,14 @@ class KGFlow(Flow[KGState]):
         logger.info("KGFlow kickoff: received payload with %d nodes, %d edges",
                     len(data.get("nodes", []) if isinstance(data.get("nodes"), list) else []),
                     len(data.get("edges", []) if isinstance(data.get("edges"), list) else []))
+        # Log ReliefType.relief_type_id from input data
+        nodes = data.get("nodes", [])
+        for i, node in enumerate(nodes):
+            if isinstance(node, dict) and node.get("label") == "ReliefType":
+                props = node.get("properties", {})
+                if isinstance(props, dict):
+                    relief_type_id = props.get("relief_type_id")
+                    logger.info("KGFlow input: ReliefType node %d has relief_type_id=%s", i, relief_type_id)
         # Store original input for validation
         import copy
         self.state.original_input = copy.deepcopy(data)
@@ -88,7 +98,7 @@ class KGFlow(Flow[KGState]):
         try:
             self.state.schema_payload = load_schema_payload()
         except Exception as e:
-            logger.warning(f"KGFlow: failed to load schema.json: {e}")
+            logger.warning(f"KGFlow: failed to load schema_v3.json: {e}")
             self.state.schema_payload = []
         try:
             self.state.embedding_config = derive_embedding_config_from_schema()
@@ -98,52 +108,274 @@ class KGFlow(Flow[KGState]):
         return data
 
     @listen(start_flow)
+    def validate_uuid_references(self, ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate that UUIDs referenced in edges and nodes exist in Neo4j.
+        
+        For read-only catalog nodes (Forum, Jurisdiction, ReliefType, Domain):
+        - Validate UUIDs referenced in edges exist in Neo4j
+        - Don't load node data, just validate existence
+        - Edges will maintain these UUIDs for later Cypher queries
+        
+        For other nodes with _id properties (like Law with law_id):
+        - Validate UUIDs exist in Neo4j
+        - Don't load node data
+        - Ensure UUIDs remain in the data
+        """
+        data = dict(ctx or {})
+        nodes = list(data.get("nodes") or [])
+        edges = list(data.get("edges") or [])
+        
+        validation_errors = []
+        
+        try:
+            from app.lib.neo4j_client import neo4j_client
+            
+            schema_payload = self.state.schema_payload
+            
+            # Map label to ID property name for catalog nodes
+            catalog_id_property_map = {
+                'ReliefType': 'relief_type_id',
+                'Forum': 'forum_id',
+                'Jurisdiction': 'jurisdiction_id',
+                'Domain': 'domain_id',
+            }
+            
+            # Map edge labels to their expected catalog node types and which end references the catalog node
+            edge_to_catalog_config = {
+                'IS_TYPE': {'type': 'ReliefType', 'end': 'to'},  # Relief -> ReliefType
+                'HEARD_IN': {'type': 'Forum', 'end': 'to'},  # Proceeding -> Forum
+                'PART_OF': {'type': 'Jurisdiction', 'end': 'to'},  # Forum -> Jurisdiction
+                'CONTAINS': {'type': 'Domain', 'end': 'from'}  # Domain -> Case (source is catalog)
+            }
+            
+            # Collect catalog node UUIDs referenced in edges for validation
+            catalog_ids_to_validate: Dict[str, List[str]] = {}  # label -> list of UUIDs
+            catalog_references: Dict[str, str] = {}  # Track for validation reporting
+            
+            for edge in edges:
+                if not isinstance(edge, dict):
+                    continue
+                
+                edge_label = edge.get("label")
+                if edge_label not in edge_to_catalog_config:
+                    continue
+                
+                config = edge_to_catalog_config[edge_label]
+                catalog_type = config['type']
+                end_field = config['end']
+                
+                catalog_uuid = edge.get(end_field)
+                if not catalog_uuid:
+                    continue
+                
+                # Store reference for validation tracking
+                ref_key = f"{edge_label}:{catalog_type}:{catalog_uuid}"
+                catalog_references[ref_key] = str(catalog_uuid)
+                
+                if catalog_type not in catalog_ids_to_validate:
+                    catalog_ids_to_validate[catalog_type] = []
+                
+                if catalog_uuid not in catalog_ids_to_validate[catalog_type]:
+                    catalog_ids_to_validate[catalog_type].append(catalog_uuid)
+            
+            # Validate catalog node UUIDs exist in Neo4j
+            for catalog_label, uuids in catalog_ids_to_validate.items():
+                if not uuids:
+                    continue
+                
+                id_prop = catalog_id_property_map.get(catalog_label, f'{catalog_label.lower()}_id')
+                
+                # Validate UUIDs exist in Neo4j (just check existence, don't fetch data)
+                query = f"MATCH (n:`{catalog_label}`) WHERE n.{id_prop} IN $ids RETURN n.{id_prop} as id"
+                try:
+                    result = neo4j_client.execute_query(query, {"ids": uuids})
+                    found_uuids = {str(record.get('id')) for record in result if record.get('id')}
+                    
+                    # Check for missing UUIDs
+                    for uuid_val in uuids:
+                        uuid_str = str(uuid_val)
+                        if uuid_str not in found_uuids:
+                            validation_errors.append(
+                                f"Catalog node {catalog_label} with {id_prop}={uuid_str} not found in Neo4j"
+                            )
+                    logger.info(f"KGFlow: Validated {len(found_uuids)}/{len(uuids)} {catalog_label} UUIDs exist in Neo4j")
+                except Exception as e:
+                    logger.warning(f"KGFlow: Failed to validate {catalog_label} UUIDs: {e}")
+                    validation_errors.append(f"Failed to validate {catalog_label} UUIDs: {e}")
+            
+            # Validate other nodes with _id properties exist in Neo4j
+            nodes_to_validate: Dict[str, List[tuple]] = {}  # label -> list of (uuid, node_index)
+            
+            for idx, node in enumerate(nodes):
+                if not isinstance(node, dict):
+                    continue
+                
+                label = node.get("label")
+                if not label or label in CATALOG_ONLY_NODES:
+                    continue  # Skip catalog nodes (already validated above)
+                
+                props = node.get("properties") or {}
+                if not isinstance(props, dict):
+                    continue
+                
+                # Get the *_id property for this label
+                id_prop = get_id_prop_for_label(label, schema_payload)
+                node_uuid = props.get(id_prop)
+                
+                # If node has a UUID in its _id property, validate it exists in Neo4j
+                if node_uuid and is_uuid(str(node_uuid)):
+                    if label not in nodes_to_validate:
+                        nodes_to_validate[label] = []
+                    nodes_to_validate[label].append((str(node_uuid), idx))
+            
+            # Validate each node type's UUIDs exist in Neo4j
+            for label, uuid_list in nodes_to_validate.items():
+                if not uuid_list:
+                    continue
+                
+                uuids = [uuid_val for uuid_val, _ in uuid_list]
+                id_prop = get_id_prop_for_label(label, schema_payload)
+                
+                # Validate UUIDs exist in Neo4j (just check existence, don't fetch data)
+                query = f"MATCH (n:`{label}`) WHERE n.{id_prop} IN $ids RETURN n.{id_prop} as id"
+                try:
+                    result = neo4j_client.execute_query(query, {"ids": uuids})
+                    found_uuids = {str(record.get('id')) for record in result if record.get('id')}
+                    
+                    # Check for missing UUIDs
+                    for uuid_val, node_idx in uuid_list:
+                        uuid_str = str(uuid_val)
+                        if uuid_str not in found_uuids:
+                            validation_errors.append(
+                                f"Node {node_idx} ({label}) with {id_prop}={uuid_str} not found in Neo4j"
+                            )
+                    logger.info(f"KGFlow: Validated {len(found_uuids)}/{len(uuids)} {label} UUIDs exist in Neo4j")
+                except Exception as e:
+                    logger.warning(f"KGFlow: Failed to validate {label} UUIDs: {e}")
+                    validation_errors.append(f"Failed to validate {label} UUIDs: {e}")
+            
+            # Store catalog references for later validation reporting
+            self.state.catalog_node_references = catalog_references
+            
+            # Log validation results
+            if validation_errors:
+                logger.warning(f"KGFlow: UUID validation found {len(validation_errors)} errors:")
+                for error in validation_errors[:10]:  # Log first 10 errors
+                    logger.warning(f"  - {error}")
+                if len(validation_errors) > 10:
+                    logger.warning(f"  ... and {len(validation_errors) - 10} more errors")
+            else:
+                logger.info("KGFlow: All UUID references validated successfully ✓")
+            
+        except Exception as e:
+            logger.warning(f"KGFlow: Failed to validate UUID references in Neo4j: {e}")
+            validation_errors.append(f"Neo4j validation failed: {e}")
+        
+        # Continue processing even if validation fails (validation issues will be logged)
+        # The actual submission to Neo4j will fail if UUIDs don't exist anyway
+        data["nodes"] = nodes
+        data["edges"] = edges
+        self.state.payload = data
+        return data
+
+    @listen(validate_uuid_references)
     def normalize_ids(self, ctx: Dict[str, Any]) -> Dict[str, Any]:
         data = dict(ctx or {})
         nodes = list(data.get("nodes") or [])
         edges = list(data.get("edges") or [])
 
         # Build map temp_id -> uuid (reuse if already uuid)
+        # For nodes with existing *_id properties (like Law with law_id), prefer those
         id_map: Dict[str, str] = {}
+        schema_payload = self.state.schema_payload
+        
         for n in nodes:
             if not isinstance(n, dict):
                 continue
             raw_tid = n.get("temp_id")
-            if not isinstance(raw_tid, str) or not raw_tid:
-                uid = str(uuid.uuid4())
-            else:
+            label = n.get("label")
+            props = n.get("properties") or {}
+            
+            # Check if node already has a *_id property with a UUID value
+            existing_id = None
+            if isinstance(label, str) and isinstance(props, dict):
+                id_prop = get_id_prop_for_label(label, schema_payload)
+                existing_id_value = props.get(id_prop)
+                if existing_id_value and is_uuid(str(existing_id_value)):
+                    existing_id = str(existing_id_value)
+            
+            # Determine the UUID to use:
+            # 1. If node has existing *_id with UUID, use that
+            # 2. If temp_id is already a UUID, use that
+            # 3. Otherwise generate new UUID
+            if existing_id:
+                uid = existing_id
+            elif raw_tid and isinstance(raw_tid, str):
                 uid = raw_tid if is_uuid(raw_tid) else str(uuid.uuid4())
-            id_map[raw_tid] = uid
+            else:
+                uid = str(uuid.uuid4())
+            
+            # Map temp_id to the chosen UUID
+            if raw_tid:
+                id_map[raw_tid] = uid
+            # Also map existing_id if different from temp_id
+            if existing_id and existing_id != raw_tid:
+                id_map[existing_id] = uid
         
         # Store mapping for validation
         self.state.id_mapping = id_map
 
-        # Update edges
+        # Update edges - map temp_ids to UUIDs, but preserve catalog UUIDs
+        # Catalog UUIDs (read-only nodes) are already UUIDs and should not be remapped
         for e in edges:
             if not isinstance(e, dict):
                 continue
             frm = e.get("from")
             to = e.get("to")
-            if isinstance(frm, str) and frm in id_map:
-                e["from"] = id_map[frm]
-            if isinstance(to, str) and to in id_map:
-                e["to"] = id_map[to]
+            
+            # Only remap if the value is in id_map (i.e., it's a temp_id that needs mapping)
+            # If it's already a UUID and not in id_map, preserve it (likely a catalog UUID)
+            if isinstance(frm, str):
+                if frm in id_map:
+                    e["from"] = id_map[frm]
+                elif not is_uuid(frm):
+                    # Not a UUID and not in map - this is an error, but log it
+                    logger.warning(f"Edge 'from' value '{frm}' is not a UUID and not in id_map")
+            
+            if isinstance(to, str):
+                if to in id_map:
+                    e["to"] = id_map[to]
+                elif not is_uuid(to):
+                    # Not a UUID and not in map - this is an error, but log it
+                    logger.warning(f"Edge 'to' value '{to}' is not a UUID and not in id_map")
 
         # Replace temp_id with schema-driven *_id on nodes
-        schema_payload = self.state.schema_payload
+        # Note: We already handled existing *_id properties in the id_map building above
         for n in nodes:
             if not isinstance(n, dict):
                 continue
             label = n.get("label")
             tid = n.get("temp_id")
             props = dict(n.get("properties") or {})
+            
             if isinstance(label, str):
                 id_prop = get_id_prop_for_label(label, schema_payload)
             else:
                 id_prop = "id"
+            
+            # Get the UUID - prefer from temp_id mapping, but preserve existing *_id if already set
             mapped_uuid = id_map.get(tid)
+            
+            # Only set *_id if not already present or if we need to update it
             if mapped_uuid:
-                props[id_prop] = mapped_uuid
+                # Only overwrite if the existing value is different or missing
+                existing_id_value = props.get(id_prop)
+                if not existing_id_value or str(existing_id_value) != mapped_uuid:
+                    props[id_prop] = mapped_uuid
+            elif not props.get(id_prop):
+                # No mapping and no existing *_id - generate one
+                props[id_prop] = str(uuid.uuid4())
+            
             n["properties"] = props
             # remove temp_id from node object as requested
             if "temp_id" in n:
@@ -191,15 +423,68 @@ class KGFlow(Flow[KGState]):
         self.state.payload = data
         return data
 
+    def _truncate_embeddings(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a copy of data with embedding properties truncated for logging."""
+        import copy
+        truncated = copy.deepcopy(data)
+        
+        nodes = truncated.get("nodes", [])
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            props = node.get("properties", {})
+            if not isinstance(props, dict):
+                continue
+            for key, value in props.items():
+                if key.endswith("_embedding") and isinstance(value, (list, tuple)):
+                    # Truncate to first few elements and show length
+                    truncated_list = list(value)[:3] if len(value) > 3 else list(value)
+                    props[key] = f"<embedding: {len(value)} dimensions, first 3: {truncated_list}>"
+                elif key.endswith("_embedding"):
+                    # For non-list embeddings, just show first few chars
+                    str_val = str(value)
+                    props[key] = f"<embedding: {str_val[:50]}...>" if len(str_val) > 50 else f"<embedding: {str_val}>"
+        
+        edges = truncated.get("edges", [])
+        for edge in edges:
+            if not isinstance(edge, dict):
+                continue
+            props = edge.get("properties", {})
+            if not isinstance(props, dict):
+                continue
+            for key, value in props.items():
+                if key.endswith("_embedding") and isinstance(value, (list, tuple)):
+                    truncated_list = list(value)[:3] if len(value) > 3 else list(value)
+                    props[key] = f"<embedding: {len(value)} dimensions, first 3: {truncated_list}>"
+                elif key.endswith("_embedding"):
+                    str_val = str(value)
+                    props[key] = f"<embedding: {str_val[:50]}...>" if len(str_val) > 50 else f"<embedding: {str_val}>"
+        
+        return truncated
+
     @listen(compute_embeddings)
     def finish(self, ctx: Dict[str, Any]) -> Dict[str, Any]:
         data = dict(ctx or {})
-        # Log structure/schema of the result instead of full data
+        # Log ReliefType.relief_type_id from final data
+        nodes = data.get("nodes", [])
+        for i, node in enumerate(nodes):
+            if isinstance(node, dict) and node.get("label") == "ReliefType":
+                props = node.get("properties", {})
+                if isinstance(props, dict):
+                    relief_type_id = props.get("relief_type_id")
+                    logger.info("KGFlow final: ReliefType node %d has relief_type_id=%s", i, relief_type_id)
+        # Log structure/schema of the result
         structure = self._extract_structure(data)
         try:
             logger.info("KGFlow result structure: %s", json.dumps(structure, indent=2, ensure_ascii=False))
         except Exception:
             logger.info("KGFlow result structure (non-JSON-serializable): %s", str(structure))
+        # Log full final data with truncated embeddings
+        try:
+            truncated_data = self._truncate_embeddings(data)
+            logger.info("KGFlow full result data: %s", json.dumps(truncated_data, indent=2, ensure_ascii=False))
+        except Exception:
+            logger.info("KGFlow full result data (non-JSON-serializable): %s", str(data))
         return data
 
     @listen(finish)
@@ -220,14 +505,15 @@ class KGFlow(Flow[KGState]):
         }
         
         # First run transformation validation, then schema validation
-        issues = self._validate_transformation(output_data, input_data, id_mapping, schema_payload, embedding_config, issues, stats)
+        catalog_references = self.state.catalog_node_references
+        issues = self._validate_transformation(output_data, input_data, id_mapping, schema_payload, embedding_config, issues, stats, catalog_references)
         
         # Then validate against schema
         schema_issues = self._validate_against_schema(output_data, schema_payload)
         
         return output_data
 
-    def _validate_transformation(self, output_data, input_data, id_mapping, schema_payload, embedding_config, issues, stats):
+    def _validate_transformation(self, output_data, input_data, id_mapping, schema_payload, embedding_config, issues, stats, catalog_references: Dict[str, str] = None):
         
         # Check 1: Data structure
         if not isinstance(output_data.get("nodes"), list):
@@ -252,6 +538,9 @@ class KGFlow(Flow[KGState]):
         
         # Build output node id lookup for edge validation
         output_node_ids = set()
+        
+        # Track UUID preservation per label
+        uuid_preservation_by_label: Dict[str, Dict[str, int]] = {}  # label -> {preserved: int, total: int}
         
         # Check 3, 4: UUID assignment and preservation
         for i, node in enumerate(output_nodes):
@@ -278,14 +567,39 @@ class KGFlow(Flow[KGState]):
             if i < len(input_nodes):
                 input_node = input_nodes[i]
                 if isinstance(input_node, dict):
+                    input_props = input_node.get("properties", {})
                     input_temp_id = input_node.get("temp_id")
-                    if input_temp_id and is_uuid(input_temp_id):
-                        # Input had a UUID, verify it was preserved
-                        expected_uuid = id_mapping.get(input_temp_id, input_temp_id)
-                        if str(node_id) == expected_uuid:
+                    
+                    # Check if input had a UUID in its *_id property
+                    input_existing_uuid = None
+                    if isinstance(input_props, dict):
+                        input_id_prop = get_id_prop_for_label(label, schema_payload)
+                        input_existing_uuid_value = input_props.get(input_id_prop)
+                        if input_existing_uuid_value and is_uuid(str(input_existing_uuid_value)):
+                            input_existing_uuid = str(input_existing_uuid_value)
+                    
+                    # Determine the input UUID to check against
+                    input_uuid_to_check = None
+                    if input_existing_uuid:
+                        # Input had UUID in *_id property
+                        input_uuid_to_check = input_existing_uuid
+                    elif input_temp_id and is_uuid(input_temp_id):
+                        # Input had UUID in temp_id
+                        # Map through id_mapping to get the final UUID
+                        input_uuid_to_check = id_mapping.get(input_temp_id, input_temp_id)
+                    
+                    # Track UUID preservation
+                    if input_uuid_to_check:
+                        if label not in uuid_preservation_by_label:
+                            uuid_preservation_by_label[label] = {"preserved": 0, "total": 0}
+                        uuid_preservation_by_label[label]["total"] += 1
+                        
+                        # Verify UUID was preserved
+                        if str(node_id) == input_uuid_to_check:
                             stats["uuids_preserved"] += 1
+                            uuid_preservation_by_label[label]["preserved"] += 1
                         else:
-                            issues.append(f"Node {i}: UUID not preserved (input={input_temp_id}, output={node_id})")
+                            issues.append(f"Node {i}: UUID not preserved (input={input_uuid_to_check}, output={node_id})")
         
         # Check 5: Embeddings count
         for node in output_nodes:
@@ -314,21 +628,45 @@ class KGFlow(Flow[KGState]):
         if len(output_edges) != len(input_edges):
             issues.append(f"Edge count mismatch: input={len(input_edges)}, output={len(output_edges)}")
         
+        # Collect catalog UUIDs from edges (these won't be in output nodes, and that's OK)
+        catalog_uuids_in_edges = set()
+        edge_to_catalog_config = {
+            'IS_TYPE': {'type': 'ReliefType', 'end': 'to'},
+            'HEARD_IN': {'type': 'Forum', 'end': 'to'},
+            'PART_OF': {'type': 'Jurisdiction', 'end': 'to'},
+            'CONTAINS': {'type': 'Domain', 'end': 'from'}
+        }
+        for edge in output_edges:
+            if not isinstance(edge, dict):
+                continue
+            edge_label = edge.get("label")
+            if edge_label in edge_to_catalog_config:
+                config = edge_to_catalog_config[edge_label]
+                end_field = config['end']
+                catalog_uuid = edge.get(end_field)
+                if catalog_uuid:
+                    catalog_uuids_in_edges.add(str(catalog_uuid))
+        
         for i, edge in enumerate(output_edges):
             if not isinstance(edge, dict):
                 continue
             
             frm = edge.get("from")
             to = edge.get("to")
+            edge_label = edge.get("label")
+            
+            # Check if this edge references a catalog node
+            is_catalog_from = str(frm) in catalog_uuids_in_edges if frm else False
+            is_catalog_to = str(to) in catalog_uuids_in_edges if to else False
             
             if not frm or not is_uuid(str(frm)):
                 issues.append(f"Edge {i}: 'from' is not a valid UUID: {frm}")
-            elif str(frm) not in output_node_ids:
+            elif not is_catalog_from and str(frm) not in output_node_ids:
                 issues.append(f"Edge {i}: 'from' UUID {frm} not found in output nodes")
             
             if not to or not is_uuid(str(to)):
                 issues.append(f"Edge {i}: 'to' is not a valid UUID: {to}")
-            elif str(to) not in output_node_ids:
+            elif not is_catalog_to and str(to) not in output_node_ids:
                 issues.append(f"Edge {i}: 'to' UUID {to} not found in output nodes")
             
             # Verify edge mapping is correct
@@ -377,6 +715,35 @@ class KGFlow(Flow[KGState]):
                 if prop_key not in output_props:
                     issues.append(f"Edge {i}: property '{prop_key}' missing in output")
         
+        # Check 8: Catalog node UUID preservation in edges
+        # Verify that catalog node UUIDs referenced in input edges are preserved in output edges
+        if catalog_references:
+            # Build a set of all UUIDs referenced in output edges (for catalog nodes)
+            edge_to_catalog_config = {
+                'IS_TYPE': {'type': 'ReliefType', 'end': 'to'},
+                'HEARD_IN': {'type': 'Forum', 'end': 'to'},
+                'PART_OF': {'type': 'Jurisdiction', 'end': 'to'},
+                'CONTAINS': {'type': 'Domain', 'end': 'from'}
+            }
+            
+            output_catalog_uuids = set()
+            for edge in output_edges:
+                if not isinstance(edge, dict):
+                    continue
+                edge_label = edge.get("label")
+                if edge_label not in edge_to_catalog_config:
+                    continue
+                config = edge_to_catalog_config[edge_label]
+                end_field = config['end']
+                catalog_uuid = edge.get(end_field)
+                if catalog_uuid:
+                    output_catalog_uuids.add(str(catalog_uuid))
+            
+            # Validate each catalog reference is preserved in output edges
+            for ref_key, expected_uuid in catalog_references.items():
+                if expected_uuid not in output_catalog_uuids:
+                    issues.append(f"Catalog node reference '{ref_key}': UUID {expected_uuid} not preserved in output edges")
+        
         # Log transformation validation results
         if issues:
             logger.warning(f"KGFlow transformation validation found {len(issues)} issues:")
@@ -391,6 +758,14 @@ class KGFlow(Flow[KGState]):
         logger.info(f"Validation stats: {stats['total_nodes']} nodes, {stats['total_edges']} edges, {stats['uuids_preserved']} UUIDs preserved")
         if stats["embeddings_by_label"]:
             logger.info(f"Embeddings by label: {json.dumps(stats['embeddings_by_label'])}")
+        
+        # Log UUID preservation per label (similar format to validation logs)
+        if uuid_preservation_by_label:
+            for label in sorted(uuid_preservation_by_label.keys()):
+                label_stats = uuid_preservation_by_label[label]
+                preserved = label_stats["preserved"]
+                total = label_stats["total"]
+                logger.info(f"KGFlow: Preserved {preserved}/{total} {label} UUIDs")
         
         return issues
 
@@ -454,7 +829,7 @@ class KGFlow(Flow[KGState]):
 
 
     def _validate_against_schema(self, data: Dict[str, Any], schema_payload: Any) -> List[str]:
-        """Validate the output data against schema.json definitions."""
+        """Validate the output data against schema_v3.json definitions."""
         issues = []
         
         if not isinstance(schema_payload, list):
@@ -540,6 +915,70 @@ class KGFlow(Flow[KGState]):
                 elif expected_type == "LIST" and value is not None and not isinstance(value, list):
                     issues.append(f"Node {i} ({label}).{prop_name}: expected LIST, got {type(value).__name__}")
         
+        # Build node ID to label mapping for edge validation
+        # After KG transformation, nodes have UUID in their *_id property, not temp_id
+        node_id_to_label = {}
+        for node in nodes:
+            if isinstance(node, dict):
+                node_label = node.get("label")
+                if not node_label:
+                    continue
+                # Get the UUID from the node's properties (*_id field)
+                props = node.get("properties", {})
+                if isinstance(props, dict):
+                    # Find the *_id property for this label
+                    id_prop = get_id_prop_for_label(node_label, schema_payload)
+                    node_id = props.get(id_prop)
+                    if node_id:
+                        node_id_to_label[node_id] = node_label
+        
+        # Map edge types to catalog node types (for both source and target)
+        # Derive from schema_v3.json: catalog nodes are those with can_create_new=false
+        # Build mapping dynamically from schema relationships
+        catalog_edge_config = {}
+        if isinstance(schema_payload, list):
+            # First, identify catalog nodes (can_create_new=false)
+            catalog_nodes = set()
+            for node_def in schema_payload:
+                if isinstance(node_def, dict):
+                    label = node_def.get("label")
+                    can_create_new = node_def.get("can_create_new", True)
+                    if label and not can_create_new:
+                        catalog_nodes.add(label)
+            
+            # Build edge config from relationships in schema
+            for node_def in schema_payload:
+                if not isinstance(node_def, dict):
+                    continue
+                source_label = node_def.get("label")
+                relationships = node_def.get("relationships", {})
+                if not isinstance(relationships, dict):
+                    continue
+                
+                for edge_label, target_spec in relationships.items():
+                    if not isinstance(edge_label, str):
+                        continue
+                    # Handle both string and dict format for target_spec
+                    target_label = None
+                    if isinstance(target_spec, str):
+                        target_label = target_spec
+                    elif isinstance(target_spec, dict):
+                        target_label = target_spec.get("target")
+                    
+                    if not target_label:
+                        continue
+                    
+                    # Determine if source or target is a catalog node
+                    source_is_catalog = source_label in catalog_nodes
+                    target_is_catalog = target_label in catalog_nodes
+                    
+                    # Only include edges where at least one end is a catalog node
+                    if source_is_catalog or target_is_catalog:
+                        catalog_edge_config[edge_label] = {
+                            'source': source_label if source_is_catalog else None,
+                            'target': target_label if target_is_catalog else None
+                        }
+        
         # Validate edges against schema relationships
         for i, edge in enumerate(edges):
             if not isinstance(edge, dict):
@@ -550,23 +989,36 @@ class KGFlow(Flow[KGState]):
                 issues.append(f"Edge {i}: missing label")
                 continue
             
-            # Find which node type(s) can have this relationship
+            # Get the source node label to find the correct relationship definition
+            source_id = edge.get("from")
+            source_label = node_id_to_label.get(source_id) if source_id else None
+            
+            # If source_label is None, check if this edge type has a catalog node as source
+            if not source_label and edge_label in catalog_edge_config:
+                catalog_config = catalog_edge_config[edge_label]
+                if catalog_config.get('source'):
+                    source_label = catalog_config['source']
+            
+            # Find the relationship definition from the source node's schema
             found_in_schema = False
             expected_props = {}
             
-            for schema_def in schema_payload:
-                if not isinstance(schema_def, dict):
-                    continue
-                relationships = schema_def.get("relationships", {})
-                if isinstance(relationships, dict) and edge_label in relationships:
-                    found_in_schema = True
-                    rel_def = relationships[edge_label]
-                    if isinstance(rel_def, dict):
-                        expected_props = rel_def.get("properties", {})
-                    break
+            if source_label:
+                # Look for the relationship in the source node's schema definition
+                for schema_def in schema_payload:
+                    if not isinstance(schema_def, dict):
+                        continue
+                    if schema_def.get("label") == source_label:
+                        relationships = schema_def.get("relationships", {})
+                        if isinstance(relationships, dict) and edge_label in relationships:
+                            found_in_schema = True
+                            rel_def = relationships[edge_label]
+                            if isinstance(rel_def, dict):
+                                expected_props = rel_def.get("properties", {})
+                            break
             
             if not found_in_schema:
-                issues.append(f"Edge {i}: relationship type '{edge_label}' not found in schema")
+                issues.append(f"Edge {i}: relationship type '{edge_label}' not found in schema for source node type '{source_label}'")
                 continue
             
             edge_props = edge.get("properties", {})

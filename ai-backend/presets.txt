@@ -312,50 +312,26 @@ CREATE (f)-[:PART_OF]->(j);
 
 
 UNWIND [
-  // ───────── Injunctive Relief ─────────
-  {code:'RL0101', type:'injunction', description:'Permanent injunction restraining or compelling specific action'},
-  {code:'RL0102', type:'injunction', description:'Preliminary injunction to preserve status quo during litigation'},
-  {code:'RL0103', type:'injunction', description:'Temporary restraining order (TRO) to prevent immediate harm'},
-  {code:'RL0104', type:'injunction', description:'Prohibitory injunction preventing a party from specific conduct'},
-  {code:'RL0105', type:'injunction', description:'Mandatory injunction compelling a party to act (e.g., dismantle structure)'},
-
-  // ───────── Monetary / Damages ─────────
-  {code:'RL0201', type:'damages', description:'Compensation for actual losses suffered due to the harm caused'},                        // compensatory damages
-  {code:'RL0202', type:'damages', description:'Indirect losses resulting from breach, such as lost profits or opportunities'},       // consequential damages
-  {code:'RL0203', type:'damages', description:'Monetary award to punish and deter egregious, willful, or malicious conduct'},        // punitive damages
-  {code:'RL0204', type:'damages', description:'Symbolic award recognizing a legal wrong without significant harm'},                  // nominal damages
-  {code:'RL0205', type:'damages', description:'Damages fixed or capped by statute for specific types of legal violations'},          // statutory damages
-  {code:'RL0206', type:'damages', description:'Pre-agreed amount of damages stipulated in a contract'},                              // liquidated damages
-  {code:'RL0207', type:'damages', description:'Return of benefits unjustly retained by a party'},                                    // restitution
-
-  // ───────── Declaratory Relief ─────────
-  {code:'RL0301', type:'declaratory', description:'Declaratory judgment establishing parties\' legal rights or status'},
-
-  // ───────── Equitable / Specific Relief ─────────
-  {code:'RL0401', type:'specific performance', description:'Court order requiring a party to fulfill a contractual obligation'},      // specific performance
-  {code:'RL0402', type:'specific performance', description:'Rescission of a contract; restores parties to original state'},          // rescission → mapped to specific performance class
-  {code:'RL0403', type:'specific performance', description:'Court-mandated revision of contract to reflect true intent'},            // reformation → mapped to specific performance class
-  {code:'RL0404', type:'accounting',           description:'Ordered disclosure of financial accounts'},                               // accounting
-  {code:'RL0405', type:'specific performance', description:'Equitable remedy imposing a constructive trust to prevent unjust enrichment'}, // constructive trust → mapped
-  {code:'RL0406', type:'specific performance', description:'Equitable estoppel preventing contradictory assertions based on prior conduct'}, // equitable estoppel → mapped
-
-  // ───────── Constitutional & Administrative Relief ─────────
-  {code:'RL0501', type:'injunction',       description:'Injunction against enforcement of unconstitutional statute or regulation'},
-  {code:'RL0502', type:'declaratory',      description:'Court declaration voiding government action or rule'},
-  {code:'RL0503', type:'injunction',       description:'Reinstatement—restoration of prior status (e.g., employment, membership)'}, // mapped as injunctive relief
-  {code:'RL0504', type:'injunction',       description:'Vacatur—nullification of a court or agency decision'},                      // mapped as injunctive relief
-  {code:'RL0505', type:'injunction',       description:'Remand—case returned to lower tribunal for further proceedings'},            // mapped as injunctive relief
-  {code:'RL0506', type:'habeas corpus',    description:'Writ to secure release from unlawful detention'},
-  {code:'RL0507', type:'injunction',       description:'Mandamus—writ compelling performance of a legal duty'},                     // mapped as injunctive relief
-
-  // ───────── Settlement / Consent-Based Relief ─────────
-  {code:'RL0601', type:'injunction',       description:'Consent decree—court-approved and enforceable resolution of dispute'},      // often injunctive obligations; mapped as injunction
-  {code:'RL0602', type:'damages',          description:'Judicially approved settlement between parties'}                             // often monetary components; mapped as damages
+  {code:'RL0001', type:'injunction'},
+  {code:'RL0002', type:'damages'},
+  {code:'RL0003', type:'declaratory'},
+  {code:'RL0004', type:'habeas corpus'},
+  {code:'RL0005', type:'specific performance'},
+  {code:'RL0006', type:'royalty'},
+  {code:'RL0007', type:'accounting'}
 ] AS row
 CREATE (:ReliefType {
   relief_type_upload_code: row.code,
   relief_type_id:          randomUUID(),
-  type:                    row.type,
-  description:             row.description,
-  description_embedding:   []
+  type:                    row.type
+});
+
+UNWIND [
+  {code:'DOM001', name:'Free Speech'},
+  {code:'DOM002', name:'Antitrust'}
+] AS row
+CREATE (:Domain {
+  domain_upload_code: row.code,
+  domain_id:          randomUUID(),
+  name:               row.name
 });

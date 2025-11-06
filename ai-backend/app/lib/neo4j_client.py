@@ -10,7 +10,37 @@ class Neo4jClient:
         self.uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
         self.username = os.getenv("NEO4J_USER", "neo4j")
         self.password = os.getenv("NEO4J_PASSWORD", "password")
-        self.driver = GraphDatabase.driver(self.uri, auth=(self.username, self.password))
+        self.database = os.getenv("NEO4J_DATABASE", "neo4j")
+        
+        # Configure driver with proper settings for both local and AuraDB
+        # Note: neo4j+s:// and bolt+s:// URIs already imply encryption, 
+        # so we don't need to set encrypted=True for them
+        driver_config = {
+            "max_connection_lifetime": 3600,  # 1 hour
+            "max_connection_pool_size": 50,
+            "connection_acquisition_timeout": 120,  # 2 minutes
+        }
+        
+        try:
+            self.driver = GraphDatabase.driver(
+                self.uri, 
+                auth=(self.username, self.password),
+                **driver_config
+            )
+            logger.info(f"Neo4j driver created for {self.uri}")
+            
+            # Try a simple connectivity test (less strict than verify_connectivity)
+            try:
+                with self.driver.session(database=self.database) as session:
+                    session.run("RETURN 1").consume()
+                logger.info(f"Neo4j connection verified successfully")
+            except Exception as conn_error:
+                logger.warning(f"Initial connectivity check failed (will retry on use): {conn_error}")
+                # Don't set driver to None - let it fail lazily on actual use
+                
+        except Exception as e:
+            logger.error(f"Failed to create Neo4j driver: {e}")
+            self.driver = None
     
     def close(self):
         if self.driver:
@@ -18,7 +48,10 @@ class Neo4jClient:
     
     def execute_query(self, query: str, parameters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         """Execute a Cypher query and return results as a list of dictionaries."""
-        with self.driver.session() as session:
+        if not self.driver:
+            raise Exception("Neo4j driver not initialized. Check connection settings.")
+        
+        with self.driver.session(database=self.database) as session:
             try:
                 result = session.run(query, parameters or {})
                 records = []
@@ -41,7 +74,10 @@ class Neo4jClient:
     
     def load_knowledge_graph(self, kg_data: Dict[str, Any]):
         """Load knowledge graph data into Neo4j."""
-        with self.driver.session() as session:
+        if not self.driver:
+            raise Exception("Neo4j driver not initialized. Check connection settings.")
+        
+        with self.driver.session(database=self.database) as session:
             try:
                 # Clear existing data (optional - remove if you want to keep existing data)
                 # session.run("MATCH (n) DETACH DELETE n")

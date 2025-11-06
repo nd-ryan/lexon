@@ -4,6 +4,7 @@
 
 import { useState } from 'react'
 import type { GraphState } from './useGraphState'
+import type { ValidationResult } from '@/lib/cases/validation'
 
 export function useCaseSave(
   id: string,
@@ -13,7 +14,8 @@ export function useCaseSave(
   setData: (data: any) => void,
   setDisplayData: (data: any) => void,
   setViewConfig: (config: any) => void,
-  setGraphState: (updater: (prev: GraphState) => GraphState) => void
+  setGraphState: (updater: (prev: GraphState) => GraphState) => void,
+  validateFn?: () => ValidationResult
 ) {
   const [saving, setSaving] = useState(false)
   const [submittingKg, setSubmittingKg] = useState(false)
@@ -22,6 +24,16 @@ export function useCaseSave(
   const onSave = async () => {
     try {
       setSaving(true); setError('')
+      
+      // Run validation if provided
+      if (validateFn) {
+        const validation = validateFn()
+        if (!validation.isValid) {
+          const errorMessages = validation.errors.map(e => e.message).join('; ')
+          setError(`Validation failed: ${errorMessages}`)
+          return false
+        }
+      }
       
       // Apply pending edits to get current state with all changes
       const edits = pendingEditsRef.current
@@ -42,7 +54,15 @@ export function useCaseSave(
             let cursor: any = updated
             for (let i = 2; i < parts.length - 1; i++) {
               const k = parts[i]
-              cursor[k] = Array.isArray(cursor[k]) ? [...cursor[k]] : { ...cursor[k] }
+              const nextVal = cursor[k]
+              if (Array.isArray(nextVal)) {
+                cursor[k] = [...nextVal]
+              } else if (nextVal && typeof nextVal === 'object') {
+                cursor[k] = { ...nextVal }
+              } else {
+                // Ensure we don't spread strings or primitives; create container object
+                cursor[k] = {}
+              }
               cursor = cursor[k]
             }
             const lastKey = parts[parts.length - 1]
@@ -100,6 +120,13 @@ export function useCaseSave(
         body: JSON.stringify(finalData) 
       })
       
+      // Check if the response was successful
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({ detail: 'Failed to save case' }))
+        const errorMessage = errorData.detail || errorData.message || 'Failed to save case'
+        throw new Error(errorMessage)
+      }
+      
       const d = await res.json()
       setData(d.case)
       
@@ -145,6 +172,17 @@ export function useCaseSave(
   const submitToKg = async () => {
     try {
       setSubmittingKg(true)
+      
+      // Run validation before submitting
+      if (validateFn) {
+        const validation = validateFn()
+        if (!validation.isValid) {
+          const errorMessages = validation.errors.map(e => e.message).join('; ')
+          setError(`Validation failed: ${errorMessages}`)
+          return
+        }
+      }
+      
       // Ensure latest changes are saved first
       await onSave()
       // Call secure API to trigger backend KG flow with case id

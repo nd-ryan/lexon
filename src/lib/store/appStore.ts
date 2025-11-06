@@ -67,6 +67,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             const data = await res.json()
             if (data.success && Array.isArray(data.nodes)) {
               catalogNodes[label] = data.nodes
+              console.log(`Catalog ${label} loaded:`, data.nodes.length, 'nodes, first node:', data.nodes[0])
             } else {
               catalogNodes[label] = []
             }

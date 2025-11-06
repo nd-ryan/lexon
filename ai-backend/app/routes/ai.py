@@ -28,7 +28,7 @@ async def get_schema():
         # Try static schema first
         import os, json
         base_dir = os.path.join(os.path.dirname(__file__), "..", "..")
-        path = os.path.abspath(os.path.join(base_dir, "schema.json"))
+        path = os.path.abspath(os.path.join(base_dir, "schema_v3.json"))
         if os.path.exists(path):
             with open(path, "r") as f:
                 data = json.load(f)
@@ -51,11 +51,11 @@ async def get_ui_config():
 
 @router.get("/display-overrides")
 async def get_display_overrides():
-    """Return display overrides derived from schema.json."""
+    """Return display overrides derived from schema_v3.json."""
     try:
         from app.lib.schema_runtime import derive_display_overrides_from_schema
         overrides = derive_display_overrides_from_schema()
-        return {"success": True, "overrides": overrides, "source": "schema.json"}
+        return {"success": True, "overrides": overrides, "source": "schema_v3.json"}
     except Exception as e:
         logger.error(f"Failed to derive display overrides: {e}")
         raise HTTPException(status_code=500, detail="Failed to derive display overrides")
@@ -63,11 +63,11 @@ async def get_display_overrides():
 
 @router.get("/property-mappings")
 async def get_property_mappings():
-    """Return minimal property mappings derived from schema.json."""
+    """Return minimal property mappings derived from schema_v3.json."""
     try:
         from app.lib.schema_runtime import derive_simple_mappings_from_schema
         mappings = derive_simple_mappings_from_schema()
-        return {"success": True, "mappings": mappings, "source": "schema.json"}
+        return {"success": True, "mappings": mappings, "source": "schema_v3.json"}
     except Exception as e:
         logger.error(f"Failed to derive property mappings: {e}")
         raise HTTPException(status_code=500, detail="Failed to derive property mappings")
@@ -79,6 +79,8 @@ async def get_catalog_nodes(label: str):
     Used for selecting existing catalog nodes (where can_create_new=false).
     For Forum: includes related Jurisdiction data.
     For ReliefType and Jurisdiction: returns nodes directly.
+    
+    If Neo4j is not available, returns empty list gracefully.
     """
     try:
         from app.lib.neo4j_client import neo4j_client
@@ -106,11 +108,13 @@ async def get_catalog_nodes(label: str):
                     'temp_id': str(forum_id),
                     'label': 'Forum',
                     'properties': forum_data,
+                    'is_existing': True,
                     'related': {
                         'jurisdiction': {
                             'temp_id': str(jurisdiction_id),
                             'label': 'Jurisdiction',
-                            'properties': jurisdiction_data
+                            'properties': jurisdiction_data,
+                            'is_existing': True
                         }
                     }
                 })
@@ -119,10 +123,20 @@ async def get_catalog_nodes(label: str):
             query = f"MATCH (n:`{label}`) RETURN n LIMIT 1000"
             result = neo4j_client.execute_query(query)
             
+            # Map label names to their ID property names (for special cases)
+            id_property_map = {
+                'ReliefType': 'relief_type_id',
+                'Jurisdiction': 'jurisdiction_id',
+                'FactPattern': 'fact_pattern_id',
+                'Domain': 'domain_id',
+            }
+            
             for record in result:
                 node_data = record.get('n', {})
-                # Try different ID properties
+                # Try different ID properties with special handling for compound names
+                id_property = id_property_map.get(label, f'{label.lower()}_id')
                 temp_id = (
+                    node_data.get(id_property) or 
                     node_data.get(f'{label.lower()}_id') or 
                     node_data.get('id') or 
                     str(id(node_data))
@@ -131,13 +145,16 @@ async def get_catalog_nodes(label: str):
                 nodes.append({
                     'temp_id': str(temp_id),
                     'label': label,
-                    'properties': node_data
+                    'properties': node_data,
+                    'is_existing': True
                 })
         
         return {"success": True, "nodes": nodes}
     except Exception as e:
-        logger.error(f"Failed to fetch catalog nodes for {label}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch catalog nodes: {str(e)}")
+        logger.warning(f"Could not fetch catalog nodes for {label} (Neo4j may not be available): {e}")
+        # Return empty catalog gracefully instead of 500 error
+        # This allows the app to work without Neo4j catalog
+        return {"success": True, "nodes": [], "warning": "Catalog unavailable"}
 
 @router.get("/node/enriched")
 async def get_enriched_node(label: str, id_value: str):

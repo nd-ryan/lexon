@@ -15,18 +15,23 @@ from datetime import date as python_date
 
 DATE_REGEX = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 def load_schema_payload() -> Any:
-    """Load the static schema.json payload from the project root ai-backend directory.
+    """Load the static schema_v3.json payload from the project root ai-backend directory.
 
     Returns the parsed JSON content, or raises on failure.
     """
+    import logging
+    logger = logging.getLogger(__name__)
     base_dir = os.path.join(os.path.dirname(__file__), "..", "..")
-    path = os.path.abspath(os.path.join(base_dir, "schema.json"))
+    path = os.path.abspath(os.path.join(base_dir, "schema_v3.json"))
+    logger.info(f"Loading schema from: {path}")
     with open(path, "r") as f:
-        return json.load(f)
+        data = json.load(f)
+    logger.info(f"Loaded schema with {len(data) if isinstance(data, list) else 0} node definitions")
+    return data
 
 
 def derive_simple_mappings_from_schema() -> Dict[str, List[str]]:
-    """Return minimal mappings derived from schema.json.
+    """Return minimal mappings derived from schema_v3.json.
 
     - id_properties: union of all property names across labels that end with "_id"
     - name_properties: ["name"] only
@@ -287,7 +292,7 @@ def prune_ui_schema_for_llm(schema_payload: Any) -> Dict[str, Any]:
 
                 ui = meta.get("ui", {}) or {}
                 prop_type = str(meta.get("type", "STRING")).upper()
-                allowed_types = {"STRING", "INTEGER", "BOOLEAN", "LIST"}
+                allowed_types = {"STRING", "INTEGER", "BOOLEAN", "LIST", "DATE"}
                 if prop_type not in allowed_types:
                     prop_type = "STRING"
 
@@ -636,6 +641,11 @@ def validate_case_graph(
         })
         id_to_label[temp_id] = label
 
+    # Helper to check if an ID is a catalog node ID (UUID format)
+    def is_catalog_node_id(node_id: str) -> bool:
+        """Check if the ID looks like a Neo4j catalog node ID (contains hyphens like a UUID)."""
+        return isinstance(node_id, str) and '-' in node_id and len(node_id) >= 32
+    
     cleaned_edges: List[Dict[str, Any]] = []
     for idx, edge in enumerate(edges):
         if not isinstance(edge, dict):
@@ -646,36 +656,53 @@ def validate_case_graph(
         elabel = edge.get("label")
         eprops = edge.get("properties") or {}
 
-        if not isinstance(src, str) or src not in id_to_label:
+        # Validate source: must be either in nodes array OR a catalog node ID
+        if not isinstance(src, str):
+            errors.append(f"edge[{idx}] from must be a string")
+            continue
+        src_is_catalog = is_catalog_node_id(src)
+        if not src_is_catalog and src not in id_to_label:
             errors.append(f"edge[{idx}] from references unknown node '{src}'")
             continue
-        if not isinstance(dst, str) or dst not in id_to_label:
+            
+        # Validate destination: must be either in nodes array OR a catalog node ID
+        if not isinstance(dst, str):
+            errors.append(f"edge[{idx}] to must be a string")
+            continue
+        dst_is_catalog = is_catalog_node_id(dst)
+        if not dst_is_catalog and dst not in id_to_label:
             errors.append(f"edge[{idx}] to references unknown node '{dst}'")
             continue
+            
         if not isinstance(elabel, str):
             errors.append(f"edge[{idx}] label must be a string")
             continue
 
-        src_label = id_to_label[src]
-        dst_label = id_to_label[dst]
-        allowed = relationships_by_label.get(src_label, {})
-        expected_target = allowed.get(elabel)
-        if expected_target is None:
-            # Log available relationships for debugging
-            available_rels = list(allowed.keys()) if allowed else []
-            errors.append(f"edge[{idx}] label '{elabel}' not allowed for source label '{src_label}' (available: {available_rels[:5]})")
-            continue
+        # Get source label (skip validation if it's a catalog node ID)
+        src_label = id_to_label.get(src) if not src_is_catalog else None
+        dst_label = id_to_label.get(dst) if not dst_is_catalog else None
         
-        # Handle both string and dict format for expected_target
-        expected_target_label = expected_target
-        if isinstance(expected_target, dict):
-            expected_target_label = expected_target.get("target")
-        
-        if expected_target_label != dst_label:
-            errors.append(
-                f"edge[{idx}] label '{elabel}' expects target '{expected_target_label}', got '{dst_label}'"
-            )
-            continue
+        # Only validate relationship if source is not a catalog node
+        if src_label:
+            allowed = relationships_by_label.get(src_label, {})
+            expected_target = allowed.get(elabel)
+            if expected_target is None:
+                # Log available relationships for debugging
+                available_rels = list(allowed.keys()) if allowed else []
+                errors.append(f"edge[{idx}] label '{elabel}' not allowed for source label '{src_label}' (available: {available_rels[:5]})")
+                continue
+            
+            # Handle both string and dict format for expected_target
+            expected_target_label = expected_target
+            if isinstance(expected_target, dict):
+                expected_target_label = expected_target.get("target")
+            
+            # Only check target label match if destination is not a catalog node
+            if dst_label and expected_target_label != dst_label:
+                errors.append(
+                    f"edge[{idx}] label '{elabel}' expects target '{expected_target_label}', got '{dst_label}'"
+                )
+                continue
 
         if not isinstance(eprops, dict):
             eprops = {}

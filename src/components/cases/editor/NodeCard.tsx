@@ -5,6 +5,8 @@
 import { ReusedNodeIcon } from './ReusedNodeIcon'
 import { NodeActionMenu } from './NodeActionMenu'
 import { ObjectFields } from './Field'
+import { ExistingNodeBadge } from './ExistingNodeBadge'
+import { ExistingNodeWarning } from './ExistingNodeWarning'
 import type { Schema } from '@/types/case-graph'
 
 interface NodeCardProps {
@@ -20,6 +22,7 @@ interface NodeCardProps {
   isViewMode: boolean
   globalNodeNumber: number | null
   isReused: boolean
+  isExistingNode?: boolean
   shouldShowUnlink: boolean
   parentLabel: string
   onDelete: (nodeId: string) => void
@@ -48,6 +51,7 @@ export function NodeCard({
   isViewMode,
   globalNodeNumber,
   isReused,
+  isExistingNode = false,
   shouldShowUnlink,
   parentLabel,
   onDelete,
@@ -86,6 +90,7 @@ export function NodeCard({
         </div>
         <div className="flex items-center gap-2">
           {statusBadge}
+          {isExistingNode && <ExistingNodeBadge />}
           {!isViewMode && (
             <NodeActionMenu 
               nodeId={node.temp_id}
@@ -98,6 +103,7 @@ export function NodeCard({
           )}
         </div>
       </div>
+      {isExistingNode && !isViewMode && <ExistingNodeWarning />}
       <ObjectFields 
         obj={node.properties || {}} 
         path={['nodes', node.temp_id, 'properties']} 

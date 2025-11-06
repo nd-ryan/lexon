@@ -112,8 +112,8 @@ export function Field({
     )
   }
 
-  // Schema-based rendering for strings and numbers
-  if (value === null || typeof value === 'string' || typeof value === 'number') {
+  // Schema-based rendering for strings and numbers (including undefined)
+  if (value === null || value === undefined || typeof value === 'string' || typeof value === 'number') {
     const displayLabel = uiConfig?.label || formatLabel(label)
     
     // Render dropdown for enums (select with options)

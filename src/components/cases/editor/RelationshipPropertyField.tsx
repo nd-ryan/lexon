@@ -35,12 +35,14 @@ export function RelationshipPropertyField({
   const propSchema = getRelationshipPropertySchema(sourceLabel, relLabel, propName, schema)
   const options = propSchema?.ui?.options || []
   const displayLabel = propSchema?.ui?.label || label
+  const inputType = propSchema?.ui?.input || 'select'
+  const propType = propSchema?.type || 'STRING'
   
   // Get current value
   const currentValue = getValue(sourceId, targetId)
   
-  // Capitalize first letter of value for display
-  const displayValue = capitalizeFirst(currentValue)
+  // Capitalize first letter of value for display (only for text values)
+  const displayValue = typeof currentValue === 'string' ? capitalizeFirst(currentValue) : String(currentValue || '')
   
   if (isViewMode) {
     if (!currentValue) return null
@@ -81,9 +83,50 @@ export function RelationshipPropertyField({
     )
   }
   
-  // Edit mode: return form field - for SETS and RESULTS_IN, place in statusBadge position (top right), otherwise inside card
-  if (relLabel === 'SETS' || relLabel === 'RESULTS_IN') {
-    // For SETS (in_favor) and RESULTS_IN (relief_status), show as dropdown with label in top right corner
+  // Edit mode: return form field
+  // For SETS (in_favor) and RESULTS_IN (relief_status), show as dropdown with label in top right corner
+  const isTopRightBadge = (relLabel === 'SETS' && propName === 'in_favor') || (relLabel === 'RESULTS_IN' && propName === 'relief_status')
+  
+  // Render number input
+  if (inputType === 'number' || propType === 'FLOAT' || propType === 'INTEGER') {
+    return (
+      <div className="mb-2">
+        <label className="block text-xs font-medium text-gray-700 mb-1">
+          {displayLabel}
+        </label>
+        <input
+          type="number"
+          step={propType === 'FLOAT' ? '0.01' : '1'}
+          className="w-full rounded-md border border-gray-300 bg-white px-2 py-1 text-xs shadow-sm focus:border-gray-400 focus:outline-none"
+          value={currentValue || ''}
+          onChange={(e) => setValue(sourceId, targetId, e.target.value)}
+          placeholder={`Enter ${displayLabel.toLowerCase()}...`}
+        />
+      </div>
+    )
+  }
+  
+  // Render textarea
+  if (inputType === 'textarea') {
+    return (
+      <div className="mb-2">
+        <label className="block text-xs font-medium text-gray-700 mb-1">
+          {displayLabel}
+        </label>
+        <textarea
+          className="w-full rounded-md border border-gray-300 bg-white px-2 py-1 text-xs shadow-sm focus:border-gray-400 focus:outline-none"
+          rows={3}
+          value={currentValue || ''}
+          onChange={(e) => setValue(sourceId, targetId, e.target.value)}
+          placeholder={`Enter ${displayLabel.toLowerCase()}...`}
+        />
+      </div>
+    )
+  }
+  
+  // Render select dropdown
+  if (isTopRightBadge) {
+    // Show as dropdown with label in top right corner
     return (
       <span className="flex items-center gap-2">
         <label className="text-xs text-gray-600">{displayLabel}:</label>
@@ -101,7 +144,7 @@ export function RelationshipPropertyField({
     )
   }
   
-  // For other relationships, return form field to be placed inside card
+  // Default: show as full-width dropdown inside card
   return (
     <div className="mb-2">
       <label className="block text-xs font-medium text-gray-700 mb-1">

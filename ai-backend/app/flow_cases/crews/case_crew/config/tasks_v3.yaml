@@ -343,9 +343,10 @@ phase8_relief_and_type_task:
     - If no relief was specified for a ruling, you may omit that ruling from results.
 
     Constraints (STRICTLY ENFORCED):
-    - For relief_type_id, YOU MUST ONLY RETURN values THAT EXIST IN THE PROVIDED CATALOG
-    - DO NOT create, invent, or return any other relief_type_id values
-    - Return ONLY the relief_type_id field values as they appear in the catalog entries
+    - For relief_type_id, YOU MUST return the 'relief_type_id' field (UUID) from the catalog, NOT the 'type' field
+    - DO NOT return type names like "injunction" or "damages" - these are NOT relief_type_id values
+    - ONLY return the full UUID relief_type_id value as it appears in the catalog (e.g., "a1b2c3d4-...")
+    - YOU MUST ONLY RETURN relief_type_id values THAT EXIST IN THE PROVIDED CATALOG
     - Extract from case text only; do not invent relief information
 
     RELIEF INSTRUCTIONS:
@@ -363,7 +364,7 @@ phase8_relief_and_type_task:
     RELIEFTYPE EXAMPLES:
     {RELIEFTYPE_EXAMPLES_JSON}
 
-    RELIEFTYPE CATALOG (select relief_type_id from here):
+    RELIEFTYPE CATALOG (each entry has a 'relief_type_id' field - return this UUID, NOT the 'type' field):
     {CATALOGS_JSON}
   expected_output: "A JSON object { results: [ { ruling_temp_id: string, relief: {...}, relief_status: string, relief_type_id: string }, ... ] }"
 
@@ -407,15 +408,38 @@ phase9_party_task:
 
 phase9_select_domain_task:
   description: |
-    Analyze the case text and determine which domain (subject area) this case belongs to.
+    Phase 9: Select ONE Domain from the provided catalog based on the case text.
     
-    {DOMAIN_SELECTION_MODE}
+    CRITICAL: Base your selection ONLY on the provided CASE_TEXT. Do not use general knowledge. Select the domain that best fits the subject matter of the case.
     
-    CASE TEXT:
+    INSTRUCTIONS:
+    {DOMAIN_INSTRUCTIONS}
+    
+    DOMAIN EXAMPLES:
+    {DOMAIN_EXAMPLES_JSON}
+    
+    Inputs:
+    - CASE_TEXT: raw case text
+    - CATALOGS: { "Domain": [ { domain_id, name, ...}, ... ] }
+    
+    Steps:
+    1) Read the case text and determine which domain (legal subject area) this case belongs to
+    2) Select the most appropriate Domain from the catalog
+    3) Return JSON as { "selected": { "Domain": [domain_id] } } where domain_id is the 'domain_id' field value from the catalog entry
+    
+    Constraints (STRICTLY ENFORCED):
+    - YOU MUST ONLY RETURN domain_id VALUES THAT EXIST IN THE PROVIDED CATALOG
+    - DO NOT create, invent, or return domain names - ONLY return the domain_id
+    - Return ONLY the ID field value as it appears in the catalog
+    - You MUST select exactly ONE domain
+    - NEVER use general knowledge - ONLY select from the catalog IDs provided
+    
+    CASE_TEXT:
     {CASE_TEXT}
     
-    Return the selected domain identifier.
-  expected_output: "Selected domain identifier (domain_id or domain name)"
+    CATALOGS:
+    {CATALOGS_JSON}
+  expected_output: "A JSON object { selected: { Domain: [domain_id] } }."
 
 
 

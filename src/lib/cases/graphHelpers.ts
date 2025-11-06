@@ -29,14 +29,23 @@ export function findDescendants(nodeId: string, edges: any[]): string[] {
 
 export function filterActiveNodes(nodes: any[], deletedNodeIds: Set<string>, orphanedNodeIds: Set<string>): any[] {
   if (!Array.isArray(nodes)) return []
+  // Node types that shouldn't appear in general node lists (handled by special UI components)
+  const EXCLUDED_NODE_TYPES = new Set(['ReliefType', 'Forum', 'Jurisdiction', 'Domain'])
+  
   return nodes.filter((n: any) => 
-    n?.temp_id && !deletedNodeIds.has(n.temp_id) && !orphanedNodeIds.has(n.temp_id)
+    n?.temp_id && 
+    !deletedNodeIds.has(n.temp_id) && 
+    !orphanedNodeIds.has(n.temp_id) &&
+    !EXCLUDED_NODE_TYPES.has(n?.label)
   )
 }
 
 export function buildGlobalNodeNumbering(graphState: any, displayData: any): Record<string, Record<string, number>> {
   const numbering: Record<string, Record<string, number>> = {}
   const activeNodes = graphState.nodes.filter((n: any) => n.status === 'active')
+  
+  // Node types that shouldn't be numbered (handled as dropdowns/selectors instead)
+  const EXCLUDED_FROM_NUMBERING = new Set(['ReliefType', 'Forum', 'Jurisdiction', 'Domain'])
   
   // Group nodes by label
   const nodesByLabel: Record<string, Array<{ temp_id: string, firstSeen: number }>> = {}
@@ -50,7 +59,8 @@ export function buildGlobalNodeNumbering(graphState: any, displayData: any): Rec
     
     if (data.temp_id && !seenNodes.has(data.temp_id)) {
       const node = activeNodes.find((n: any) => n.temp_id === data.temp_id)
-      if (node) {
+      // Skip nodes that are handled as dropdowns/selectors
+      if (node && !EXCLUDED_FROM_NUMBERING.has(node.label)) {
         seenNodes.add(data.temp_id)
         nodeOrder.push({ temp_id: data.temp_id, label: node.label })
       }
@@ -92,6 +102,14 @@ export function detectReusedNodes(graphState: any): Set<string> {
   const reused = new Set<string>()
   const nodeParents: Record<string, Set<string>> = {}
   
+  // Create node lookup map for O(1) access to node labels
+  const nodeById = new Map<string, any>()
+  graphState.nodes
+    .filter((n: any) => n.status === 'active')
+    .forEach((node: any) => {
+      nodeById.set(node.temp_id, node)
+    })
+  
   // Count unique parents for each node (incoming edges)
   graphState.edges
     .filter((e: any) => e.status === 'active')
@@ -102,10 +120,15 @@ export function detectReusedNodes(graphState: any): Set<string> {
       nodeParents[edge.to].add(edge.from)
     })
   
-  // Mark nodes with multiple parents as reused
+  // Mark nodes with multiple parents as reused (excluding catalog-only nodes)
+  const CATALOG_NODE_TYPES = new Set(['ReliefType', 'Forum', 'Jurisdiction', 'Domain'])
   Object.entries(nodeParents).forEach(([nodeId, parents]) => {
     if (parents.size > 1) {
-      reused.add(nodeId)
+      const node = nodeById.get(nodeId)
+      // Skip catalog-only nodes - they can be shared without showing as "reused"
+      if (node && !CATALOG_NODE_TYPES.has(node.label)) {
+        reused.add(nodeId)
+      }
     }
   })
   
@@ -142,7 +165,11 @@ export function detectReusedNodes(graphState: any): Set<string> {
 }
 
 export function buildNodeOptions(nodesArray: GraphNode[], pickNodeName: (node: GraphNode) => string | undefined) {
+  // Node types that shouldn't appear in generic selection dropdowns (handled by special selectors)
+  const EXCLUDED_FROM_OPTIONS = new Set(['ReliefType', 'Forum', 'Jurisdiction', 'Domain'])
+  
   return (nodesArray || [])
+    .filter((n) => !EXCLUDED_FROM_OPTIONS.has(n?.label))
     .map((n) => {
       const id = n?.temp_id
       if (!id) return null

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState, useCallback } from 'react'
+import React, { useEffect, useMemo, useState, useCallback, useTransition } from 'react'
 import { useParams } from 'next/navigation'
 import type { Schema } from '@/types/case-graph'
 import { useAppStore } from '@/lib/store/appStore'
@@ -18,6 +18,8 @@ import { useRelationshipProperties } from '@/hooks/cases/useRelationshipProperti
 // Utils
 import { formatLabel, pickNodeName } from '@/lib/cases/formatting'
 import { buildNodeOptions, buildGlobalNodeNumbering, detectReusedNodes, filterActiveNodes } from '@/lib/cases/graphHelpers'
+import { isExistingNode } from '@/lib/cases/nodeHelpers'
+import { validateRequiredFields } from '@/lib/cases/validation'
 
 // Components
 import { NodeCard } from '@/components/cases/editor/NodeCard'
@@ -29,6 +31,8 @@ import { OrphanedNodesSection } from '@/components/cases/editor/OrphanedNodesSec
 import { DeleteNodeConfirmation } from '@/components/cases/editor/modals/DeleteNodeConfirmation'
 import { EditRelationshipModal } from '@/components/cases/editor/modals/EditRelationshipModal'
 import { DeleteRelationshipConfirmation } from '@/components/cases/editor/modals/DeleteRelationshipConfirmation'
+import { ReliefTypeSelector } from '@/components/cases/editor/ReliefTypeSelector'
+import { ForumSelector } from '@/components/cases/editor/ForumSelector'
 
 export default function CaseEditorPage() {
   const params = useParams()
@@ -60,27 +64,124 @@ export default function CaseEditorPage() {
   // Relationship properties
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   
+  // Helper function to enrich nodes with catalog-only nodes (Forum, Jurisdiction, Domain, ReliefType) referenced by edges
+  const enrichNodesWithCatalogReferences = useCallback((nodes: any[], edges: any[]) => {
+    const nodeIdsInState = new Set(nodes.map((n: any) => n.temp_id))
+    const enrichedNodes = [...nodes]
+    
+    // Map of edge labels to their expected catalog node types
+    const edgeToCatalogType: Record<string, string> = {
+      'IS_TYPE': 'ReliefType',
+      'HEARD_IN': 'Forum',
+      'PART_OF': 'Jurisdiction',
+      'CONTAINS': 'Domain'
+    }
+    
+    // Find all edges that might reference catalog nodes
+    edges.forEach((edge: any) => {
+      const catalogType = edgeToCatalogType[edge.label]
+      if (!catalogType) return
+      
+      // Check if the target node is missing (for most edges) or source (for CONTAINS which goes Domain -> Case)
+      const missingNodeId = edge.label === 'CONTAINS' ? edge.from : edge.to
+      
+      if (!nodeIdsInState.has(missingNodeId)) {
+        // Look for the node in catalog
+        const catalogItems = catalogNodes[catalogType] || []
+        const catalogNode = catalogItems.find((item: any) => item.temp_id === missingNodeId)
+        
+        if (catalogNode) {
+          // Add the catalog node if not already present
+          enrichedNodes.push({
+            ...catalogNode,
+            status: 'active' as const,
+            source: 'initial' as const
+          })
+          nodeIdsInState.add(missingNodeId)
+        }
+      }
+    })
+    
+    return enrichedNodes
+  }, [catalogNodes])
+
   // Update graph state when data loads
   useEffect(() => {
     if (data) {
       const extracted = (data as any)?.extracted || { nodes: [], edges: [] }
+      const initialNodes = extracted.nodes.map((n: any) => ({ 
+        ...n, 
+        status: 'active' as const, 
+        source: 'initial' as const 
+      }))
+      const initialEdges = extracted.edges.map((e: any) => ({ 
+        ...e, 
+        status: 'active' as const 
+      }))
+      
+      // Enrich nodes with catalog nodes (Forum, Jurisdiction, Domain, ReliefType) referenced by edges
+      const enrichedNodes = enrichNodesWithCatalogReferences(initialNodes, initialEdges)
+      
       setGraphState({
-        nodes: extracted.nodes.map((n: any) => ({ 
-          ...n, 
-          status: 'active' as const, 
-          source: 'initial' as const 
-        })),
-        edges: extracted.edges.map((e: any) => ({ 
-          ...e, 
-          status: 'active' as const 
-        }))
+        nodes: enrichedNodes,
+        edges: initialEdges
       })
       // Reset unsaved changes when fresh data loads
       setHasUnsavedChanges(false)
     }
-  }, [data, setGraphState])
+  }, [data, setGraphState, enrichNodesWithCatalogReferences])
+
+  // Also enrich when catalogNodes loads (in case catalog loads after data)
+  // This handles the race condition where catalog loads after initial data
+  useEffect(() => {
+    if (!data) return // Don't run if data isn't loaded yet
+    
+    // Check if any catalog types are loaded
+    const hasCatalog = catalogNodes && (
+      (catalogNodes['ReliefType'] && catalogNodes['ReliefType'].length > 0) ||
+      (catalogNodes['Forum'] && catalogNodes['Forum'].length > 0) ||
+      (catalogNodes['Jurisdiction'] && catalogNodes['Jurisdiction'].length > 0) ||
+      (catalogNodes['Domain'] && catalogNodes['Domain'].length > 0)
+    )
+    
+    if (!hasCatalog) return // No catalog loaded yet
+    
+    // Check if there are catalog-referencing edges that might need enrichment
+    const catalogEdgeLabels = ['IS_TYPE', 'HEARD_IN', 'PART_OF', 'CONTAINS']
+    const hasCatalogEdges = graphState.edges.some((e: any) => 
+      catalogEdgeLabels.includes(e.label) && e.status === 'active'
+    )
+    
+    if (!hasCatalogEdges) return // No catalog edges to enrich
+    
+    // Check if any catalog edge references are missing from nodes
+    const nodeIds = new Set(graphState.nodes.map((n: any) => n.temp_id))
+    const hasMissingNodes = graphState.edges.some((e: any) => {
+      if (!catalogEdgeLabels.includes(e.label) || e.status !== 'active') return false
+      const checkId = e.label === 'CONTAINS' ? e.from : e.to
+      return !nodeIds.has(checkId)
+    })
+    
+    if (!hasMissingNodes) return // All catalog nodes are already present
+    
+    // Enrich with missing catalog nodes
+    const enrichedNodes = enrichNodesWithCatalogReferences(graphState.nodes, graphState.edges)
+    
+    // Only update if we actually added nodes
+    if (enrichedNodes.length > graphState.nodes.length) {
+      setGraphState((prev: any) => ({
+        ...prev,
+        nodes: enrichedNodes
+      }))
+    }
+  }, [catalogNodes, data, enrichNodesWithCatalogReferences, setGraphState, graphState])
   
   const relationshipProps = useRelationshipProperties(graphState, setGraphState, setHasUnsavedChanges)
+  
+  // Create validation function
+  const validateCase = useCallback(() => {
+    return validateRequiredFields(graphState, schema, pendingEditsRef)
+  }, [graphState, schema, pendingEditsRef])
   
   // Save functionality
   const { saving, submittingKg, error, onSave: saveCase, submitToKg } = useCaseSave(
@@ -91,7 +192,8 @@ export default function CaseEditorPage() {
     setData,
     setDisplayData,
     setViewConfig,
-    setGraphState
+    setGraphState,
+    validateCase
   )
   
   // Wrap save to clear unsaved changes flag
@@ -146,6 +248,32 @@ export default function CaseEditorPage() {
   
   const reusedNodes = useMemo(() => detectReusedNodes(graphState), [graphState])
   
+  // Create edge lookup maps for O(1) access
+  const edgesByFrom = useMemo(() => {
+    const map = new Map<string, any[]>()
+    edgesArray.forEach(edge => {
+      if (!map.has(edge.from)) map.set(edge.from, [])
+      map.get(edge.from)!.push(edge)
+    })
+    return map
+  }, [edgesArray])
+
+  const edgesByTo = useMemo(() => {
+    const map = new Map<string, any[]>()
+    edgesArray.forEach(edge => {
+      if (!map.has(edge.to)) map.set(edge.to, [])
+      map.get(edge.to)!.push(edge)
+    })
+    return map
+  }, [edgesArray])
+  
+  // Create node lookup map for O(1) access
+  const nodeById = useMemo(() => {
+    const map = new Map<string, any>()
+    nodesArray.forEach(node => map.set(node.temp_id, node))
+    return map
+  }, [nodesArray])
+  
   // Domain state
   const domainNode = useMemo(() => {
     return graphState.nodes.find((n: any) => n.label === 'Domain' && n.status === 'active')
@@ -190,35 +318,39 @@ export default function CaseEditorPage() {
     return (nodesArray || []).find((n: any) => n.label === 'Case') || null
   }, [nodesArray])
   
-  const getLiveNode = (tempId: string | undefined) => {
+  const getLiveNode = useCallback((tempId: string | undefined) => {
     if (!tempId) return null
-    return graphState.nodes.find((n: any) => n.temp_id === tempId && n.status === 'active') || null
-  }
+    return nodeById.get(tempId) || null
+  }, [nodeById])
   
-  const getRelatedNodes = (
+  const getRelatedNodes = useCallback((
     parentId: string | undefined,
     relLabel: string,
     direction: 'outgoing' | 'incoming' = 'outgoing'
   ) => {
     if (!parentId) return []
-    const relEdges = direction === 'outgoing'
-      ? edgesArray.filter((e: any) => e.from === parentId && e.label === relLabel)
-      : edgesArray.filter((e: any) => e.to === parentId && e.label === relLabel)
+    
+    const edges = direction === 'outgoing' 
+      ? (edgesByFrom.get(parentId) || []).filter(e => e.label === relLabel)
+      : (edgesByTo.get(parentId) || []).filter(e => e.label === relLabel)
+    
     const ids = new Set<string>()
     const results: any[] = []
-    relEdges.forEach((edge: any) => {
+    
+    edges.forEach((edge: any) => {
       const targetId = direction === 'outgoing' ? edge.to : edge.from
       if (targetId && !ids.has(targetId)) {
-        const node = nodesArray.find((n: any) => n.temp_id === targetId)
+        const node = nodeById.get(targetId)
         if (node) { ids.add(targetId); results.push(node) }
       }
     })
+    
     return results
-  }
+  }, [edgesByFrom, edgesByTo, nodeById])
   
   const proceedingNodes = useMemo(() => {
     return caseNode ? getRelatedNodes(caseNode.temp_id, 'HAS_PROCEEDING', 'outgoing') : []
-  }, [caseNode, edgesArray, nodesArray])
+  }, [caseNode, getRelatedNodes])
   
   const forumNodes = useMemo(() => {
     const seen = new Set<string>()
@@ -229,7 +361,7 @@ export default function CaseEditorPage() {
       })
     })
     return results
-  }, [proceedingNodes, edgesArray, nodesArray])
+  }, [proceedingNodes, getRelatedNodes])
   
   const partyNodes = useMemo(() => {
     const seen = new Set<string>()
@@ -240,7 +372,7 @@ export default function CaseEditorPage() {
       })
     })
     return results
-  }, [proceedingNodes, edgesArray, nodesArray])
+  }, [proceedingNodes, getRelatedNodes])
   
   const jurisdictionNodes = useMemo(() => {
     const seen = new Set<string>()
@@ -251,7 +383,66 @@ export default function CaseEditorPage() {
       })
     })
     return results
-  }, [forumNodes, edgesArray, nodesArray])
+  }, [forumNodes, getRelatedNodes])
+
+  // Pre-compute all relationship states
+  const relationshipStates = useMemo(() => {
+    const states: Record<string, any> = {}
+    
+    const getParentNodeFromConfigLocal = (configKey: string): any => {
+      const config = viewConfig?.topLevel?.[configKey]
+      const fromLabel = config?.from
+      
+      if (!fromLabel) {
+        return caseNode
+      }
+      
+      switch (fromLabel) {
+        case 'Case':
+          return caseNode
+        case 'Proceeding':
+          return proceedingNodes[0]
+        case 'Forum':
+          return forumNodes[0]
+        case 'Jurisdiction':
+          return jurisdictionNodes[0]
+        default:
+          return caseNode
+      }
+    }
+    
+    // Top-level relationships
+    const proceedingParent = getParentNodeFromConfigLocal('proceedings')
+    states.proceedings = analyzeRelationship(
+      proceedingParent,
+      'proceedings',
+      viewConfig?.topLevel || {},
+      schema,
+      { proceedings: proceedingNodes }
+    )
+    
+    const forumParent = getParentNodeFromConfigLocal('forums')
+    const forumsForParent = forumParent ? getRelatedNodes(forumParent.temp_id, 'HEARD_IN', 'outgoing') : []
+    states.forums = analyzeRelationship(
+      forumParent,
+      'forums',
+      viewConfig?.topLevel || {},
+      schema,
+      { forums: forumsForParent }
+    )
+    
+    const partyParent = getParentNodeFromConfigLocal('parties')
+    const partiesForParent = partyParent ? getRelatedNodes(partyParent.temp_id, 'INVOLVES', 'outgoing') : []
+    states.parties = analyzeRelationship(
+      partyParent,
+      'parties',
+      viewConfig?.topLevel || {},
+      schema,
+      { parties: partiesForParent }
+    )
+    
+    return states
+  }, [viewConfig, schema, proceedingNodes, caseNode, forumNodes, partyNodes, jurisdictionNodes, getRelatedNodes])
 
   // Scroll helpers
   const scrollToHolding = (holdingId: string) => {
@@ -302,7 +493,15 @@ export default function CaseEditorPage() {
           let cursor: any = updated
           for (let i = 2; i < path.length - 1; i++) {
             const key = path[i]
-            cursor[key] = Array.isArray(cursor[key]) ? [...cursor[key]] : { ...cursor[key] }
+            const nextVal = cursor[key]
+            if (Array.isArray(nextVal)) {
+              cursor[key] = [...nextVal]
+            } else if (nextVal && typeof nextVal === 'object') {
+              cursor[key] = { ...nextVal }
+            } else {
+              // Create a container object for nested assignment
+              cursor[key] = {}
+            }
             cursor = cursor[key]
           }
           const lastKey = path[path.length - 1]
@@ -333,7 +532,7 @@ export default function CaseEditorPage() {
   }, [setGraphState])
 
   // Modal handlers
-  const handleAddNode = (
+  const handleAddNode = useCallback((
     nodeType: string, 
     relationship: string, 
     direction: 'outgoing' | 'incoming',
@@ -342,9 +541,9 @@ export default function CaseEditorPage() {
     setAddModalType(nodeType)
     setAddModalContext({ parentId, relationship, direction })
     setAddModalOpen(true)
-  }
+  }, [])
 
-  const handleSelectNode = (
+  const handleSelectNode = useCallback((
     nodeType: string, 
     relationship: string, 
     direction: 'outgoing' | 'incoming',
@@ -353,7 +552,7 @@ export default function CaseEditorPage() {
     setSelectModalType(nodeType)
     setSelectModalContext({ parentId, relationship, direction })
     setSelectModalOpen(true)
-  }
+  }, [])
 
   const getAvailableNodesForSelection = (nodeType: string) => {
     return catalogNodes[nodeType] || []
@@ -375,9 +574,7 @@ export default function CaseEditorPage() {
       
       if (!nodes.find((n: any) => n.temp_id === selectedNode.temp_id)) {
         nodes.push({
-          temp_id: selectedNode.temp_id,
-          label: selectedNode.label,
-          properties: selectedNode.properties,
+          ...selectedNode,
           status: 'active' as const,
           source: 'user-created' as const
         })
@@ -389,9 +586,7 @@ export default function CaseEditorPage() {
         
         if (!nodes.find((n: any) => n.temp_id === jurisdiction.temp_id)) {
           nodes.push({
-            temp_id: jurisdiction.temp_id,
-            label: 'Jurisdiction',
-            properties: jurisdiction.properties,
+            ...jurisdiction,
             status: 'active' as const,
             source: 'user-created' as const
           })
@@ -468,27 +663,27 @@ export default function CaseEditorPage() {
     }
   }
 
-  const findParentEdge = (parentId: string, nodeId: string) => {
-    return edgesArray.find((e: any) => e.from === parentId && e.to === nodeId)
-  }
+  const findParentEdge = useCallback((parentId: string, nodeId: string) => {
+    const edges = edgesByFrom.get(parentId) || []
+    return edges.find(e => e.to === nodeId)
+  }, [edgesByFrom])
 
-  const getParentLabel = (parentId: string): string => {
-    const parent = nodesArray.find((n: any) => n.temp_id === parentId)
+  const getParentLabel = useCallback((parentId: string): string => {
+    const parent = nodeById.get(parentId)
     return parent?.label ? formatLabel(parent.label) : 'parent'
-  }
+  }, [nodeById])
 
-  const shouldShowUnlink = (nodeId: string, parentId?: string): boolean => {
+  const shouldShowUnlink = useCallback((nodeId: string, parentId?: string): boolean => {
     if (!parentId) return false
     
     const parentEdge = findParentEdge(parentId, nodeId)
     if (!parentEdge) return false
     
-    const incomingEdgesOfType = edgesArray.filter(
-      (e: any) => e.to === nodeId && e.label === parentEdge.label
-    )
+    const incomingEdges = edgesByTo.get(nodeId) || []
+    const incomingEdgesOfType = incomingEdges.filter(e => e.label === parentEdge.label)
     
     return incomingEdgesOfType.length > 1
-  }
+  }, [edgesByTo, findParentEdge])
 
   const handleUnlink = (nodeId: string, parentId: string) => {
     const parentEdge = findParentEdge(parentId, nodeId)
@@ -496,6 +691,111 @@ export default function CaseEditorPage() {
     unlinkNode(nodeId, parentId, parentEdge.label)
     setHasUnsavedChanges(true)
   }
+
+  const [isPendingReliefType, startReliefTypeTransition] = useTransition()
+  
+  const handleReliefTypeSelect = useCallback((reliefId: string, reliefTypeNode: any) => {
+    // Mark unsaved changes immediately
+    setHasUnsavedChanges(true)
+    
+    // Use transition to make the state update non-blocking
+    startReliefTypeTransition(() => {
+      setGraphState((prev: any) => {
+        const nodes = [...prev.nodes]
+        const edges = [...prev.edges]
+        
+        // Add ReliefType node if it doesn't exist
+        if (!nodes.find((n: any) => n.temp_id === reliefTypeNode.temp_id)) {
+          nodes.push({
+            ...reliefTypeNode,
+            status: 'active' as const,
+            source: 'user-created' as const
+          })
+        }
+        
+        // Remove any existing IS_TYPE edges from this Relief
+        const filteredEdges = edges.filter((e: any) => 
+          !(e.from === reliefId && e.label === 'IS_TYPE')
+        )
+        
+        // Add new IS_TYPE edge
+        filteredEdges.push({
+          from: reliefId,
+          to: reliefTypeNode.temp_id,
+          label: 'IS_TYPE',
+          status: 'active' as const
+        })
+        
+        return { nodes, edges: filteredEdges }
+      })
+    })
+  }, [setGraphState, setHasUnsavedChanges, startReliefTypeTransition])
+
+  const [isPendingForum, startForumTransition] = useTransition()
+  
+  const handleForumSelect = useCallback((proceedingId: string, forumNode: any, jurisdictionNode: any | null) => {
+    // Mark unsaved changes immediately
+    setHasUnsavedChanges(true)
+    
+    // Use transition to make the state update non-blocking
+    startForumTransition(() => {
+      setGraphState((prev: any) => {
+        const nodes = [...prev.nodes]
+        const edges = [...prev.edges]
+        
+        // Add Forum node if it doesn't exist
+        if (!nodes.find((n: any) => n.temp_id === forumNode.temp_id)) {
+          nodes.push({
+            ...forumNode,
+            status: 'active' as const,
+            source: 'user-created' as const
+          })
+        }
+        
+        // Add Jurisdiction node if provided and doesn't exist
+        if (jurisdictionNode && !nodes.find((n: any) => n.temp_id === jurisdictionNode.temp_id)) {
+          nodes.push({
+            ...jurisdictionNode,
+            status: 'active' as const,
+            source: 'user-created' as const
+          })
+        }
+        
+        // Remove any existing HEARD_IN edges from this Proceeding
+        let filteredEdges = edges.filter((e: any) => 
+          !(e.from === proceedingId && e.label === 'HEARD_IN')
+        )
+        
+        // Remove any existing PART_OF edges from old forum
+        const oldForumEdge = edges.find((e: any) => e.from === proceedingId && e.label === 'HEARD_IN')
+        if (oldForumEdge) {
+          filteredEdges = filteredEdges.filter((e: any) => 
+            !(e.from === oldForumEdge.to && e.label === 'PART_OF')
+          )
+        }
+        
+        // Add new HEARD_IN edge: Proceeding → Forum
+        filteredEdges.push({
+          from: proceedingId,
+          to: forumNode.temp_id,
+          label: 'HEARD_IN',
+          status: 'active' as const
+        })
+        
+        // Add PART_OF edge: Forum → Jurisdiction (if jurisdiction provided)
+        if (jurisdictionNode) {
+          filteredEdges.push({
+            from: forumNode.temp_id,
+            to: jurisdictionNode.temp_id,
+            label: 'PART_OF',
+            status: 'active' as const
+          })
+        }
+        
+        return { nodes, edges: filteredEdges }
+      })
+    })
+  }, [setGraphState, setHasUnsavedChanges, startForumTransition])
 
   const handleDomainChange = (domainName: string) => {
     const caseNode = graphState.nodes.find((n: any) => n.label === 'Case' && n.status === 'active')
@@ -542,17 +842,54 @@ export default function CaseEditorPage() {
     return globalNodeNumbering[nodeLabel]?.[nodeId] ?? null
   }
 
-  // Early return after all hooks
-  if (!data) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="rounded-md border bg-gray-50 px-2 py-1 text-xs text-gray-600">Loading...</div>
-      </div>
-    )
-  }
+  // Memoize relief type lookups to avoid repeated searches
+  // NOTE: Use graphState.nodes (not nodesArray) to include enriched catalog nodes
+  const reliefTypeByReliefId = useMemo(() => {
+    const map: Record<string, any> = {}
+    edgesArray.forEach((e: any) => {
+      if (e.label === 'IS_TYPE') {
+        const reliefTypeNode = graphState.nodes.find((n: any) => n.temp_id === e.to && n.status === 'active')
+        if (reliefTypeNode) {
+          map[e.from] = reliefTypeNode
+        }
+      }
+    })
+    return map
+  }, [edgesArray, graphState.nodes])
 
-  // Helper for rendering NodeCard with all required props
-  const renderNodeCard = (node: any, label: string, options: {
+  const getLiveReliefType = useCallback((reliefId: string): any => {
+    return reliefTypeByReliefId[reliefId] || null
+  }, [reliefTypeByReliefId])
+
+  // Memoize forum and jurisdiction lookups for proceedings
+  // NOTE: Use graphState.nodes (not nodesArray) to include enriched catalog nodes
+  const forumAndJurisdictionByProceedingId = useMemo(() => {
+    const map: Record<string, { forum: any; jurisdiction: any }> = {}
+    edgesArray.forEach((e: any) => {
+      if (e.label === 'HEARD_IN') {
+        const forumNode = graphState.nodes.find((n: any) => n.temp_id === e.to && n.status === 'active')
+        if (forumNode) {
+          // Find jurisdiction for this forum
+          const partOfEdge = edgesArray.find((edge: any) => 
+            edge.from === forumNode.temp_id && edge.label === 'PART_OF'
+          )
+          const jurisdictionNode = partOfEdge 
+            ? graphState.nodes.find((n: any) => n.temp_id === partOfEdge.to && n.status === 'active')
+            : null
+          
+          map[e.from] = { forum: forumNode, jurisdiction: jurisdictionNode || null }
+        }
+      }
+    })
+    return map
+  }, [edgesArray, graphState.nodes])
+
+  const getLiveForumAndJurisdiction = useCallback((proceedingId: string): { forum: any; jurisdiction: any } => {
+    return forumAndJurisdictionByProceedingId[proceedingId] || { forum: null, jurisdiction: null }
+  }, [forumAndJurisdictionByProceedingId])
+
+  // Helper for rendering NodeCard with all required props (must be before early return)
+  const renderNodeCard = useCallback((node: any, label: string, options: {
     index?: number
     depth?: number
     badge?: React.ReactNode
@@ -564,6 +901,7 @@ export default function CaseEditorPage() {
     const liveNode = getLiveNode(node.temp_id) || node
     const globalNum = getGlobalNodeNumber(node.temp_id, node.label)
     const isReused = reusedNodes.has(node.temp_id)
+    const isExisting = isExistingNode(liveNode)
     const showUnlink = shouldShowUnlink(node.temp_id, options.parentId)
     const parentLabel = options.parentId ? getParentLabel(options.parentId) : ''
     
@@ -581,6 +919,7 @@ export default function CaseEditorPage() {
         isViewMode={isViewMode}
         globalNodeNumber={globalNum}
         isReused={isReused}
+        isExistingNode={isExisting}
         shouldShowUnlink={showUnlink}
         parentLabel={parentLabel}
         onDelete={setDeletingNodeId}
@@ -600,7 +939,434 @@ export default function CaseEditorPage() {
         {options.children}
       </NodeCard>
     )
+  }, [
+    getLiveNode, getGlobalNodeNumber, reusedNodes, shouldShowUnlink,
+    getParentLabel, isViewMode, graphState, schema, setPendingEdit, setValueAtPath,
+    pendingEditsRef, pendingEditsVersion, nodeOptions, nodeIdToDisplay, setDeletingNodeId,
+    handleUnlink, setHasUnsavedChanges
+  ])
+
+  // Early return after all hooks
+  if (!data) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="rounded-md border bg-gray-50 px-2 py-1 text-xs text-gray-600">Loading...</div>
+      </div>
+    )
   }
+
+  // Memoized Issue Section Component with custom comparison
+  const IssueSection = React.memo(({ 
+    entityData, 
+    idx, 
+    rootStructure,
+    structureInfo,
+    deletedNodeIds,
+    orphanedNodeIds,
+    isViewMode,
+    edgesArray,
+    nodesArray,
+    schema,
+    relationshipProps,
+    handleAddNode,
+    handleSelectNode,
+    handleReliefTypeSelect,
+    handleForumSelect,
+    renderNodeCard,
+    getLiveReliefType,
+    getLiveForumAndJurisdiction
+  }: any) => {
+    // Find the root entity (the one with self: true in structure)
+    const rootEntityKey = Object.entries(rootStructure).find(([, cfg]: [string, any]) => cfg.self)?.[0]
+    const rootEntity = rootEntityKey ? entityData[rootEntityKey] : entityData[Object.keys(entityData)[0]]
+    
+    // Skip this entire entity if the root itself is deleted/orphaned
+    if (!rootEntity || deletedNodeIds.has(rootEntity.temp_id) || orphanedNodeIds.has(rootEntity.temp_id)) {
+      return null
+    }
+    
+    // Extract nested entities from the structured data based on the actual structure
+    const ruling = entityData.ruling && !deletedNodeIds.has(entityData.ruling.temp_id) ? entityData.ruling : null
+    const reliefs = filterActiveNodes(ruling?.relief || [], deletedNodeIds, orphanedNodeIds)
+    const issue = rootEntity
+    const args = filterActiveNodes(ruling?.arguments || [], deletedNodeIds, orphanedNodeIds)
+    
+    // For Issue nodes, show "Issue {n}: {label}", otherwise use pickNodeName
+    const issueLabel = rootEntity.label === 'Issue' && rootEntity.properties?.label 
+      ? rootEntity.properties.label 
+      : null
+    const entityName = issueLabel 
+      ? `${structureInfo.rootLabel} ${idx + 1}: ${issueLabel}`
+      : pickNodeName(rootEntity) || `${structureInfo.rootLabel} ${idx + 1}`
+    
+    return (
+      <div 
+        key={rootEntity.temp_id} 
+        id={`holding-${rootEntity.temp_id}`}
+        className="scroll-mt-4 border-b pb-8 last:border-b-0"
+      >
+        {/* Root Entity Header */}
+        <div className="mb-4">
+          <h2 className="text-lg font-semibold text-gray-900">{entityName}</h2>
+        </div>
+        
+        {/* Root Entity Details */}
+        <div className="space-y-4">
+          {renderNodeCard(rootEntity, `${structureInfo.rootLabel} Details`, { contextId: rootEntity.temp_id })}
+          
+          {/* Ruling */}
+          {ruling && renderNodeCard(ruling, 'Ruling', {
+            contextId: rootEntity.temp_id,
+            statusBadge: (
+              <RelationshipPropertyField
+                sourceId={ruling.temp_id}
+                targetId={rootEntity.temp_id}
+                relLabel="SETS"
+                propName="in_favor"
+                sourceLabel="Ruling"
+                isViewMode={isViewMode}
+                label="In Favor"
+                schema={schema}
+                getValue={relationshipProps.getRulingInFavor}
+                setValue={relationshipProps.setRulingInFavor}
+              />
+            ),
+            children: (
+              <>
+                {/* Laws */}
+                {(() => {
+                  const rulingStructure = rootStructure?.ruling?.include || {}
+                  const laws = filterActiveNodes(ruling?.law || [], deletedNodeIds, orphanedNodeIds)
+                  const state = analyzeRelationship(ruling, 'law', rulingStructure, schema, { law: laws })
+                  return (
+                    <div className="mt-4">
+                      <SectionHeader
+                        title="Laws"
+                        actionButton={!isViewMode && state && (
+                          <RelationshipAction
+                            state={state}
+                            parentNodeLabel="Ruling"
+                            position="inline"
+                            onAdd={(type: string, rel: string, dir: 'outgoing' | 'incoming') => handleAddNode(type, rel, dir, ruling.temp_id)}
+                            onSelect={(type: string, rel: string, dir: 'outgoing' | 'incoming') => handleSelectNode(type, rel, dir, ruling.temp_id)}
+                          />
+                        )}
+                      />
+                      <div className="space-y-4">
+                        {laws.map((law: any, lawIdx: number) => 
+                          renderNodeCard(law, 'Law', { 
+                            index: lawIdx, 
+                            depth: 1, 
+                            parentId: ruling.temp_id,
+                            contextId: rootEntity.temp_id
+                          })
+                        )}
+                      </div>
+                    </div>
+                  )
+                })()}
+                
+                {/* Relief (intermediate layer) */}
+                {(() => {
+                  const rulingStructure = rootStructure?.ruling?.include || {}
+                  const state = analyzeRelationship(ruling, 'relief', rulingStructure, schema, { relief: reliefs })
+                  return (
+                    <div className="mt-4">
+                      <SectionHeader
+                        title="Relief"
+                        actionButton={!isViewMode && state && (
+                          <RelationshipAction
+                            state={state}
+                            parentNodeLabel="Ruling"
+                            position="inline"
+                            onAdd={(type: string, rel: string, dir: 'outgoing' | 'incoming') => handleAddNode(type, rel, dir, ruling.temp_id)}
+                            onSelect={(type: string, rel: string, dir: 'outgoing' | 'incoming') => handleSelectNode(type, rel, dir, ruling.temp_id)}
+                          />
+                        )}
+                      />
+                      <div className="space-y-4">
+                        {reliefs.map((relief: any, relIdx: number) => {
+                          // Get live relief type from current graph state
+                          const liveReliefType = getLiveReliefType(relief.temp_id)
+                          const reliefStructure = rulingStructure?.relief?.include || {}
+                          const reliefTypeState = analyzeRelationship(relief, 'reliefTypes', reliefStructure, schema, { reliefTypes: liveReliefType })
+                          
+                          return renderNodeCard(relief, 'Relief', {
+                            index: relIdx,
+                            depth: 1,
+                            parentId: ruling.temp_id,
+                            contextId: rootEntity.temp_id,
+                            statusBadge: (
+                              <RelationshipPropertyField
+                                sourceId={ruling.temp_id}
+                                targetId={relief.temp_id}
+                                relLabel="RESULTS_IN"
+                                propName="relief_status"
+                                sourceLabel="Ruling"
+                                isViewMode={isViewMode}
+                                label="Relief Status"
+                                schema={schema}
+                                getValue={relationshipProps.getReliefStatus}
+                                setValue={relationshipProps.setReliefStatus}
+                              />
+                            ),
+                            children: (
+                              <>
+                                {/* Relief Type Selector (inline dropdown) */}
+                                <ReliefTypeSelector
+                                  reliefId={relief.temp_id}
+                                  currentReliefType={liveReliefType}
+                                  isViewMode={isViewMode}
+                                  onSelect={(selectedNode: any) => handleReliefTypeSelect(relief.temp_id, selectedNode)}
+                                />
+                              </>
+                            )
+                          })
+                        })}
+                      </div>
+                    </div>
+                  )
+                })()}
+                
+                {/* Arguments */}
+                {(() => {
+                  return (
+                    <>
+                      {args.length > 0 && (
+                        <div className="mt-6 pt-6 border-t-2 border-gray-200 space-y-4">
+                          {args.map((argData: any, argIdx: number) => {
+                            // Backend returns structured argument data
+                            const arg = argData.arguments || argData
+                            const doctrines = filterActiveNodes(argData.doctrine || [], deletedNodeIds, orphanedNodeIds)
+                            const policies = filterActiveNodes(argData.policy || [], deletedNodeIds, orphanedNodeIds)
+                            const factPatterns = filterActiveNodes(argData.factPattern || [], deletedNodeIds, orphanedNodeIds)
+                            const argumentStatus = relationshipProps.getArgumentStatus(arg.temp_id, ruling.temp_id)
+                            
+                            return renderNodeCard(arg, 'Argument', {
+                              index: argIdx,
+                              depth: 1,
+                              parentId: ruling.temp_id,
+                              contextId: rootEntity.temp_id,
+                              statusBadge: isViewMode ? (
+                                argumentStatus && (
+                                  <span className={`px-2 py-1 rounded text-xs font-medium ${
+                                    argumentStatus === 'Accepted' 
+                                      ? 'bg-green-100 text-green-800' 
+                                      : 'bg-red-100 text-red-800'
+                                  }`}>
+                                    {argumentStatus}
+                                  </span>
+                                )
+                              ) : (
+                                <select
+                                  className="px-2 py-1 rounded border border-gray-300 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                  value={argumentStatus || ''}
+                                  onChange={(e) => relationshipProps.setArgumentStatus(arg.temp_id, ruling.temp_id, e.target.value)}
+                                >
+                                  <option value="">Select status...</option>
+                                  <option value="Accepted">Accepted</option>
+                                  <option value="Rejected">Rejected</option>
+                                </select>
+                              ),
+                              children: (
+                                <div className="mt-4 space-y-6">
+                                  {/* Doctrines Section */}
+                                  {(() => {
+                                    const argStructure = rootStructure?.ruling?.include?.arguments?.include || {}
+                                    const state = analyzeRelationship(arg, 'doctrine', argStructure, schema, argData)
+                                    return (
+                                      <div>
+                                        <SectionHeader
+                                          title="Doctrines"
+                                          actionButton={!isViewMode && state && (
+                                            <RelationshipAction
+                                              state={state}
+                                              parentNodeLabel="Argument"
+                                              position="inline"
+                                              onAdd={(type: string, rel: string, dir: 'outgoing' | 'incoming') => handleAddNode(type, rel, dir, arg.temp_id)}
+                                              onSelect={(type: string, rel: string, dir: 'outgoing' | 'incoming') => handleSelectNode(type, rel, dir, arg.temp_id)}
+                                            />
+                                          )}
+                                        />
+                                        <div className="space-y-4">
+                                          {doctrines.map((doc: any, docIdx: number) => 
+                                            renderNodeCard(doc, 'Doctrine', { 
+                                              index: docIdx, 
+                                              depth: 2, 
+                                              parentId: arg.temp_id,
+                                              contextId: rootEntity.temp_id
+                                            })
+                                          )}
+                                        </div>
+                                      </div>
+                                    )
+                                  })()}
+                                  
+                                  {/* Policies Section */}
+                                  {(() => {
+                                    const argStructure = rootStructure?.ruling?.include?.arguments?.include || {}
+                                    const state = analyzeRelationship(arg, 'policy', argStructure, schema, argData)
+                                    return (
+                                      <div>
+                                        <SectionHeader
+                                          title="Policies"
+                                          actionButton={!isViewMode && state && (
+                                            <RelationshipAction
+                                              state={state}
+                                              parentNodeLabel="Argument"
+                                              position="inline"
+                                              onAdd={(type: string, rel: string, dir: 'outgoing' | 'incoming') => handleAddNode(type, rel, dir, arg.temp_id)}
+                                              onSelect={(type: string, rel: string, dir: 'outgoing' | 'incoming') => handleSelectNode(type, rel, dir, arg.temp_id)}
+                                            />
+                                          )}
+                                        />
+                                        <div className="space-y-4">
+                                          {policies.map((pol: any, polIdx: number) => 
+                                            renderNodeCard(pol, 'Policy', { 
+                                              index: polIdx, 
+                                              depth: 2, 
+                                              parentId: arg.temp_id,
+                                              contextId: rootEntity.temp_id
+                                            })
+                                          )}
+                                        </div>
+                                      </div>
+                                    )
+                                  })()}
+                                  
+                                  {/* Fact Patterns Section */}
+                                  {(() => {
+                                    const argStructure = rootStructure?.ruling?.include?.arguments?.include || {}
+                                    const state = analyzeRelationship(arg, 'factPattern', argStructure, schema, argData)
+                                    return (
+                                      <div>
+                                        <SectionHeader
+                                          title="Fact Patterns"
+                                          actionButton={!isViewMode && state && (
+                                            <RelationshipAction
+                                              state={state}
+                                              parentNodeLabel="Argument"
+                                              position="inline"
+                                              onAdd={(type: string, rel: string, dir: 'outgoing' | 'incoming') => handleAddNode(type, rel, dir, arg.temp_id)}
+                                              onSelect={(type: string, rel: string, dir: 'outgoing' | 'incoming') => handleSelectNode(type, rel, dir, arg.temp_id)}
+                                            />
+                                          )}
+                                        />
+                                        <div className="space-y-4">
+                                          {factPatterns.map((fp: any, fpIdx: number) => 
+                                            renderNodeCard(fp, 'Fact Pattern', { 
+                                              index: fpIdx, 
+                                              depth: 2, 
+                                              parentId: arg.temp_id,
+                                              contextId: rootEntity.temp_id
+                                            })
+                                          )}
+                                        </div>
+                                      </div>
+                                    )
+                                  })()}
+                                </div>
+                              )
+                            })
+                          })}
+                        </div>
+                      )}
+                      {/* Add Argument button */}
+                      {!isViewMode && (() => {
+                        const rulingStructure = rootStructure?.ruling?.include || {}
+                        const state = analyzeRelationship(ruling, 'arguments', rulingStructure, schema, { arguments: args })
+                        if (!state) return null
+                        return (
+                          <div className={args.length > 0 ? "mt-3" : "mt-4"}>
+                            <RelationshipAction
+                              state={state}
+                              parentNodeLabel="Ruling"
+                              position={args.length === 0 ? 'centered' : 'inline'}
+                              onAdd={(type: string, rel: string, dir: 'outgoing' | 'incoming') => handleAddNode(type, rel, dir, ruling.temp_id)}
+                              onSelect={(type: string, rel: string, dir: 'outgoing' | 'incoming') => handleSelectNode(type, rel, dir, ruling.temp_id)}
+                            />
+                          </div>
+                        )
+                      })()}
+                    </>
+                  )
+                })()}
+              </>
+            )
+          })}
+          {/* Add Ruling button if no ruling exists */}
+          {!isViewMode && !ruling && issue && (() => {
+            const state = analyzeRelationship(issue, 'ruling', rootStructure || {}, schema, { ruling: null })
+            if (!state) return null
+            return (
+              <RelationshipAction
+                state={state}
+                parentNodeLabel="Issue"
+                position="centered"
+                onAdd={(type: string, rel: string, dir: 'outgoing' | 'incoming') => handleAddNode(type, rel, dir, issue.temp_id)}
+                onSelect={(type: string, rel: string, dir: 'outgoing' | 'incoming') => handleSelectNode(type, rel, dir, issue.temp_id)}
+              />
+            )
+          })()}
+        </div>
+      </div>
+    )
+  }, (prevProps, nextProps) => {
+    // Custom comparison function - return true if props are equal (skip re-render)
+    // Only re-render if the specific issue's data changed or view mode changed
+    const rootEntityKey = Object.entries(prevProps.rootStructure).find(([, cfg]: [string, any]) => cfg.self)?.[0]
+    const prevRootId = rootEntityKey ? prevProps.entityData[rootEntityKey]?.temp_id : prevProps.entityData[Object.keys(prevProps.entityData)[0]]?.temp_id
+    const nextRootId = rootEntityKey ? nextProps.entityData[rootEntityKey]?.temp_id : nextProps.entityData[Object.keys(nextProps.entityData)[0]]?.temp_id
+    
+    // If root IDs are different, definitely re-render
+    if (prevRootId !== nextRootId) return false
+    
+    // If view mode changed, re-render
+    if (prevProps.isViewMode !== nextProps.isViewMode) return false
+    
+    // CRITICAL FIX: Check if IS_TYPE edges changed for reliefs in this issue
+    // Extract all relief IDs from this issue's ruling
+    const extractReliefIds = (entityData: any): string[] => {
+      const ruling = entityData.ruling
+      if (!ruling?.relief) return []
+      return (Array.isArray(ruling.relief) ? ruling.relief : [])
+        .map((r: any) => r?.temp_id)
+        .filter((id: any): id is string => Boolean(id))
+    }
+    
+    const reliefIds = extractReliefIds(prevProps.entityData)
+    
+    // If there are reliefs, check if their IS_TYPE edges changed
+    if (reliefIds.length > 0) {
+      const getReliefTypeEdgesHash = (edgesArray: any[], reliefIds: string[]): string => {
+        return edgesArray
+          .filter((e: any) => 
+            e.label === 'IS_TYPE' && 
+            e.status === 'active' && 
+            reliefIds.includes(e.from)
+          )
+          .map((e: any) => `${e.from}:${e.to}`)
+          .sort()
+          .join('|')
+      }
+      
+      const prevReliefTypeEdges = getReliefTypeEdgesHash(prevProps.edgesArray, reliefIds)
+      const nextReliefTypeEdges = getReliefTypeEdgesHash(nextProps.edgesArray, reliefIds)
+      
+      // If relief type edges changed, re-render
+      if (prevReliefTypeEdges !== nextReliefTypeEdges) return false
+    }
+    
+    // Deep compare the entityData to see if THIS issue's data changed
+    // This is the key optimization - we only care about this specific issue's data
+    const prevEntityStr = JSON.stringify(prevProps.entityData)
+    const nextEntityStr = JSON.stringify(nextProps.entityData)
+    
+    // If the specific entity data is the same, skip re-render (return true)
+    // Ignore function prop changes - they're stable via useCallback
+    return prevEntityStr === nextEntityStr
+  })
+  IssueSection.displayName = 'IssueSection'
 
   return (
     <div className="min-h-screen flex">
@@ -658,7 +1424,20 @@ export default function CaseEditorPage() {
             )}
           </div>
           {error && (
-            <div className="rounded-md border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-700">{error}</div>
+            <div className="rounded-md border border-red-300 bg-red-50 px-4 py-3 text-xs text-red-700">
+              {error.startsWith('Validation failed:') ? (
+                <>
+                  <div className="font-semibold mb-2">Validation Errors:</div>
+                  <ul className="list-disc list-inside space-y-1">
+                    {error.replace('Validation failed: ', '').split('; ').map((msg, idx) => (
+                      <li key={idx}>{msg}</li>
+                    ))}
+                  </ul>
+                </>
+              ) : (
+                error
+              )}
+            </div>
           )}
 
           {/* Top Section: Case, Proceedings, Forums, Parties */}
@@ -674,13 +1453,7 @@ export default function CaseEditorPage() {
                 {(() => {
                   const parentNode = getParentNodeFromConfig('proceedings')
                   const parentLabel = viewConfig?.topLevel?.proceedings?.from || 'Case'
-                  const state = analyzeRelationship(
-                    parentNode,
-                    'proceedings',
-                    viewConfig?.topLevel || {},
-                    schema,
-                    { proceedings: proceedingNodes }
-                  )
+                  const state = relationshipStates.proceedings
                   if (proceedingNodes.length === 0 && state) {
                     return !isViewMode ? (
                       <RelationshipAction
@@ -707,67 +1480,24 @@ export default function CaseEditorPage() {
                         )}
                       />
                       <div className="space-y-4">
-                        {proceedingNodes.map((proc: any, idx: number) => 
-                          renderNodeCard(proc, 'Proceeding', { index: idx, contextId: 'overview' })
-                        )}
-                      </div>
-                    </div>
-                  )
-                })()}
-                
-                {/* Forums Section */}
-                {(() => {
-                  const parentNode = getParentNodeFromConfig('forums')
-                  const parentLabel = viewConfig?.topLevel?.forums?.from || 'Proceeding'
-                  const forumsForParent = parentNode ? getRelatedNodes(parentNode.temp_id, 'HEARD_IN', 'outgoing') : []
-                  const state = analyzeRelationship(
-                    parentNode,
-                    'forums',
-                    viewConfig?.topLevel || {},
-                    schema,
-                    { forums: forumsForParent }
-                  )
-                  if (forumNodes.length === 0 && state) {
-                    return !isViewMode ? (
-                      <RelationshipAction
-                        state={state}
-                        parentNodeLabel={parentLabel}
-                        position="centered"
-                        onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, parentNode?.temp_id)}
-                        onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, parentNode?.temp_id)}
-                      />
-                    ) : null
-                  }
-                  return (
-                    <div>
-                      <SectionHeader
-                        title="Forums"
-                        actionButton={!isViewMode && state && (
-                          <RelationshipAction
-                            state={state}
-                            parentNodeLabel={parentLabel}
-                            position="inline"
-                            onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, parentNode?.temp_id)}
-                            onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, parentNode?.temp_id)}
-                          />
-                        )}
-                      />
-                      <div className="space-y-4">
-                        {forumNodes.map((forum: any, idx: number) => {
-                          // Find the Jurisdiction for this Forum
-                          const jurisdictionEdge = edgesArray.find(
-                            (e: any) => e.from === forum.temp_id && e.label === 'PART_OF'
-                          )
-                          const jurisdiction = jurisdictionEdge 
-                            ? jurisdictionNodes.find((j: any) => j.temp_id === jurisdictionEdge.to)
-                            : null
+                        {proceedingNodes.map((proc: any, idx: number) => {
+                          // Get live forum and jurisdiction for this proceeding
+                          const { forum, jurisdiction } = getLiveForumAndJurisdiction(proc.temp_id)
                           
-                          return renderNodeCard(forum, 'Forum', {
+                          return renderNodeCard(proc, 'Proceeding', {
                             index: idx,
                             contextId: 'overview',
-                            children: jurisdiction && (
+                            children: (
                               <div className="mt-4">
-                                {renderNodeCard(jurisdiction, 'Jurisdiction', { depth: 1, contextId: 'overview' })}
+                                <ForumSelector
+                                  proceedingId={proc.temp_id}
+                                  currentForum={forum}
+                                  currentJurisdiction={jurisdiction}
+                                  isViewMode={isViewMode}
+                                  onSelect={(forumNode: any, jurisdictionNode: any) => 
+                                    handleForumSelect(proc.temp_id, forumNode, jurisdictionNode)
+                                  }
+                                />
                               </div>
                             )
                           })
@@ -781,14 +1511,7 @@ export default function CaseEditorPage() {
                 {(() => {
                   const parentNode = getParentNodeFromConfig('parties')
                   const parentLabel = viewConfig?.topLevel?.parties?.from || 'Proceeding'
-                  const partiesForParent = parentNode ? getRelatedNodes(parentNode.temp_id, 'INVOLVES', 'outgoing') : []
-                  const state = analyzeRelationship(
-                    parentNode,
-                    'parties',
-                    viewConfig?.topLevel || {},
-                    schema,
-                    { parties: partiesForParent }
-                  )
+                  const state = relationshipStates.parties
                   if (partyNodes.length === 0 && state) {
                     return !isViewMode ? (
                       <RelationshipAction
@@ -847,21 +1570,7 @@ export default function CaseEditorPage() {
                                   getValue={relationshipProps.getPartyRole}
                                   setValue={relationshipProps.setPartyRole}
                                 />
-                              ) : undefined,
-                              children: proceedingId && !isViewMode && (
-                                <RelationshipPropertyField
-                                  sourceId={proceedingId}
-                                  targetId={party.temp_id}
-                                  relLabel="INVOLVES"
-                                  propName="role"
-                                  sourceLabel="Proceeding"
-                                  isViewMode={isViewMode}
-                                  label="Role"
-                                  schema={schema}
-                                  getValue={relationshipProps.getPartyRole}
-                                  setValue={relationshipProps.setPartyRole}
-                                />
-                              )
+                              ) : undefined
                             })
                           })}
                         </div>
@@ -873,356 +1582,29 @@ export default function CaseEditorPage() {
             </div>
 
             {/* Root Entity Sections (Issues/Holdings) */}
-            {rootEntities.map((entityData: any, idx: number) => {
-              // Find the root entity (the one with self: true in structure)
-              const rootEntityKey = Object.entries(rootStructure).find(([, cfg]: [string, any]) => cfg.self)?.[0]
-              const rootEntity = rootEntityKey ? entityData[rootEntityKey] : entityData[Object.keys(entityData)[0]]
-              
-              // Skip this entire entity if the root itself is deleted/orphaned
-              if (!rootEntity || deletedNodeIds.has(rootEntity.temp_id) || orphanedNodeIds.has(rootEntity.temp_id)) {
-                return null
-              }
-              
-              // Extract nested entities from the structured data based on the actual structure
-              // Backend returns: { issue: {...}, ruling: {...} } as siblings
-              const ruling = entityData.ruling && !deletedNodeIds.has(entityData.ruling.temp_id) ? entityData.ruling : null
-              const reliefs = filterActiveNodes(ruling?.relief || [], deletedNodeIds, orphanedNodeIds)
-              const issue = rootEntity // In new structure, issue IS the root entity
-              const args = filterActiveNodes(ruling?.arguments || [], deletedNodeIds, orphanedNodeIds)
-              
-              // For Issue nodes, show "Issue {n}: {label}", otherwise use pickNodeName
-              const issueLabel = rootEntity.label === 'Issue' && rootEntity.properties?.label 
-                ? rootEntity.properties.label 
-                : null
-              const entityName = issueLabel 
-                ? `${structureInfo.rootLabel} ${idx + 1}: ${issueLabel}`
-                : pickNodeName(rootEntity) || `${structureInfo.rootLabel} ${idx + 1}`
-              
-              return (
-                <div 
-                  key={rootEntity.temp_id} 
-                  id={`holding-${rootEntity.temp_id}`}
-                  className="scroll-mt-4 border-b pb-8 last:border-b-0"
-                >
-                  {/* Root Entity Header */}
-                  <div className="mb-4">
-                    <h2 className="text-lg font-semibold text-gray-900">{entityName}</h2>
-                  </div>
-                  
-                  {/* Root Entity Details */}
-                  <div className="space-y-4">
-                    {renderNodeCard(rootEntity, `${structureInfo.rootLabel} Details`, { contextId: rootEntity.temp_id })}
-                    
-                    {/* Ruling */}
-                    {ruling && renderNodeCard(ruling, 'Ruling', {
-                      contextId: rootEntity.temp_id,
-                      statusBadge: (
-                        <RelationshipPropertyField
-                          sourceId={ruling.temp_id}
-                          targetId={rootEntity.temp_id}
-                          relLabel="SETS"
-                          propName="in_favor"
-                          sourceLabel="Ruling"
-                          isViewMode={isViewMode}
-                          label="In Favor"
-                          schema={schema}
-                          getValue={relationshipProps.getRulingInFavor}
-                          setValue={relationshipProps.setRulingInFavor}
-                        />
-                      ),
-                      children: (
-                        <>
-                          {/* Laws */}
-                          {(() => {
-                            const rulingStructure = rootStructure?.ruling?.include || {}
-                            const laws = filterActiveNodes(ruling?.law || [], deletedNodeIds, orphanedNodeIds)
-                            const state = analyzeRelationship(ruling, 'law', rulingStructure, schema, { law: laws })
-                            return (
-                              <div className="mt-4">
-                                <SectionHeader
-                                  title="Laws"
-                                  actionButton={!isViewMode && state && (
-                                    <RelationshipAction
-                                      state={state}
-                                      parentNodeLabel="Ruling"
-                                      position="inline"
-                                      onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, ruling.temp_id)}
-                                      onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, ruling.temp_id)}
-                                    />
-                                  )}
-                                />
-                                <div className="space-y-4">
-                                  {laws.map((law: any, lawIdx: number) => 
-                                    renderNodeCard(law, 'Law', { 
-                                      index: lawIdx, 
-                                      depth: 1, 
-                                      parentId: ruling.temp_id,
-                                      contextId: rootEntity.temp_id
-                                    })
-                                  )}
-                                </div>
-                              </div>
-                            )
-                          })()}
-                          
-                          {/* Relief (intermediate layer) */}
-                          {(() => {
-                            const rulingStructure = rootStructure?.ruling?.include || {}
-                            const state = analyzeRelationship(ruling, 'relief', rulingStructure, schema, { relief: reliefs })
-                            return (
-                              <div className="mt-4">
-                                <SectionHeader
-                                  title="Relief"
-                                  actionButton={!isViewMode && state && (
-                                    <RelationshipAction
-                                      state={state}
-                                      parentNodeLabel="Ruling"
-                                      position="inline"
-                                      onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, ruling.temp_id)}
-                                      onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, ruling.temp_id)}
-                                    />
-                                  )}
-                                />
-                                <div className="space-y-4">
-                                  {reliefs.map((relief: any, relIdx: number) => {
-                                    const reliefType = relief.reliefTypes && !deletedNodeIds.has(relief.reliefTypes.temp_id) ? relief.reliefTypes : null
-                                    const reliefStructure = rulingStructure?.relief?.include || {}
-                                    const reliefTypeState = analyzeRelationship(relief, 'reliefTypes', reliefStructure, schema, { reliefTypes: reliefType })
-                                    
-                                    return renderNodeCard(relief, 'Relief', {
-                                      index: relIdx,
-                                      depth: 1,
-                                      parentId: ruling.temp_id,
-                                      contextId: rootEntity.temp_id,
-                                      statusBadge: (
-                                        <RelationshipPropertyField
-                                          sourceId={ruling.temp_id}
-                                          targetId={relief.temp_id}
-                                          relLabel="RESULTS_IN"
-                                          propName="relief_status"
-                                          sourceLabel="Ruling"
-                                          isViewMode={isViewMode}
-                                          label="Relief Status"
-                                          schema={schema}
-                                          getValue={relationshipProps.getReliefStatus}
-                                          setValue={relationshipProps.setReliefStatus}
-                                        />
-                                      ),
-                                      children: (
-                                        <>
-                                          {/* Relief Type (single) */}
-                                          {reliefType ? (
-                                            <div className="mt-4">
-                                              {renderNodeCard(reliefType, 'Relief Type', { 
-                                                depth: 2, 
-                                                parentId: relief.temp_id,
-                                                contextId: rootEntity.temp_id
-                                              })}
-                                            </div>
-                                          ) : !isViewMode && reliefTypeState && (
-                                            <div className="mt-4">
-                                              <RelationshipAction
-                                                state={reliefTypeState}
-                                                parentNodeLabel="Relief"
-                                                position="centered"
-                                                onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, relief.temp_id)}
-                                                onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, relief.temp_id)}
-                                              />
-                                            </div>
-                                          )}
-                                        </>
-                                      )
-                                    })
-                                  })}
-                                </div>
-                              </div>
-                            )
-                          })()}
-                          
-                          {/* Arguments */}
-                          {(() => {
-                            return (
-                              <>
-                                {args.length > 0 && (
-                                  <div className="mt-6 pt-6 border-t-2 border-gray-200 space-y-4">
-                                    {args.map((argData: any, argIdx: number) => {
-                                      // Backend returns structured argument data
-                                      const arg = argData.arguments || argData
-                                      const doctrines = filterActiveNodes(argData.doctrine || [], deletedNodeIds, orphanedNodeIds)
-                                      const policies = filterActiveNodes(argData.policy || [], deletedNodeIds, orphanedNodeIds)
-                                      const factPatterns = filterActiveNodes(argData.factPattern || [], deletedNodeIds, orphanedNodeIds)
-                                      const argumentStatus = relationshipProps.getArgumentStatus(arg.temp_id, ruling.temp_id)
-                                      
-                                      return renderNodeCard(arg, 'Argument', {
-                                        index: argIdx,
-                                        depth: 1,
-                                        parentId: ruling.temp_id,
-                                        contextId: rootEntity.temp_id,
-                                        statusBadge: isViewMode ? (
-                                          argumentStatus && (
-                                            <span className={`px-2 py-1 rounded text-xs font-medium ${
-                                              argumentStatus === 'Accepted' 
-                                                ? 'bg-green-100 text-green-800' 
-                                                : 'bg-red-100 text-red-800'
-                                            }`}>
-                                              {argumentStatus}
-                                            </span>
-                                          )
-                                        ) : (
-                                          <select
-                                            className="px-2 py-1 rounded border border-gray-300 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                            value={argumentStatus || ''}
-                                            onChange={(e) => relationshipProps.setArgumentStatus(arg.temp_id, ruling.temp_id, e.target.value)}
-                                          >
-                                            <option value="">Select status...</option>
-                                            <option value="Accepted">Accepted</option>
-                                            <option value="Rejected">Rejected</option>
-                                          </select>
-                                        ),
-                                        children: (
-                                          <div className="mt-4 space-y-6">
-                                            {/* Doctrines Section */}
-                                            {(() => {
-                                              const argStructure = rootStructure?.ruling?.include?.arguments?.include || {}
-                                              const state = analyzeRelationship(arg, 'doctrine', argStructure, schema, argData)
-                                              return (
-                                                <div>
-                                                  <SectionHeader
-                                                    title="Doctrines"
-                                                    actionButton={!isViewMode && state && (
-                                                      <RelationshipAction
-                                                        state={state}
-                                                        parentNodeLabel="Argument"
-                                                        position="inline"
-                                                        onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, arg.temp_id)}
-                                                        onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, arg.temp_id)}
-                                                      />
-                                                    )}
-                                                  />
-                                                  <div className="space-y-4">
-                                                    {doctrines.map((doc: any, docIdx: number) => 
-                                                      renderNodeCard(doc, 'Doctrine', { 
-                                                        index: docIdx, 
-                                                        depth: 2, 
-                                                        parentId: arg.temp_id,
-                                                        contextId: rootEntity.temp_id
-                                                      })
-                                                    )}
-                                                  </div>
-                                                </div>
-                                              )
-                                            })()}
-                                            
-                                            {/* Policies Section */}
-                                            {(() => {
-                                              const argStructure = rootStructure?.ruling?.include?.arguments?.include || {}
-                                              const state = analyzeRelationship(arg, 'policy', argStructure, schema, argData)
-                                              return (
-                                                <div>
-                                                  <SectionHeader
-                                                    title="Policies"
-                                                    actionButton={!isViewMode && state && (
-                                                      <RelationshipAction
-                                                        state={state}
-                                                        parentNodeLabel="Argument"
-                                                        position="inline"
-                                                        onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, arg.temp_id)}
-                                                        onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, arg.temp_id)}
-                                                      />
-                                                    )}
-                                                  />
-                                                  <div className="space-y-4">
-                                                    {policies.map((pol: any, polIdx: number) => 
-                                                      renderNodeCard(pol, 'Policy', { 
-                                                        index: polIdx, 
-                                                        depth: 2, 
-                                                        parentId: arg.temp_id,
-                                                        contextId: rootEntity.temp_id
-                                                      })
-                                                    )}
-                                                  </div>
-                                                </div>
-                                              )
-                                            })()}
-                                            
-                                            {/* Fact Patterns Section */}
-                                            {(() => {
-                                              const argStructure = rootStructure?.ruling?.include?.arguments?.include || {}
-                                              const state = analyzeRelationship(arg, 'factPattern', argStructure, schema, argData)
-                                              return (
-                                                <div>
-                                                  <SectionHeader
-                                                    title="Fact Patterns"
-                                                    actionButton={!isViewMode && state && (
-                                                      <RelationshipAction
-                                                        state={state}
-                                                        parentNodeLabel="Argument"
-                                                        position="inline"
-                                                        onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, arg.temp_id)}
-                                                        onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, arg.temp_id)}
-                                                      />
-                                                    )}
-                                                  />
-                                                  <div className="space-y-4">
-                                                    {factPatterns.map((fp: any, fpIdx: number) => 
-                                                      renderNodeCard(fp, 'Fact Pattern', { 
-                                                        index: fpIdx, 
-                                                        depth: 2, 
-                                                        parentId: arg.temp_id,
-                                                        contextId: rootEntity.temp_id
-                                                      })
-                                                    )}
-                                                  </div>
-                                                </div>
-                                              )
-                                            })()}
-                                          </div>
-                                        )
-                                      })
-                                    })}
-                                  </div>
-                                )}
-                                {/* Add Argument button */}
-                                {!isViewMode && (() => {
-                                  const rulingStructure = rootStructure?.ruling?.include || {}
-                                  const state = analyzeRelationship(ruling, 'arguments', rulingStructure, schema, { arguments: args })
-                                  if (!state) return null
-                                  return (
-                                    <div className={args.length > 0 ? "mt-3" : "mt-4"}>
-                                      <RelationshipAction
-                                        state={state}
-                                        parentNodeLabel="Ruling"
-                                        position={args.length === 0 ? 'centered' : 'inline'}
-                                        onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, ruling.temp_id)}
-                                        onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, ruling.temp_id)}
-                                      />
-                                    </div>
-                                  )
-                                })()}
-                              </>
-                            )
-                          })()}
-                        </>
-                      )
-                    })}
-                    {/* Add Ruling button if no ruling exists */}
-                    {!isViewMode && !ruling && issue && (() => {
-                      const state = analyzeRelationship(issue, 'ruling', rootStructure || {}, schema, { ruling: null })
-                      if (!state) return null
-                      return (
-                        <RelationshipAction
-                          state={state}
-                          parentNodeLabel="Issue"
-                          position="centered"
-                          onAdd={(type, rel, dir) => handleAddNode(type, rel, dir, issue.temp_id)}
-                          onSelect={(type, rel, dir) => handleSelectNode(type, rel, dir, issue.temp_id)}
-                        />
-                      )
-                    })()}
-                  </div>
-                </div>
-              )
-            })}
+            {rootEntities.map((entityData: any, idx: number) => (
+              <IssueSection
+                key={entityData[Object.keys(entityData)[0]]?.temp_id || idx}
+                entityData={entityData}
+                idx={idx}
+                rootStructure={rootStructure}
+                structureInfo={structureInfo}
+                deletedNodeIds={deletedNodeIds}
+                orphanedNodeIds={orphanedNodeIds}
+                isViewMode={isViewMode}
+                edgesArray={edgesArray}
+                nodesArray={nodesArray}
+                schema={schema}
+                relationshipProps={relationshipProps}
+                handleAddNode={handleAddNode}
+                handleSelectNode={handleSelectNode}
+                handleReliefTypeSelect={handleReliefTypeSelect}
+                handleForumSelect={handleForumSelect}
+                renderNodeCard={renderNodeCard}
+                getLiveReliefType={getLiveReliefType}
+                getLiveForumAndJurisdiction={getLiveForumAndJurisdiction}
+              />
+            ))}
             
             {/* Orphaned Nodes Section */}
             <OrphanedNodesSection orphanedNodes={orphanedNodes} graphState={graphState} />
@@ -1237,6 +1619,7 @@ export default function CaseEditorPage() {
           scrollHistory={scrollHistory}
           saving={saving}
           submittingKg={submittingKg}
+          error={error}
           onSave={onSave}
           onSubmitToKg={submitToKg}
           onBack={() => {
@@ -1309,7 +1692,7 @@ export default function CaseEditorPage() {
         open={addModalOpen}
         nodeType={addModalType}
         schema={schema}
-        existingNodes={nodesArrayForModals}
+        existingNodes={[...(catalogNodes[addModalType] || []), ...nodesArrayForModals]}
         parentContext={addModalContext?.parentId ? {
           parentId: addModalContext.parentId,
           parentLabel: getParentNodeLabel(addModalContext.parentId),
@@ -1332,11 +1715,12 @@ export default function CaseEditorPage() {
                 nodes[existingIndex] = { ...existing, status: 'active' as const }
               }
             } else {
-              nodes.push({
+              const newNode = {
                 ...node,
                 status: 'active' as const,
                 source: 'user-created' as const
-              })
+              }
+              nodes.push(newNode)
             }
 
             const ensureActiveEdge = (from: string, to: string, label: string) => {

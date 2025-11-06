@@ -3,6 +3,7 @@ export interface GraphNode {
   label: string;
   properties?: Record<string, unknown>;
   related?: Record<string, GraphNode>; // For catalog nodes with embedded relationships (e.g., Forum -> Jurisdiction)
+  is_existing?: boolean; // Flag to indicate if this node exists in the Neo4j catalog
 }
 
 export interface GraphEdge {
