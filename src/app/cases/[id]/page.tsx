@@ -692,7 +692,7 @@ export default function CaseEditorPage() {
     setHasUnsavedChanges(true)
   }
 
-  const [isPendingReliefType, startReliefTypeTransition] = useTransition()
+  const [, startReliefTypeTransition] = useTransition()
   
   const handleReliefTypeSelect = useCallback((reliefId: string, reliefTypeNode: any) => {
     // Mark unsaved changes immediately
@@ -731,7 +731,7 @@ export default function CaseEditorPage() {
     })
   }, [setGraphState, setHasUnsavedChanges, startReliefTypeTransition])
 
-  const [isPendingForum, startForumTransition] = useTransition()
+  const [, startForumTransition] = useTransition()
   
   const handleForumSelect = useCallback((proceedingId: string, forumNode: any, jurisdictionNode: any | null) => {
     // Mark unsaved changes immediately
@@ -964,17 +964,13 @@ export default function CaseEditorPage() {
     deletedNodeIds,
     orphanedNodeIds,
     isViewMode,
-    edgesArray,
-    nodesArray,
     schema,
     relationshipProps,
     handleAddNode,
     handleSelectNode,
     handleReliefTypeSelect,
-    handleForumSelect,
     renderNodeCard,
-    getLiveReliefType,
-    getLiveForumAndJurisdiction
+    getLiveReliefType
   }: any) => {
     // Find the root entity (the one with self: true in structure)
     const rootEntityKey = Object.entries(rootStructure).find(([, cfg]: [string, any]) => cfg.self)?.[0]
@@ -1088,8 +1084,6 @@ export default function CaseEditorPage() {
                         {reliefs.map((relief: any, relIdx: number) => {
                           // Get live relief type from current graph state
                           const liveReliefType = getLiveReliefType(relief.temp_id)
-                          const reliefStructure = rulingStructure?.relief?.include || {}
-                          const reliefTypeState = analyzeRelationship(relief, 'reliefTypes', reliefStructure, schema, { reliefTypes: liveReliefType })
                           
                           return renderNodeCard(relief, 'Relief', {
                             index: relIdx,
@@ -1593,16 +1587,13 @@ export default function CaseEditorPage() {
                 orphanedNodeIds={orphanedNodeIds}
                 isViewMode={isViewMode}
                 edgesArray={edgesArray}
-                nodesArray={nodesArray}
                 schema={schema}
                 relationshipProps={relationshipProps}
                 handleAddNode={handleAddNode}
                 handleSelectNode={handleSelectNode}
                 handleReliefTypeSelect={handleReliefTypeSelect}
-                handleForumSelect={handleForumSelect}
                 renderNodeCard={renderNodeCard}
                 getLiveReliefType={getLiveReliefType}
-                getLiveForumAndJurisdiction={getLiveForumAndJurisdiction}
               />
             ))}
             

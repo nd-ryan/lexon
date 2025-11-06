@@ -149,7 +149,7 @@
       "party_upload_code": { "type": "STRING", "ui": { "hidden": true } },
       "party_id": { "type": "STRING", "ui": { "hidden": true } },
       "name": { "type": "STRING", "ui": { "order": 1, "input": "text", "required": true, "label": "Name" } },
-      "type": { "type": "STRING", "ui": { "order": 2, "input": "select", "options": ["individual", "corporation", "organization", "government"], "label": "Type", "required": true } }
+      "type": { "type": "STRING", "ui": { "order": 2, "input": "select", "options": ["individual", "corporation", "organization", "government", "group"], "label": "Type", "required": true } }
     },
     "relationships": {}
   },

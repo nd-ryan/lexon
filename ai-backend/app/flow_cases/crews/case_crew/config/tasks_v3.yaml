@@ -390,13 +390,34 @@ phase9_party_task:
     2) For each extracted party name, fuzzy match against the Party catalog; if match is strong, standardize to catalog name.
     3) Return JSON as {
        "parties": [ { name, type }, ... ],
-        "case_roles": [ { "party_index": <index in parties array>, "role": "plaintiff|defendant|appellant|appellee|petitioner|respondent" } ]
+        "case_roles": [ { "party_index": <index in parties array>, "role": <ROLE_VALUE> } ]
     }
+
+    CRITICAL ROLE CONSTRAINT - READ CAREFULLY:
+    The "role" field in case_roles MUST be ONE OF THESE EXACT SIX VALUES ONLY:
+      • "plaintiff"
+      • "defendant"
+      • "appellant"
+      • "appellee"
+      • "petitioner"
+      • "respondent"
+    
+    ABSOLUTELY DO NOT use any other values including but not limited to:
+      • "amicus" or "amicus curiae"
+      • "intervenor"
+      • "third-party"
+      • "cross-appellant"
+      • "appellee-cross-appellant"
+      • or any other role label
+    
+    If a party in the case text has a non-standard role (like amicus curiae, intervenor, etc.),
+    you must map them to the closest standard role if they are a primary party.
 
     Constraints:
     - Only standardize to catalog entries; do not invent catalog names.
     - Prefer high-precision matches; if uncertain, keep extracted name.
     - Extract ONLY parties mentioned in the case text, not from general knowledge.
+    - ONLY use the six enumerated role values listed above - no exceptions.
 
     CASE_TEXT:
     {CASE_TEXT}

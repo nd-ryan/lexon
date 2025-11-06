@@ -260,8 +260,20 @@
 
 - label: Party
   instructions: |
-    Identify and extract all parties involved in the case, labeling them by role elsewhere. 
-    Use the entity's official name and the entity type.
+    Identify and extract all parties involved in the case. Use the entity's official name and the entity type.
+    
+    CRITICAL ROLE CONSTRAINT: When assigning party roles in case_roles, you MUST use ONLY these exact values:
+    - plaintiff
+    - defendant
+    - appellant
+    - appellee
+    - petitioner
+    - respondent
+    
+    DO NOT use any other role labels (e.g., "amicus", "intervenor", "third-party", "amicus curiae", etc.).
+    If a party has a non-standard role (like amicus curiae), you must map them to the closest standard role if they are a primary party
+    
+    Only include parties that have one of the six enumerated roles above.
   examples:
     - name: "Omega BioTech, Inc."
       type: corporation
