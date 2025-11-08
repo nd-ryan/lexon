@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { formatLabel } from '@/lib/cases/formatting'
 import { getPropertySchema } from '@/lib/cases/schemaHelpers'
+import { useAppStore } from '@/lib/store/appStore'
 import type { Schema } from '@/types/case-graph'
 
 interface FieldProps {
@@ -18,7 +19,6 @@ interface FieldProps {
   setPendingEdit: (path: (string | number)[], value: any) => void
   setValueAtPath: (path: (string | number)[], value: any) => void
   pendingEditsRef: React.MutableRefObject<Record<string, any>>
-  pendingEditsVersion: number
   nodeOptions?: { id: string; display: string }[]
   nodeIdToDisplay?: Record<string, string>
 }
@@ -34,10 +34,12 @@ export function Field({
   setPendingEdit,
   setValueAtPath,
   pendingEditsRef,
-  pendingEditsVersion,
   nodeOptions = [],
   nodeIdToDisplay = {}
 }: FieldProps) {
+  // Subscribe directly to global store for pendingEditsVersion
+  const pendingEditsVersion = useAppStore(s => s.pendingEditsVersion)
+  
   const indentStyle = useMemo(() => ({ marginLeft: depth * 16 }), [depth])
   
   // Get schema definition for this property
@@ -48,8 +50,8 @@ export function Field({
   const required = uiConfig?.required
 
   // Check for pending edits for this field (read fresh on every render)
-  const fieldPath = [...path, label]
-  const key = fieldPath.join('.')
+  // Memoize the field path key to avoid creating new strings on every render
+  const key = useMemo(() => path.join('.'), [path.join('.')])
   const currentValue = (key in pendingEditsRef.current) 
     ? pendingEditsRef.current[key] 
     : value
@@ -60,12 +62,12 @@ export function Field({
   // Update local when currentValue changes (including from pending edits)
   // pendingEditsVersion triggers re-check when other instances are edited
   useEffect(() => {
-    const freshKey = fieldPath.join('.')
-    const freshValue = (freshKey in pendingEditsRef.current)
-      ? pendingEditsRef.current[freshKey]
+    const freshValue = (key in pendingEditsRef.current)
+      ? pendingEditsRef.current[key]
       : value
-    setLocal(freshValue === null ? '' : String(freshValue))
-  }, [value, fieldPath.join('.'), pendingEditsVersion])
+    const newValue = freshValue === null ? '' : String(freshValue)
+    setLocal(newValue)
+  }, [value, key, pendingEditsVersion])
 
   // Hide temp_id wherever it appears
   if (label === 'temp_id') return null
@@ -142,8 +144,10 @@ export function Field({
             className="w-full rounded-md border border-gray-300 bg-white px-2 py-1 text-xs shadow-sm focus:border-gray-400 focus:outline-none"
             value={local}
             onChange={e => {
-              setLocal(e.target.value)
-              setValueAtPath(path, e.target.value)
+              const newVal = e.target.value
+              setLocal(newVal)
+              setPendingEdit(path, newVal)
+              setValueAtPath(path, newVal)
             }}
           >
             <option value="">Select...</option>
@@ -184,7 +188,8 @@ export function Field({
             onChange={e => {
               const newVal = e.target.value
               setLocal(newVal)
-              setPendingEdit([...path, label], newVal)
+              setPendingEdit(path, newVal)
+              setValueAtPath(path, newVal)
             }}
           />
         </div>
@@ -221,7 +226,8 @@ export function Field({
               const newVal = e.target.value
               setLocal(newVal)
               const parsed = newVal === '' ? '' : Number(newVal)
-              setPendingEdit([...path, label], parsed)
+              setPendingEdit(path, parsed)
+              setValueAtPath(path, parsed)
             }}
           />
         </div>
@@ -259,7 +265,8 @@ export function Field({
             onChange={e => {
               const newVal = e.target.value
               setLocal(newVal)
-              setPendingEdit([...path, label], newVal)
+              setPendingEdit(path, newVal)
+              setValueAtPath(path, newVal)
             }}
           />
         ) : (
@@ -270,7 +277,8 @@ export function Field({
             onChange={e => {
               const newVal = e.target.value
               setLocal(newVal)
-              setPendingEdit([...path, label], newVal)
+              setPendingEdit(path, newVal)
+              setValueAtPath(path, newVal)
             }}
           />
         )}
@@ -305,7 +313,11 @@ export function Field({
           className="h-3.5 w-3.5"
           type="checkbox"
           checked={value}
-          onChange={e => setValueAtPath(path, e.target.checked)}
+          onChange={e => {
+            const newVal = e.target.checked
+            setPendingEdit(path, newVal)
+            setValueAtPath(path, newVal)
+          }}
         />
       </div>
     )
@@ -331,7 +343,6 @@ export function Field({
             setPendingEdit={setPendingEdit}
             setValueAtPath={setValueAtPath}
             pendingEditsRef={pendingEditsRef}
-            pendingEditsVersion={pendingEditsVersion}
             nodeOptions={nodeOptions}
             nodeIdToDisplay={nodeIdToDisplay}
           />
@@ -353,7 +364,6 @@ export function Field({
           setPendingEdit={setPendingEdit}
           setValueAtPath={setValueAtPath}
           pendingEditsRef={pendingEditsRef}
-          pendingEditsVersion={pendingEditsVersion}
           nodeOptions={nodeOptions}
           nodeIdToDisplay={nodeIdToDisplay}
         />
@@ -366,8 +376,13 @@ export function Field({
       <label className="block text-xs font-medium text-gray-700 mt-2 mb-0.5">{formatLabel(label)}</label>
       <input
         className="w-full rounded-md border border-gray-300 bg-white px-2 py-1 text-xs shadow-sm focus:border-gray-400 focus:outline-none"
-        value={String(value)}
-        onChange={e => setValueAtPath(path, e.target.value)}
+        value={local}
+        onChange={e => {
+          const newVal = e.target.value
+          setLocal(newVal)
+          setPendingEdit(path, newVal)
+          setValueAtPath(path, newVal)
+        }}
       />
     </div>
   )
@@ -383,7 +398,6 @@ interface ObjectFieldsProps {
   setPendingEdit: (path: (string | number)[], value: any) => void
   setValueAtPath: (path: (string | number)[], value: any) => void
   pendingEditsRef: React.MutableRefObject<Record<string, any>>
-  pendingEditsVersion: number
   nodeOptions?: { id: string; display: string }[]
   nodeIdToDisplay?: Record<string, string>
 }
@@ -398,7 +412,6 @@ export function ObjectFields({
   setPendingEdit,
   setValueAtPath,
   pendingEditsRef,
-  pendingEditsVersion,
   nodeOptions,
   nodeIdToDisplay
 }: ObjectFieldsProps) {
@@ -426,7 +439,6 @@ export function ObjectFields({
           setPendingEdit={setPendingEdit}
           setValueAtPath={setValueAtPath}
           pendingEditsRef={pendingEditsRef}
-          pendingEditsVersion={pendingEditsVersion}
           nodeOptions={nodeOptions}
           nodeIdToDisplay={nodeIdToDisplay}
         />

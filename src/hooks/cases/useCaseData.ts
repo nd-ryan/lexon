@@ -26,7 +26,6 @@ export function useCaseData(id: string) {
       // Store the structured display data for rendering
       if (display.success && display.data) {
         setDisplayData(display.data)
-        console.log('Display data received:', display.data)
       }
     })()
   }, [id])

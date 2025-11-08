@@ -12,6 +12,10 @@ type AppState = {
   catalogLoading: boolean
   catalogError: string | null
   loadCatalog: () => Promise<void>
+  
+  // Pending edits version for syncing reused nodes
+  pendingEditsVersion: number
+  incrementPendingEditsVersion: () => void
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -21,6 +25,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   catalogNodes: {},
   catalogLoading: false,
   catalogError: null,
+  pendingEditsVersion: 0,
+  
+  incrementPendingEditsVersion: () => {
+    set(state => ({ pendingEditsVersion: state.pendingEditsVersion + 1 }))
+  },
   
   loadSchema: async () => {
     try {

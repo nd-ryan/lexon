@@ -33,7 +33,6 @@ interface NodeCardProps {
   setPendingEdit: (path: (string | number)[], value: any) => void
   setValueAtPath: (path: (string | number)[], value: any) => void
   pendingEditsRef: React.MutableRefObject<Record<string, any>>
-  pendingEditsVersion: number
   nodeOptions?: { id: string; display: string }[]
   nodeIdToDisplay?: Record<string, string>
 }
@@ -61,7 +60,6 @@ export function NodeCard({
   setPendingEdit,
   setValueAtPath,
   pendingEditsRef,
-  pendingEditsVersion,
   nodeOptions,
   nodeIdToDisplay
 }: NodeCardProps) {
@@ -113,7 +111,6 @@ export function NodeCard({
         setPendingEdit={setPendingEdit}
         setValueAtPath={setValueAtPath}
         pendingEditsRef={pendingEditsRef}
-        pendingEditsVersion={pendingEditsVersion}
         nodeOptions={nodeOptions}
         nodeIdToDisplay={nodeIdToDisplay}
       />

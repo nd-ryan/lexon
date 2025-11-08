@@ -17,7 +17,6 @@ export function extractNodeTypesFromSchema(schemaPayload: any): string[] {
     try {
       normalized = JSON.parse(normalized)
     } catch {
-      // eslint-disable-next-line no-console
       console.warn('Schema was a string but could not be parsed as JSON')
       return []
     }

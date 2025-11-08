@@ -3,12 +3,13 @@
  * Allows fast typing without triggering full re-renders
  */
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useRef } from 'react'
+import { useAppStore } from '@/lib/store/appStore'
 
 export function usePendingEdits() {
   const pendingEditsRef = useRef<Record<string, any>>({})
-  const [pendingEditsVersion, setPendingEditsVersion] = useState(0)
   const versionTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const incrementVersion = useAppStore(s => s.incrementPendingEditsVersion)
   
   // Store pending edit without triggering re-render (fast!)
   const setPendingEdit = useCallback((path: (string|number)[], value: any) => {
@@ -22,11 +23,11 @@ export function usePendingEdits() {
       clearTimeout(versionTimerRef.current)
     }
     versionTimerRef.current = setTimeout(() => {
-      setPendingEditsVersion(v => v + 1)
+      incrementVersion() // Increment in global store
     }, 300) // 300ms debounce
     
     return true // Indicates change was made
-  }, [])
+  }, [incrementVersion])
   
   // Get value with pending edits applied (check edits first, then graphState)
   const getValueWithEdits = useCallback((path: (string|number)[], graphState: any) => {
@@ -61,7 +62,6 @@ export function usePendingEdits() {
   
   return {
     pendingEditsRef,
-    pendingEditsVersion,
     setPendingEdit,
     getValueWithEdits,
     clearPendingEdits,
