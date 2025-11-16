@@ -298,6 +298,23 @@
   instructions: |
     Identify and extract all parties involved in the case. Use the entity's official name and the entity type.
     
+    CRITICAL TYPE CONSTRAINT: When assigning party types, you MUST use ONLY these exact five values:
+    - individual (for natural persons)
+    - corporation (for incorporated business entities, companies, LLCs)
+    - organization (for non-profit organizations, unincorporated associations, educational institutions, unions, trade associations)
+    - government (for government entities, agencies, departments, municipalities at any level - federal, state, local)
+    - group (for informal groups, collectives, or multiple unnamed parties)
+    
+    DO NOT use any other type labels such as "unincorporated association", "educational institution", 
+    "government entity", "business", "LLC", "agency", "municipality", "union", etc. 
+    You MUST map every party to one of the five enumerated values above.
+    
+    Mapping examples:
+    - "Harvard University" → organization (not "educational institution")
+    - "Teamsters Local 507" → organization (not "union" or "unincorporated association")
+    - "U.S. Department of Justice" → government (not "government entity" or "agency")
+    - "Acme LLC" → corporation (not "LLC" or "business")
+    
     CRITICAL ROLE CONSTRAINT: When assigning party roles in case_roles, you MUST use ONLY these exact values:
     - plaintiff
     - defendant
@@ -315,6 +332,12 @@
       type: corporation
     - name: "Alicia Ramirez"
       type: individual
+    - name: "Sierra Club"
+      type: organization
+    - name: "City of Boston"
+      type: government
+    - name: "Unnamed protestors"
+      type: group
 
 - label: Doctrine
   instructions: |

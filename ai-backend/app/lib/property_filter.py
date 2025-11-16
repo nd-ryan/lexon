@@ -5,6 +5,23 @@ from typing import Any, Dict, List, Optional
 from app.lib.schema_runtime import load_schema_payload
 
 
+def prepare_for_postgres_save(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply all cleanup rules for Postgres storage.
+    
+    Strips embeddings and catalog nodes before saving to ensure consistent
+    storage rules. This is the single source of truth for what gets saved.
+    
+    Args:
+        data: Case graph data with nodes and edges
+        
+    Returns:
+        Cleaned data ready for Postgres storage
+    """
+    cleaned = strip_embeddings(data)
+    cleaned = strip_catalog_nodes(cleaned)
+    return cleaned
+
+
 def _is_hidden_property(name: str, meta: Dict[str, Any]) -> bool:
     """Check if a property should be hidden from the frontend."""
     # Always preserve *_id fields for catalog referential integrity
@@ -383,6 +400,87 @@ def strip_catalog_nodes(case_data: Dict[str, Any]) -> Dict[str, Any]:
     result = {**case_data, "nodes": filtered_nodes, "edges": edges}
     
     return result
+
+
+def add_temp_ids(case_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Add temp_id to nodes by copying from their *_id property.
+    
+    The temp_id is removed before Neo4j upload to keep the data clean,
+    but is needed for Postgres storage and frontend consistency.
+    
+    Args:
+        case_data: Case data dict with {nodes: [...], edges: [...]}
+        
+    Returns:
+        Case data with temp_id added to all nodes
+    """
+    if not isinstance(case_data, dict):
+        return case_data
+    
+    schema_payload = load_schema_payload()
+    nodes = case_data.get("nodes", [])
+    
+    if not isinstance(nodes, list):
+        return case_data
+    
+    # Add temp_id to each node by copying from its *_id property
+    updated_nodes = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            updated_nodes.append(node)
+            continue
+        
+        label = node.get("label")
+        props = node.get("properties") or {}
+        
+        # Get the *_id property name for this label
+        if isinstance(label, str) and isinstance(props, dict):
+            id_prop = _get_id_prop_for_label(label, schema_payload)
+            node_uuid = props.get(id_prop)
+            
+            # Copy *_id value to temp_id
+            if node_uuid:
+                node_with_temp_id = {**node, "temp_id": str(node_uuid)}
+                updated_nodes.append(node_with_temp_id)
+            else:
+                updated_nodes.append(node)
+        else:
+            updated_nodes.append(node)
+    
+    result = {**case_data, "nodes": updated_nodes}
+    return result
+
+
+def _get_id_prop_for_label(label: str, schema_payload: Any) -> str:
+    """Get the *_id property name for a label from schema.
+    
+    Args:
+        label: The node label
+        schema_payload: The schema array from schema.json
+        
+    Returns:
+        The *_id property name (e.g., 'case_id', 'law_id', etc.)
+    """
+    # Convert label to snake_case for default
+    snake = re.sub(r"(?<!^)(?=[A-Z])", "_", label).lower()
+    preferred = f"{snake}_id"
+    
+    if isinstance(schema_payload, list):
+        for node_def in schema_payload:
+            if not isinstance(node_def, dict):
+                continue
+            if node_def.get("label") != label:
+                continue
+            props = node_def.get("properties") or {}
+            if isinstance(props, dict):
+                # exact preferred
+                if preferred in props:
+                    return preferred
+                # any *_id
+                for pname in props.keys():
+                    if isinstance(pname, str) and pname.endswith("_id"):
+                        return pname
+    return preferred
 
 
 def filter_case_data(case_data: Dict[str, Any]) -> Dict[str, Any]:

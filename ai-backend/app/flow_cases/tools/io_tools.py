@@ -16,11 +16,6 @@ try:
 except Exception:  # pragma: no cover
     pdfplumber = None  # type: ignore
 
-try:
-    import pypdf  # Faster PDF text extraction
-except Exception:  # pragma: no cover
-    pypdf = None  # type: ignore
-
 
 def read_document(file_path: str, filename: str) -> Dict[str, Any]:
     """
@@ -57,55 +52,13 @@ def read_document(file_path: str, filename: str) -> Dict[str, Any]:
             except Exception as e:
                 logger.warning(f"DOCX extraction failed: {e}")
 
-        if not text and ext == ".pdf":
-            import time
-            logger.info(f"[PDF] Starting extraction for {filename} ({os.path.getsize(file_path)} bytes)")
-            start_time = time.time()
-            
-            # Try pypdf first (much faster for simple text extraction)
-            if pypdf is not None and not text:
-                try:
-                    with open(file_path, "rb") as f:
-                        reader = pypdf.PdfReader(f)  # type: ignore
-                        num_pages = len(reader.pages)
-                        logger.info(f"[PDF] pypdf: Opened PDF with {num_pages} pages (took {time.time() - start_time:.2f}s)")
-                        
-                        pages = []
-                        for i, page in enumerate(reader.pages):
-                            page_text = page.extract_text() or ""
-                            pages.append(page_text)
-                            
-                            # Log progress every 50 pages (pypdf is much faster)
-                            if (i + 1) % 50 == 0 or i == num_pages - 1:
-                                logger.info(f"[PDF] pypdf: Extracted page {i + 1}/{num_pages} (total: {time.time() - start_time:.2f}s)")
-                        
-                        text = "\n\n".join(pages).strip()
-                        logger.info(f"[PDF] pypdf: Extraction complete: {len(text)} chars in {time.time() - start_time:.2f}s")
-                except Exception as e:
-                    logger.warning(f"[PDF] pypdf extraction failed: {e}, falling back to pdfplumber")
-            
-            # Fallback to pdfplumber if pypdf failed or unavailable (slower but more robust)
-            if not text and pdfplumber is not None:
-                try:
-                    logger.info(f"[PDF] Using pdfplumber fallback")
-                    with pdfplumber.open(file_path) as pdf:  # type: ignore
-                        num_pages = len(pdf.pages)
-                        logger.info(f"[PDF] pdfplumber: Opened PDF with {num_pages} pages")
-                        
-                        pages = []
-                        for i, page in enumerate(pdf.pages):
-                            page_start = time.time()
-                            page_text = page.extract_text() or ""
-                            pages.append(page_text)
-                            
-                            # Log progress every 10 pages (pdfplumber is slower)
-                            if (i + 1) % 10 == 0 or i == num_pages - 1:
-                                logger.info(f"[PDF] pdfplumber: Extracted page {i + 1}/{num_pages} (page took {time.time() - page_start:.2f}s, total: {time.time() - start_time:.2f}s)")
-                        
-                        text = "\n\n".join(pages).strip()
-                        logger.info(f"[PDF] pdfplumber: Extraction complete: {len(text)} chars in {time.time() - start_time:.2f}s")
-                except Exception as e:
-                    logger.warning(f"[PDF] pdfplumber extraction failed: {e}")
+        if not text and ext == ".pdf" and pdfplumber is not None:
+            try:
+                with pdfplumber.open(file_path) as pdf:  # type: ignore
+                    pages = [p.extract_text() or "" for p in pdf.pages]
+                    text = "\n\n".join(pages).strip()
+            except Exception as e:
+                logger.warning(f"PDF extraction failed: {e}")
 
         if not text:
             # Fallback: read bytes and decode best-effort

@@ -41,7 +41,48 @@ class CaseRepo:
     def list_cases(self, conn: Connection, q: Optional[str], limit: int, offset: int) -> List[Dict[str, Any]]:
         stmt = select(cases).order_by(cases.c.updated_at.desc()).limit(limit).offset(offset)
         rows = conn.execute(stmt).mappings().all()
-        return [dict(r) for r in rows]
+        
+        # Return minimal data for list view - extract only necessary fields
+        result = []
+        for row in rows:
+            case_dict = dict(row)
+            extracted = case_dict.get("extracted") or {}
+            nodes = extracted.get("nodes", [])
+            edges = extracted.get("edges", [])
+            
+            # Find Case node for case_name and its temp_id
+            case_node = next(
+                (n for n in nodes if n.get("label") == "Case"),
+                None
+            )
+            case_name = None
+            case_temp_id = None
+            if case_node:
+                if case_node.get("properties"):
+                    case_name = case_node["properties"].get("name")
+                case_temp_id = case_node.get("temp_id")
+            
+            # Find Domain via CONTAINS edge (Domain → Case)
+            # The edge's 'from' field contains the domain_id (Neo4j ID)
+            domain_id = None
+            if case_temp_id:
+                for edge in edges:
+                    if isinstance(edge, dict) and edge.get("label") == "CONTAINS" and edge.get("to") == case_temp_id:
+                        domain_id = edge.get("from")
+                        break
+            
+            # Return minimal fields only
+            result.append({
+                "id": case_dict.get("id"),
+                "filename": case_dict.get("filename"),
+                "status": case_dict.get("status"),
+                "extracted": {
+                    "case_name": case_name
+                },
+                "domain_id": domain_id  # Send domain_id instead of domain_name
+            })
+        
+        return result
 
     def get_case(self, conn: Connection, case_id: str) -> Optional[Dict[str, Any]]:
         row = conn.execute(select(cases).where(cases.c.id == uuid.UUID(case_id))).mappings().first()

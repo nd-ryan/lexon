@@ -69,6 +69,7 @@ class KGState(BaseModel):
     original_input: Dict[str, Any] = {}  # Store original input for validation
     id_mapping: Dict[str, str] = {}  # Store temp_id -> uuid mapping for validation
     catalog_node_references: Dict[str, str] = {}  # Store original catalog node IDs referenced in edges: edge_ref -> expected_uuid
+    nodes_needing_embeddings: set = set()  # Set of node UUIDs that need embedding generation
 
 
 class KGFlow(Flow[KGState]):
@@ -377,9 +378,7 @@ class KGFlow(Flow[KGState]):
                 props[id_prop] = str(uuid.uuid4())
             
             n["properties"] = props
-            # remove temp_id from node object as requested
-            if "temp_id" in n:
-                n.pop("temp_id", None)
+            # Note: temp_id will be removed before Neo4j upload and added back before Postgres save
 
         data["nodes"] = nodes
         data["edges"] = edges
@@ -387,10 +386,147 @@ class KGFlow(Flow[KGState]):
         return data
 
     @listen(normalize_ids)
+    def check_existing_for_embeddings(self, ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """Query Neo4j for existing nodes to determine which need new embeddings.
+        
+        Compares text field hashes to determine if embeddings need regeneration.
+        """
+        data = dict(ctx or {})
+        nodes = list(data.get("nodes") or [])
+        schema_payload = self.state.schema_payload
+        embedding_config = self.state.embedding_config or {}
+        
+        # Set to store UUIDs of nodes that need embeddings
+        nodes_needing_embeddings = set()
+        
+        try:
+            from app.lib.neo4j_client import neo4j_client
+            import hashlib
+            
+            # Group nodes by label for batch querying
+            nodes_by_label = {}
+            for node in nodes:
+                if not isinstance(node, dict):
+                    continue
+                
+                label = node.get("label")
+                if not isinstance(label, str):
+                    continue
+                
+                # Skip nodes that don't have embeddings configured
+                if label not in embedding_config or not embedding_config[label]:
+                    continue
+                
+                props = node.get("properties") or {}
+                id_prop = get_id_prop_for_label(label, schema_payload)
+                node_uuid = props.get(id_prop)
+                
+                if node_uuid and is_uuid(str(node_uuid)):
+                    if label not in nodes_by_label:
+                        nodes_by_label[label] = []
+                    nodes_by_label[label].append({
+                        "uuid": str(node_uuid),
+                        "props": props,
+                        "embedding_fields": embedding_config[label]
+                    })
+            
+            # Query Neo4j for existing nodes with their text fields
+            for label, node_list in nodes_by_label.items():
+                if not node_list:
+                    continue
+                
+                uuids = [n["uuid"] for n in node_list]
+                id_prop = get_id_prop_for_label(label, schema_payload)
+                
+                # Get embedding source fields for this label
+                embedding_fields = node_list[0]["embedding_fields"]
+                
+                # Build query to fetch text fields
+                return_fields = [f"n.{id_prop} as id"] + [f"n.{field} as {field}" for field in embedding_fields]
+                query = f"MATCH (n:`{label}`) WHERE n.{id_prop} IN $ids RETURN {', '.join(return_fields)}"
+                
+                try:
+                    result = neo4j_client.execute_query(query, {"ids": uuids})
+                    
+                    # Build hash map of existing node text fields
+                    existing_hashes = {}
+                    for record in result:
+                        node_id = str(record.get("id"))
+                        if not node_id:
+                            continue
+                        
+                        # Hash all text fields
+                        text_hash = {}
+                        for field in embedding_fields:
+                            text_value = record.get(field, "")
+                            if text_value:
+                                hash_obj = hashlib.sha256(str(text_value).encode('utf-8'))
+                                text_hash[field] = hash_obj.hexdigest()
+                        existing_hashes[node_id] = text_hash
+                    
+                    # Compare with input nodes to determine which need new embeddings
+                    for node_info in node_list:
+                        node_uuid = node_info["uuid"]
+                        props = node_info["props"]
+                        
+                        # If node doesn't exist in Neo4j, it needs embeddings
+                        if node_uuid not in existing_hashes:
+                            nodes_needing_embeddings.add(node_uuid)
+                            logger.debug(f"Node {label}:{node_uuid} is new, needs embeddings")
+                            continue
+                        
+                        # Compare hashes of text fields
+                        existing_hash = existing_hashes[node_uuid]
+                        needs_update = False
+                        
+                        for field in embedding_fields:
+                            current_text = props.get(field, "")
+                            if current_text:
+                                current_hash = hashlib.sha256(str(current_text).encode('utf-8')).hexdigest()
+                                if existing_hash.get(field) != current_hash:
+                                    needs_update = True
+                                    logger.debug(f"Node {label}:{node_uuid} field '{field}' changed, needs embeddings")
+                                    break
+                        
+                        if needs_update:
+                            nodes_needing_embeddings.add(node_uuid)
+                    
+                    logger.info(f"Checked {len(node_list)} {label} nodes: {len([n for n in node_list if n['uuid'] in nodes_needing_embeddings])} need embeddings")
+                    
+                except Exception as e:
+                    logger.warning(f"Failed to check existing {label} nodes for embeddings: {e}")
+                    # On error, assume all nodes need embeddings
+                    for node_info in node_list:
+                        nodes_needing_embeddings.add(node_info["uuid"])
+        
+        except Exception as e:
+            logger.warning(f"Failed to check existing nodes for embeddings: {e}")
+            # On error, generate embeddings for all nodes (safe default)
+            for node in nodes:
+                if isinstance(node, dict):
+                    label = node.get("label")
+                    if label in embedding_config and embedding_config[label]:
+                        props = node.get("properties") or {}
+                        id_prop = get_id_prop_for_label(label, schema_payload)
+                        node_uuid = props.get(id_prop)
+                        if node_uuid:
+                            nodes_needing_embeddings.add(str(node_uuid))
+        
+        # Store in state
+        self.state.nodes_needing_embeddings = nodes_needing_embeddings
+        logger.info(f"Total nodes needing embeddings: {len(nodes_needing_embeddings)}")
+        
+        data["nodes"] = nodes
+        self.state.payload = data
+        return data
+
+    @listen(check_existing_for_embeddings)
     def compute_embeddings(self, ctx: Dict[str, Any]) -> Dict[str, Any]:
         data = dict(ctx or {})
         nodes = list(data.get("nodes") or [])
         cfg = self.state.embedding_config or {}
+        nodes_needing_embeddings = self.state.nodes_needing_embeddings or set()
+        schema_payload = self.state.schema_payload
 
         for n in nodes:
             if not isinstance(n, dict):
@@ -399,10 +535,23 @@ class KGFlow(Flow[KGState]):
             if not isinstance(label, str):
                 continue
             props = dict(n.get("properties") or {})
+            
+            # Get node UUID to check if it needs embeddings
+            id_prop = get_id_prop_for_label(label, schema_payload)
+            node_uuid = props.get(id_prop)
+            
+            # Skip embedding generation if node doesn't need it
+            if node_uuid and str(node_uuid) not in nodes_needing_embeddings:
+                logger.debug(f"Skipping embeddings for {label}:{node_uuid} (unchanged)")
+                n["properties"] = props
+                continue
+            
             targets = cfg.get(label, [])
             if not isinstance(targets, list) or not targets:
                 n["properties"] = props
                 continue
+            
+            embeddings_generated = 0
             for prop_name in targets:
                 try:
                     raw_val = props.get(prop_name)
@@ -414,9 +563,14 @@ class KGFlow(Flow[KGState]):
                         continue
                     vec = generate_embedding_sync(text)
                     props[f"{prop_name}_embedding"] = vec
+                    embeddings_generated += 1
                 except Exception as e:
                     logger.warning(f"KGFlow: embedding failed for {label}.{prop_name}: {e}")
                     continue
+            
+            if embeddings_generated > 0:
+                logger.debug(f"Generated {embeddings_generated} embeddings for {label}:{node_uuid}")
+            
             n["properties"] = props
 
         data["nodes"] = nodes
@@ -463,6 +617,25 @@ class KGFlow(Flow[KGState]):
         return truncated
 
     @listen(compute_embeddings)
+    def remove_temp_ids(self, ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """Remove temp_id from all nodes before Neo4j upload.
+        
+        The temp_id is only needed during transformation for ID mapping.
+        It will be added back before Postgres save by copying from the node's *_id property.
+        """
+        data = dict(ctx or {})
+        nodes = list(data.get("nodes") or [])
+        
+        for node in nodes:
+            if isinstance(node, dict) and "temp_id" in node:
+                del node["temp_id"]
+        
+        data["nodes"] = nodes
+        self.state.payload = data
+        logger.debug("Removed temp_id from all nodes before Neo4j upload")
+        return data
+
+    @listen(remove_temp_ids)
     def finish(self, ctx: Dict[str, Any]) -> Dict[str, Any]:
         data = dict(ctx or {})
         # Log ReliefType.relief_type_id from final data
@@ -473,18 +646,6 @@ class KGFlow(Flow[KGState]):
                 if isinstance(props, dict):
                     relief_type_id = props.get("relief_type_id")
                     logger.info("KGFlow final: ReliefType node %d has relief_type_id=%s", i, relief_type_id)
-        # Log structure/schema of the result
-        structure = self._extract_structure(data)
-        try:
-            logger.info("KGFlow result structure: %s", json.dumps(structure, indent=2, ensure_ascii=False))
-        except Exception:
-            logger.info("KGFlow result structure (non-JSON-serializable): %s", str(structure))
-        # Log full final data with truncated embeddings
-        try:
-            truncated_data = self._truncate_embeddings(data)
-            logger.info("KGFlow full result data: %s", json.dumps(truncated_data, indent=2, ensure_ascii=False))
-        except Exception:
-            logger.info("KGFlow full result data (non-JSON-serializable): %s", str(data))
         return data
 
     @listen(finish)

@@ -181,7 +181,7 @@ def get_case_display(case_id: str, view: str = "holdingsCentric", db: Session = 
 def update_case(case_id: str, payload: dict, db: Session = Depends(get_db)):
     # Validate catalog IDs before saving
     from app.lib.catalog_validator import validate_catalog_ids
-    from app.lib.property_filter import strip_embeddings, strip_catalog_nodes
+    from app.lib.property_filter import prepare_for_postgres_save
     
     try:
         nodes = payload.get("nodes", [])
@@ -193,8 +193,7 @@ def update_case(case_id: str, payload: dict, db: Session = Depends(get_db)):
             raise HTTPException(400, error_msg)
         
         user_id = "editor"  # TODO: integrate auth user
-        cleaned_payload = strip_embeddings(payload)
-        cleaned_payload = strip_catalog_nodes(cleaned_payload)
+        cleaned_payload = prepare_for_postgres_save(payload)
         updated = case_repo.update_case(db.connection(), case_id, cleaned_payload, user_id)
         db.commit()
         logger.info(f"Case {case_id} saved successfully by {user_id}")

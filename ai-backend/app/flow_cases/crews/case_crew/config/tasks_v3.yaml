@@ -325,11 +325,23 @@ phase7_argument_concepts_task:
     - For selected IDs: ONLY return IDs that exist in the provided catalogs.
     - For new nodes: ensure properties match the schema definitions provided.
     - Return ONLY the ID field values as they appear in the catalog entries (e.g., doctrine_id, policy_id, factpattern_id)
-    - CRITICAL: When selecting from catalog, use the actual ID field value (e.g., "d12345"), NOT the name field (e.g., NOT "Rule of Reason")
+    - CRITICAL: When selecting from catalog, use the actual ID field value (e.g., "d12345" or UUID format), NOT the name field (e.g., NOT "Rule of Reason")
     - CRITICAL: For new concepts, put them in the new_doctrines/new_policies/new_factpatterns arrays, NOT in the doctrine_ids/policy_ids/factpattern_ids arrays
+    - CRITICAL: NEVER put temp_ids (like "n1", "n32", "n123") in the doctrine_ids/policy_ids/factpattern_ids arrays - these are NOT valid catalog IDs
+    - CRITICAL: doctrine_ids/policy_ids/factpattern_ids arrays should ONLY contain UUIDs or IDs that appear in the CATALOGS_JSON, never temp_ids from nodes
     - If you cannot find an exact ID match in the catalog, either use new_doctrines/new_policies/new_factpatterns or leave the IDs array empty
-    - NEVER invent IDs (UUIDs, names, etc.) - only use IDs that literally appear in the catalog
+    - NEVER invent IDs (UUIDs, names, temp_ids, etc.) - only use IDs that literally appear in the catalog
     - NEVER use general legal knowledge - base everything on the argument text and case context
+    
+    WRONG EXAMPLES (DO NOT DO THIS):
+    ❌ "doctrine_ids": ["n32"] - This is a temp_id, not a catalog ID
+    ❌ "doctrine_ids": ["Rule of Reason"] - This is a name, not an ID
+    ❌ "doctrine_ids": ["doctrine123"] - This is invented, not from catalog
+    
+    CORRECT EXAMPLES:
+    ✅ "doctrine_ids": ["a1b2c3d4-5e6f-7g8h-9i0j-k1l2m3n4o5p6"] - Real UUID from catalog
+    ✅ "doctrine_ids": [] and "new_doctrines": [{"properties": {...}}] - Creating new doctrine
+    ✅ "doctrine_ids": [] - No matching doctrine
 
     DOCTRINE INSTRUCTIONS:
     {DOCTRINE_INSTRUCTIONS}
@@ -425,31 +437,11 @@ phase9_party_task:
         "case_roles": [ { "party_index": <index in parties array>, "role": <ROLE_VALUE> } ]
     }
 
-    CRITICAL ROLE CONSTRAINT - READ CAREFULLY:
-    The "role" field in case_roles MUST be ONE OF THESE EXACT SIX VALUES ONLY:
-      • "plaintiff"
-      • "defendant"
-      • "appellant"
-      • "appellee"
-      • "petitioner"
-      • "respondent"
-    
-    ABSOLUTELY DO NOT use any other values including but not limited to:
-      • "amicus" or "amicus curiae"
-      • "intervenor"
-      • "third-party"
-      • "cross-appellant"
-      • "appellee-cross-appellant"
-      • or any other role label
-    
-    If a party in the case text has a non-standard role (like amicus curiae, intervenor, etc.),
-    you must map them to the closest standard role if they are a primary party.
-
     Constraints:
     - Only standardize to catalog entries; do not invent catalog names.
     - Prefer high-precision matches; if uncertain, keep extracted name.
     - Extract ONLY parties mentioned in the case text, not from general knowledge.
-    - ONLY use the six enumerated role values listed above - no exceptions.
+    - ONLY use the five enumerated type values and six enumerated role values listed above - no exceptions.
 
     CASE_TEXT:
     {CASE_TEXT}

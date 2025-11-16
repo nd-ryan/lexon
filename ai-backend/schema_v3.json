@@ -302,7 +302,7 @@
     "properties": {
       "relief_type_upload_code": { "type": "STRING", "ui": { "hidden": true } },
       "relief_type_id": { "type": "STRING", "ui": { "hidden": true } },
-      "type": { "type": "STRING", "ui": { "order": 1, "input": "select", "options": ["injunction", "damages", "declaratory", "habeas corpus", "specific performance", "royalty", "accounting"], "label": "Type", "required": true } }
+      "type": { "type": "STRING", "ui": { "order": 1, "input": "select", "options": ["injunction", "damages", "declaratory", "habeas corpus", "specific performance", "royalty", "accounting", "divestiture", "dissolution", "reversal", "remand"], "label": "Type", "required": true } }
     },
     "relationships": {}
   },

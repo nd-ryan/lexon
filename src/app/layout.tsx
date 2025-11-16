@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import SessionProviderWrapper from "@/components/providers/session-provider.client";
 import UserNav from "@/components/auth/user-nav.client";
+import AdminLink from "@/components/nav/AdminLink.client";
 import Link from "next/link";
 
 const geistSans = Geist({
@@ -47,6 +48,7 @@ export default function RootLayout({
                   <Link href="/cases/upload" className="text-gray-700 hover:text-gray-900">
                     Upload
                   </Link>
+                  <AdminLink />
                   <UserNav />
                 </div>
               </div>
