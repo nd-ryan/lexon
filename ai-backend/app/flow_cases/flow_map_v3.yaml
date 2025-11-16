@@ -338,7 +338,7 @@
   instructions: |
     A legal policy is the underlying justifications or social/economic goals the court cites to support its reasoning, distinct from the black-letter legal rule (doctrine) itself (e.g., 'promoting finality of judgments,' 'deterring corporate misconduct,' 'protecting consumers').
     Capture explicit policy considerations the court invokes. 
-    Use a concise name, short description, and the relevant discipline.
+    Use a concise name and short description.
   examples:
     - name: "Prevention of Cartel Evasion"
       description: >
@@ -346,14 +346,12 @@
         "any cartel 'could evade the antitrust laws simply by creating a joint venture"
         to serve as the exclusive seller of their competing products.'
         citing Judge Sotomayor's concurrence in MLB Properties).
-      discipline: economics
     - name: "Prevention of Concentration"
       description: >
         The Court emphasized that the 1950 amendment to Section 7 was designed to reach mergers "in their incipiency."
         "[I]t is apparent that a keystone in the erection of a barrier to what Congress saw was the rising tide of economic concentration,
         was its provision of authority for arresting mergers at a time when the trend to a lessening of competition in a line of commerce was still in its incipiency.
         Congress saw the process of concentration in American business as a dynamic force; it sought to assure the Federal Trade Commission and the courts the power to brake this force at its outset and before it gathered momentum."
-      discipline: economics
 
 - label: FactPattern
   instructions: |

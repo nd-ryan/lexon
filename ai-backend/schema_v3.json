@@ -228,8 +228,7 @@
       "name": { "type": "STRING", "ui": { "order": 1, "input": "text", "required": true, "label": "Name", "notes": "e.g., Press Freedom, Child Protection, National Security" } },
       "name_embedding": { "type": "LIST", "ui": { "hidden": true } },
       "description": { "type": "STRING", "ui": { "order": 2, "input": "textarea", "label": "Description", "required": true } },
-      "description_embedding": { "type": "LIST", "ui": { "hidden": true } },
-      "discipline": { "type": "STRING", "ui": { "order": 3, "input": "text", "label": "Discipline", "notes": "e.g., economics, psychology, sociology" } }
+      "description_embedding": { "type": "LIST", "ui": { "hidden": true } }
     },
     "relationships": {
       "RELATES_TO": {

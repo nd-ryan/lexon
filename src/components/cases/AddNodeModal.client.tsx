@@ -18,7 +18,7 @@ interface AddNodeModalProps {
   onSubmit: (payload: { node: GraphNode; edges: GraphEdge[] }) => void
 }
 
-export default function AddNodeModal({ open, nodeType, schema, existingNodes, parentContext: _parentContext, onCancel, onSubmit }: AddNodeModalProps) {
+export default function AddNodeModal({ open, nodeType, schema, existingNodes, onCancel, onSubmit }: AddNodeModalProps) {
   const schemaArray: SchemaItem[] = useMemo(() => {
     if (!schema) return []
     if (Array.isArray(schema)) return schema as SchemaItem[]
