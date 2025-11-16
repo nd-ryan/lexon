@@ -1297,20 +1297,60 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             batch_size = (self.state.flow_config or {}).get("batch_sizes", {}).get("phase5_rulings", 1)
             
             # Get cached node instructions for Argument (O(1) lookup)
-            argument_instructions, argument_examples_json = _get_label_instructions_and_examples("Argument", self.state.node_instructions_by_label)
+            argument_instructions, argument_examples_json_raw = _get_label_instructions_and_examples("Argument", self.state.node_instructions_by_label)
+            
+            # Filter out disposition_text from examples for Phase 5 (will be added in Phase 5B)
+            try:
+                examples_list = json.loads(argument_examples_json_raw) if isinstance(argument_examples_json_raw, str) else argument_examples_json_raw
+                if isinstance(examples_list, list):
+                    filtered_examples = []
+                    for ex in examples_list:
+                        if isinstance(ex, dict):
+                            # Remove disposition_text from each example
+                            filtered_ex = {k: v for k, v in ex.items() if k != "disposition_text"}
+                            # If it has nested arguments, filter those too
+                            if "arguments" in filtered_ex and isinstance(filtered_ex["arguments"], list):
+                                filtered_ex["arguments"] = [
+                                    {k: v for k, v in arg.items() if k != "disposition_text"}
+                                    for arg in filtered_ex["arguments"]
+                                    if isinstance(arg, dict)
+                                ]
+                            filtered_examples.append(filtered_ex)
+                    argument_examples_json = json.dumps(filtered_examples, ensure_ascii=False)
+                else:
+                    argument_examples_json = argument_examples_json_raw
+            except Exception:
+                argument_examples_json = argument_examples_json_raw
             
             # Get Argument schema
             labels_src = (self.state.schema_spec or {}).get("labels", []) if isinstance(self.state.schema_spec, dict) else []
             argument_def = next((ld for ld in labels_src if isinstance(ld, dict) and ld.get("label") == "Argument"), None)
             
+            # Filter disposition_text from schema for Phase 5
             argument_spec_text = ""
             if isinstance(argument_def, dict):
-                argument_def_props_only = {"label": argument_def.get("label"), "properties": argument_def.get("properties", [])}
+                # Filter out disposition_text property
+                filtered_props = [p for p in (argument_def.get("properties", []) or []) 
+                                  if isinstance(p, dict) and p.get("name") != "disposition_text"]
+                argument_def_props_only = {"label": argument_def.get("label"), "properties": filtered_props}
                 argument_spec_text = render_spec_text({"labels": [argument_def_props_only]})
             
-            argument_model = (self.state.models_by_label or {}).get("Argument")
-            if argument_model is None:
+            # Create filtered Argument model without disposition_text for Phase 5
+            base_argument_model = (self.state.models_by_label or {}).get("Argument")
+            if base_argument_model is None:
                 raise ValueError("Phase 5: Argument model not found in state; schema must be available for phase5")
+            
+            # Build a new model excluding disposition_text
+            try:
+                from typing import get_type_hints
+                fields_dict = {}
+                for field_name, field_info in base_argument_model.model_fields.items():
+                    if field_name != "disposition_text":
+                        fields_dict[field_name] = (field_info.annotation, field_info.default if field_info.default is not None else ...)
+                argument_model = create_model('ArgumentPhase5Model', **fields_dict)
+            except Exception as e:
+                logger.warning(f"Phase 5: Failed to create filtered Argument model: {e}; using base model")
+                argument_model = base_argument_model
             
             # Split rulings into batches
             total_rulings = len(rulings)
@@ -1481,6 +1521,133 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             return {"status": "phase5_skipped"}
 
     @listen(phase5_extract_arguments_per_ruling)
+    def phase5b_extract_disposition(self, _: Dict[str, Any]) -> Dict[str, Any]:
+        # Phase 5B: extract disposition_text for newly created arguments (those missing it)
+        logger.info("Phase 5B: extracting disposition_text for arguments")
+        if self.state.progress_callback:
+            try:
+                self.state.progress_callback("Phase 5B in progress: Extracting disposition text", "phase5b", 52)
+            except Exception as e:
+                logger.warning(f"Failed to publish progress: {e}")
+        try:
+            from .crews.case_crew.case_crew_v3 import CaseCrew as _CaseCrew
+            
+            # Filter arguments that need disposition_text (those without it)
+            arguments_needing_disposition = [
+                {"temp_id": n.get("temp_id"), "properties": n.get("properties") or {}}
+                for n in (self.state.nodes_accumulated or [])
+                if isinstance(n, dict) 
+                and n.get("label") == "Argument" 
+                and isinstance(n.get("temp_id"), str)
+                and not ((n.get("properties") or {}).get("disposition_text"))
+            ]
+            
+            if not arguments_needing_disposition:
+                logger.info("Phase 5B: all arguments already have disposition_text; skipping")
+                return {"status": "phase5b_skipped"}
+            
+            # Get batch size from config (default: 3)
+            batch_size = (self.state.flow_config or {}).get("batch_sizes", {}).get("phase5b_arguments", 3)
+            
+            total_args = len(arguments_needing_disposition)
+            num_batches = (total_args + batch_size - 1) // batch_size  # Ceiling division
+            logger.info(f"Phase 5B: Processing {total_args} arguments in {num_batches} batch(es) of size {batch_size}")
+            
+            # Get Argument examples and filter to show only argument fields (no ruling context)
+            argument_instructions, argument_examples_json_raw = _get_label_instructions_and_examples("Argument", self.state.node_instructions_by_label)
+            
+            # Extract just the argument objects from examples (strip ruling context)
+            try:
+                examples_list = json.loads(argument_examples_json_raw) if isinstance(argument_examples_json_raw, str) else argument_examples_json_raw
+                filtered_examples = []
+                if isinstance(examples_list, list):
+                    for ex in examples_list:
+                        if isinstance(ex, dict) and "arguments" in ex and isinstance(ex["arguments"], list):
+                            # Extract just the argument objects, keeping only relevant fields
+                            for arg in ex["arguments"]:
+                                if isinstance(arg, dict):
+                                    # Keep only: label, text, raised_by, status, disposition_text
+                                    filtered_arg = {
+                                        k: v for k, v in arg.items() 
+                                        if k in ["label", "text", "raised_by", "status", "disposition_text"]
+                                    }
+                                    if filtered_arg:  # Only add if it has any fields
+                                        filtered_examples.append(filtered_arg)
+                argument_examples_json = json.dumps(filtered_examples, ensure_ascii=False)
+            except Exception as e:
+                logger.warning(f"Phase 5B: Failed to filter argument examples: {e}")
+                argument_examples_json = "[]"
+            
+            dispositions_added = 0
+            
+            # Process arguments in batches
+            for batch_num in range(num_batches):
+                start_idx = batch_num * batch_size
+                end_idx = min(start_idx + batch_size, total_args)
+                batch_arguments = arguments_needing_disposition[start_idx:end_idx]
+                
+                logger.info(f"Phase 5B: Processing batch {batch_num + 1}/{num_batches} ({len(batch_arguments)} arguments)")
+                
+                # Build replacements for YAML task template
+                replacements = {
+                    "CASE_TEXT": self.state.document_text or "",
+                    "ARGUMENTS_JSON": json.dumps({"arguments": batch_arguments}, ensure_ascii=False),
+                    "ARGUMENT_EXAMPLES_JSON": argument_examples_json,
+                }
+                
+                # Create crew with replacements
+                crew = _CaseCrew(
+                    self.state.file_path,
+                    self.state.filename,
+                    self.state.case_id,
+                    tools=[],
+                    replacements=replacements,
+                )
+                
+                task = crew.phase5b_disposition_task()
+                single_crew = Crew(
+                    agents=[crew.phase1_extract_agent()],
+                    tasks=[task],
+                    process=Process.sequential,
+                )
+                
+                result = single_crew.kickoff()
+                
+                # Parse result
+                data = self.parse_crew_result(result)
+                results_list = data.get("results") if isinstance(data, dict) else None
+                if not isinstance(results_list, list):
+                    results_list = []
+                
+                # Update existing argument nodes with disposition_text
+                for entry in results_list:
+                    if not isinstance(entry, dict):
+                        continue
+                    
+                    arg_temp_id = entry.get("argument_temp_id")
+                    disposition_text = entry.get("disposition_text")
+                    
+                    if not isinstance(arg_temp_id, str) or not isinstance(disposition_text, str):
+                        logger.warning(f"Phase 5B batch {batch_num + 1}: Invalid entry format")
+                        continue
+                    
+                    # Find and update the argument node
+                    for n in (self.state.nodes_accumulated or []):
+                        if isinstance(n, dict) and n.get("temp_id") == arg_temp_id and n.get("label") == "Argument":
+                            props = n.get("properties") or {}
+                            if isinstance(props, dict):
+                                props["disposition_text"] = disposition_text
+                                dispositions_added += 1
+                                logger.debug(f"Phase 5B batch {batch_num + 1}: Added disposition_text to {arg_temp_id}")
+                            break
+            
+            logger.info(f"Phase 5B: completed (dispositions_added={dispositions_added})")
+            return {"status": "phase5b_done"}
+        except Exception as e:
+            logger.warning(f"Phase 5B: Disposition extraction failed: {e}")
+            return {"status": "phase5b_skipped"}
+
+    @listen(phase5b_extract_disposition)
     def phase6_select_laws_per_ruling(self, _: Dict[str, Any]) -> Dict[str, Any]:
         # Phase 6: select Laws per Ruling from catalog; create Law nodes and edges
         logger.info("Phase 6: selecting Laws per Ruling")

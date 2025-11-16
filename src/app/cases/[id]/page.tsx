@@ -144,6 +144,19 @@ export default function CaseEditorPage() {
     return domainLabel?.properties?.name?.ui?.options || ['Free Speech', 'Antitrust']
   }, [schema])
   
+  // Deduplicated existing nodes for AddNodeModal (combines catalog and case nodes)
+  const deduplicatedExistingNodes = useMemo(() => {
+    const catalog = catalogNodes[uiState.addModal.type] || []
+    const all = [...catalog, ...nodesArrayForModals]
+    // Deduplicate by temp_id
+    const seen = new Set<string>()
+    return all.filter(node => {
+      if (seen.has(node.temp_id)) return false
+      seen.add(node.temp_id)
+      return true
+    })
+  }, [catalogNodes, uiState.addModal.type, nodesArrayForModals])
+  
   // Extract structure key and root label from view config
   const structureInfo = useMemo(() => {
     if (!viewConfig) return { key: null, rootLabel: null, structure: {} }
@@ -533,6 +546,45 @@ export default function CaseEditorPage() {
     if (!parentEdge) return
     unlinkNode(nodeId, parentId, parentEdge.label)
     setHasUnsavedChanges(true)
+    
+    // Remove the node from its parent in displayData so it disappears immediately
+    if (displayData && nodeId && parentId) {
+      setDisplayData((prevDisplayData: any) => {
+        if (!prevDisplayData) return prevDisplayData
+        
+        // Helper to recursively find parent and remove child
+        const removeChildFromParent = (obj: any): any => {
+          if (!obj || typeof obj !== 'object') return obj
+          
+          // If this is the parent node, remove child from all arrays
+          if (obj.temp_id === parentId) {
+            const updated: any = {}
+            for (const [key, value] of Object.entries(obj)) {
+              if (Array.isArray(value)) {
+                // Remove the unlinked node from this array
+                updated[key] = value.filter((item: any) => item?.temp_id !== nodeId)
+              } else {
+                updated[key] = value
+              }
+            }
+            return updated
+          }
+          
+          // Recursively search in nested objects/arrays
+          if (Array.isArray(obj)) {
+            return obj.map(removeChildFromParent)
+          } else {
+            const updated: any = {}
+            for (const [key, value] of Object.entries(obj)) {
+              updated[key] = removeChildFromParent(value)
+            }
+            return updated
+          }
+        }
+        
+        return removeChildFromParent(prevDisplayData)
+      })
+    }
   }
 
   const handleReliefTypeSelect = useCallback((reliefId: string, reliefTypeNode: any) => {
@@ -1006,6 +1058,39 @@ export default function CaseEditorPage() {
         onConfirm={(nodeId) => {
           deleteNode(nodeId)
           setHasUnsavedChanges(true)
+          
+          // Remove the node from displayData so it disappears immediately
+          if (displayData && nodeId) {
+            setDisplayData((prevDisplayData: any) => {
+              if (!prevDisplayData) return prevDisplayData
+              
+              // Helper to recursively remove node from display data
+              const removeNodeFromStructure = (obj: any): any => {
+                if (!obj || typeof obj !== 'object') return obj
+                
+                if (Array.isArray(obj)) {
+                  // Filter out the deleted node from arrays
+                  return obj
+                    .filter((item: any) => item?.temp_id !== nodeId)
+                    .map(removeNodeFromStructure)
+                } else {
+                  const updated: any = {}
+                  for (const [key, value] of Object.entries(obj)) {
+                    // Skip if this node is the one being deleted
+                    if (key === 'temp_id' && value === nodeId) {
+                      return null // Mark for removal
+                    }
+                    updated[key] = removeNodeFromStructure(value)
+                  }
+                  return updated
+                }
+              }
+              
+              const result = removeNodeFromStructure(prevDisplayData)
+              return result === null ? prevDisplayData : result
+            })
+          }
+          
           uiActions.cancelDeleteNode()
         }}
       />
@@ -1054,7 +1139,7 @@ export default function CaseEditorPage() {
         open={uiState.addModal.open}
         nodeType={uiState.addModal.type}
         schema={schema}
-        existingNodes={[...(catalogNodes[uiState.addModal.type] || []), ...nodesArrayForModals]}
+        existingNodes={deduplicatedExistingNodes}
         parentContext={uiState.addModal.context?.parentId ? {
           parentId: uiState.addModal.context.parentId,
           parentLabel: getParentNodeLabel(uiState.addModal.context.parentId),
@@ -1104,6 +1189,74 @@ export default function CaseEditorPage() {
             return { nodes, edges: nextEdges }
           })
           setHasUnsavedChanges(true)
+          
+          // Insert the new node into displayData so it appears immediately
+          if (uiState.addModal.context?.parentId && uiState.addModal.context?.relationship && displayData && structureInfo.key) {
+            setDisplayData((prevDisplayData: any) => {
+              if (!prevDisplayData) return prevDisplayData
+              
+              const relationship = uiState.addModal.context?.relationship
+              
+              // Find the key in the viewConfig structure that corresponds to this relationship
+              const findKeyForRelationship = (structure: any): string | null => {
+                if (!structure || typeof structure !== 'object') return null
+                
+                for (const [key, config] of Object.entries(structure)) {
+                  const cfg = config as any
+                  if (cfg.via === relationship || cfg.from?.relationship === relationship) {
+                    return key
+                  }
+                  // Also check nested include structures
+                  if (cfg.include) {
+                    const nestedKey = findKeyForRelationship(cfg.include)
+                    if (nestedKey) return nestedKey
+                  }
+                }
+                return null
+              }
+              
+              const childKey = findKeyForRelationship(rootStructure) || node.label.toLowerCase() + 's'
+              
+              // Helper to recursively find and update parent node in display data
+              const insertNodeIntoParent = (obj: any): any => {
+                if (!obj || typeof obj !== 'object') return obj
+                
+                // If this is the parent node, add child to appropriate relationship
+                if (obj.temp_id === uiState.addModal.context?.parentId) {
+                  const updated = { ...obj }
+                  
+                  // Add node to the collection (create array if needed)
+                  if (!updated[childKey]) {
+                    updated[childKey] = []
+                  } else if (!Array.isArray(updated[childKey])) {
+                    updated[childKey] = [updated[childKey]]
+                  }
+                  
+                  // Check if node already exists in the array
+                  const existingIdx = updated[childKey].findIndex((n: any) => n?.temp_id === node.temp_id)
+                  if (existingIdx === -1) {
+                    updated[childKey] = [...updated[childKey], node]
+                  }
+                  
+                  return updated
+                }
+                
+                // Recursively search in nested objects/arrays
+                if (Array.isArray(obj)) {
+                  return obj.map(insertNodeIntoParent)
+                } else {
+                  const updated: any = {}
+                  for (const [key, value] of Object.entries(obj)) {
+                    updated[key] = insertNodeIntoParent(value)
+                  }
+                  return updated
+                }
+              }
+              
+              return insertNodeIntoParent(prevDisplayData)
+            })
+          }
+          
           uiActions.closeAddModal()
         }}
       />

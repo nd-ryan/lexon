@@ -1,0 +1,921 @@
+// ============================================================================
+// DOCTRINES - ANTITRUST
+// ============================================================================
+
+UNWIND [
+  {
+    code: 'D01',
+    name: 'Rule of Reason',
+    description: 'The default standard of review in Section 1 cases, balancing procompetitive justifications against anticompetitive effects. This fact-intensive inquiry assesses the restraint\'s nature, purpose, and impact on the relevant market. It ultimately determines if the conduct, on balance, promotes or suppresses competition.'
+  },
+   {
+    code: 'D02',
+    name: 'Per Se Illegality',
+    description: 'A standard of condemnation for practices considered so inherently anticompetitive that they are deemed illegal without inquiry into their specific effects. This applies to "naked restraints" like horizontal price fixing, market allocation, and bid rigging. The implication is that no defense or procompetitive justification is permitted.'
+  },
+  {
+    code: 'D03',
+    name: 'Quick Look Rule of Reason',
+    description: 'An intermediate standard of review for conduct whose anticompetitive nature is facially obvious, but not fully per se illegal. An observer with "even a rudimentary understanding of economics" could presume harm, shifting the burden to the defendant. This avoids a full rule of reason analysis unless a plausible procompetitive justification is offered.'
+  },
+  {
+    code: 'D04',
+    name: 'Hub and Spoke Conspiracy',
+    description: 'A cartel structure where a central "hub" (e.g., a distributor or platform) enters separate vertical agreements with "spokes" (e.g., retailers). These vertical agreements are used to facilitate a horizontal conspiracy among the spokes (e.g., price fixing). Proving the horizontal "rim" connecting the spokes is the key analytical challenge.'
+  },
+  {
+    code: 'D05',
+    name: 'Concerted Action Doctrine',
+    description: 'The foundational requirement for a Section 1 violation, establishing that two or more distinct entities engaged in a "contract, combination, or conspiracy." This doctrine distinguishes illegal collusion from lawful, independent "conscious parallelism." The central legal question is whether the parties had a "meeting of the minds."'
+  },
+  {
+    code: 'D06',
+    name: 'Plus Factors in Antitrust',
+    description: 'Circumstantial evidence used to support an inference of conspiracy when direct evidence of an agreement is absent. These factors include actions against self-interest, monitoring, or pretextual justifications for parallel conduct. Plus factors help courts distinguish conscious parallelism from an actual illegal agreement.'
+  },
+  {
+    code: 'D07',
+    name: 'Raising Rivals\' Costs Doctrine',
+    description: 'A theory of anticompetitive exclusion where a dominant firm uses its market power to increase the operating costs of its competitors. This conduct, such as foreclosing access to key inputs or distribution channels, aims to disadvantage rivals. The doctrine assesses whether this strategy ultimately harms competition and leads to supracompetitive pricing.'
+  },
+  {
+    code: 'D08',
+    name: 'Essential Facilities Doctrine',
+    description: 'A controversial Section 2 doctrine imposing a duty on a monopolist to grant competitors access to a facility or resource it controls. Liability requires proving the monopolist controls the facility, a competitor cannot practically duplicate it, and access was denied. The Supreme Court has narrowed this doctrine, making its application rare.'
+  },
+  {
+    code: 'D09',
+    name: 'Refusal to Deal Doctrine',
+    description: 'Analyzes the legality of a firm\'s unilateral decision not to do business with another entity (e.g., a supplier or rival). While firms generally have this right (the *Colgate* doctrine), a refusal can be illegal under Section 2 if it\'s used to create or maintain a monopoly. This is a high bar, often requiring the termination of a prior, profitable course of dealing.'
+  },
+  {
+    code: 'D10',
+    name: 'Tying and Bundling Doctrine',
+    description: 'A practice where a seller conditions the sale of one product (the "tying" product) on the buyer\'s agreement to purchase a second product (the "tied" product). This can be per se illegal or analyzed under the rule of reason, depending on whether the seller has market power in the tying product. The core harm is leveraging market power from one market to another.'
+  },
+  {
+    code: 'D11',
+    name: 'Predatory Pricing Doctrine',
+    description: 'A Section 2 claim where a dominant firm prices its products below an appropriate measure of cost to drive out rivals. To succeed, a plaintiff must show below-cost pricing and a "dangerous probability" that the firm will later recoup its losses through supracompetitive prices. This standard (the *Brooke Group* test) is notoriously difficult to meet.'
+  },
+  {
+    code: 'D12',
+    name: 'No-Poach Agreements Doctrine',
+    description: 'Agreements between competing employers to not solicit or hire each other\'s employees, or to fix employee wages. These are horizontal restraints on competition in labor markets. The DOJ and FTC now treat "naked" no-poach agreements as per se illegal criminal violations.'
+  },
+  {
+    code: 'D13',
+    name: 'Platform Gatekeeping Doctrine',
+    description: 'An emerging theory, central to digital market regulation, focusing on dominant platforms that control access to a market or ecosystem. The alleged harms include "self-preferencing" (favoring their own services), restricting interoperability, and imposing unfair terms. This forms the basis for new laws like the EU\'s Digital Markets Act.'
+  },
+  {
+    code: 'D14',
+    name: 'Acqui-Hire Anticompetitive Theory',
+    description: 'A theory of harm where a dominant firm acquires a smaller (often nascent) competitor primarily to hire its key employees, often shutting down the target\'s product. This can be challenged as an anticompetitive merger (Clayton Act §7) or an agreement (Sherman Act §1). The concern is the elimination of a "nascent competitor" or innovation.'
+  },
+  {
+    code: 'D15',
+    name: 'Monopolization (and Attempted Monopolization)',
+    description: 'The core Section 2 Sherman Act violation, prohibiting a firm from willfully acquiring or maintaining monopoly power through exclusionary conduct. This requires proving (1) monopoly power in a relevant market and (2) anticompetitive conduct, not just superior skill. Attempted monopolization requires a "dangerous probability" of success.'
+  },
+  {
+    code: 'D16',
+    name: 'Exclusive Dealing Doctrine',
+    description: 'An agreement where a seller forbids a buyer from purchasing from the seller\'s competitors, or a buyer forbids a seller from selling to its rivals. Analyzed under the rule of reason, this practice is illegal if it "forecloses" a substantial share of the market. This often hinges on the contract\'s duration, market share, and business justification.'
+  },
+  {
+    code: 'D17',
+    name: 'Price Discrimination (Robinson-Patman)',
+    description: 'Prohibits sellers from charging different prices to different purchasers for "commodities of like grade and quality" where the effect may be to lessen competition. This complex and controversial doctrine (part of the Clayton Act) is aimed at protecting smaller buyers. Defenses include cost justification or "meeting the competition."'
+  },
+  {
+    code: 'D18',
+    name: 'Noerr-Pennington Doctrine',
+    description: 'An immunity doctrine shielding private entities from antitrust liability for genuine efforts to petition or influence government action, even if the intent is anticompetitive. This is based on the First Amendment right to petition. The immunity does not apply to "sham" litigation or bad-faith petitioning used as a direct anticompetitive weapon.'
+  },
+  {
+    code: 'D19',
+    name: 'Sham Petitioning Exception',
+    description: 'The exception to *Noerr-Pennington* immunity. Antitrust liability may attach if a petition or lawsuit is found to be a "sham"—meaning it is objectively baseless and intended as a direct anticompetitive weapon to interfere with a rival\'s business, rather than a genuine attempt to win a favorable government ruling.'
+  },
+  {
+    code: 'D20',
+    name: 'State Action Doctrine',
+    description: 'An immunity doctrine that exempts anticompetitive conduct from antitrust law if it is undertaken pursuant to a "clearly articulated" state policy. The state must also "actively supervise" the private conduct. This doctrine balances federal antitrust policy with state sovereignty and regulatory authority.'
+  },
+  {
+    code: 'D21',
+    name: 'Potential Competition Doctrine (Mergers)',
+    description: 'A merger theory under Clayton Act §7 used to block acquisitions of potential market entrants by dominant incumbents. The harm is the loss of either "perceived potential competition" (the incumbent behaves better *because* of the threat of entry) or "actual potential competition" (the entrant would have entered and deconcentrated the market).'
+  },
+  {
+    code: 'D22',
+    name: 'Horizontal/Vertical Merger Doctrine',
+    description: 'The primary framework for analyzing mergers under Clayton Act §7, focusing on whether a transaction will "substantially lessen competition." Horizontal merger analysis centers on market concentration (HHI) and unilateral/coordinated effects. Vertical merger analysis focuses on foreclosure, raising rivals\' costs, and access to information.'
+  },
+  {
+    code: 'D23',
+    name: 'Monopoly Leveraging Doctrine',
+    description: 'A Section 2 theory where a firm uses its monopoly power in one market to gain a "competitive advantage" in a second, related market. This is distinct from tying, as it does not require a conditioned sale. The Supreme Court (in *Trinko*) cast significant doubt on this as an independent violation, though it remains a relevant theory of harm.'
+  },
+  {
+    code: 'D24',
+    name: 'Conscious Parallelism',
+    description: 'A scenario where competitors in a concentrated market independently adopt parallel business practices (e.g., pricing) without an explicit agreement. This conduct alone is lawful and does not satisfy the "concerted action" requirement of Section 1. Plaintiffs must present "plus factors" to show this parallel conduct stems from a conspiracy, not independent business judgment.'
+  },
+  {
+    code: 'D25',
+    name: 'Relevant Market Definition',
+    description: 'The foundational concept for most antitrust analysis, establishing the "area of effective competition" where effects are measured. It has two components: a product market (products reasonably substitutable) and a geographic market (the area where firms compete). Defining the market is often the most contested issue, as it is essential for assessing market power.'
+  },
+  {
+    code: 'D26',
+    name: 'Market Power / Monopoly Power',
+    description: 'The ability of a firm to profitably raise prices above a competitive level or exclude competition; this is a central element in many antitrust cases. Monopoly power (required for Section 2) is a substantial or durable degree of market power. Its existence is typically inferred from a high market share within a properly defined relevant market.'
+  },
+  {
+    code: 'D27',
+    name: 'Exclusionary Conduct',
+    description: 'The "bad act" required for a Section 2 monopolization claim, defined as conduct "other than competition on the merits" used to harm rivals. This distinguishes illegal monopolization from success based on a superior product, business acumen, or historic accident. Examples include predatory pricing, exclusive dealing, and refusals to deal.'
+  },
+  {
+    code: 'D28',
+    name: 'Horizontal vs. Vertical Restraints',
+    description: 'The primary classification for anticompetitive agreements, which dictates the legal standard. Horizontal restraints are between direct competitors (e.g., price fixing) and are often treated as per se illegal. Vertical restraints are between firms at different levels of the supply chain (e.g., distributor and retailer) and are typically judged under the Rule of Reason.'
+  },
+  {
+    code: 'D29',
+    name: 'Market Allocation',
+    description: 'A per se illegal horizontal agreement where competitors divide a market among themselves. This can involve allocating specific territories, customers, or product lines. By eliminating competition in their designated segments, firms create local monopolies, leading to higher prices and reduced output.'
+  },
+  {
+    code: 'D30',
+    name: 'Bid Rigging',
+    description: 'A per se illegal horizontal agreement in which competitors coordinate their bids on a contract. Forms include bid suppression (some firms agree not to bid), complementary bidding (firms submit token high bids), or bid rotation (firms take turns winning). This practice is considered a form of price fixing and is often prosecuted criminally.'
+  },
+  {
+    code: 'D31',
+    name: 'Ancillary Restraints Doctrine',
+    description: 'A doctrine that evaluates restraints on trade that are secondary (ancillary) to a larger, legitimate, and procompetitive collaboration. If the restraint is "reasonably necessary" to achieve the primary goal of the collaboration (e.g., a joint venture, an asset sale), it is not deemed per se illegal. Instead, the restraint is analyzed under the Rule of Reason to weigh its procompetitive justifications against its anticompetitive effects.'
+  },
+  {
+    code: 'D32',
+    name: 'Self-Preferencing Doctrine',
+    description: 'A theory of harm, often applied to dominant digital platforms, alleging that a vertically integrated firm illicitly uses its control over a marketplace to favor its own products or services. This alleged harm can manifest as biased search results, preferential data access, or discriminatory promotion, thereby disadvantaging third-party competitors who rely on the platform.'
+  }
+] AS row
+CREATE (:Doctrine {
+  doctrine_upload_code:   row.code,
+  doctrine_id:            randomUUID(),
+  name:                   row.name,
+  name_embedding:         [],
+  description:            row.description,
+  description_embedding:  [],
+  category:               'antitrust'
+});
+
+
+// ============================================================================
+// FACT PATTERNS - ANTITRUST
+// ============================================================================
+
+UNWIND [
+      {
+    code: 'FP01',
+    name: 'Price Fixing',
+    description: 'Multiple competing firms coordinate to set, modify, or maintain the prices of their products or services.'
+  },
+  {
+    code: 'FP02',
+    name: 'Output Restriction',
+    description: 'Multiple competing firms coordinate to limit their respective production levels, service outputs, or sales quotas.'
+  },
+  {
+    code: 'FP03',
+    name: 'Collaboration',
+    description: 'Competing firms form a joint venture or alliance to collaborate on a specific project, product, or market.'
+  },
+  {
+    code: 'FP04',
+    name: 'Market Allocation',
+    description: 'Multiple competing firms coordinate to allocate specific customers, geographic territories, or product lines among themselves.'
+  },
+  {
+    code: 'FP05',
+    name: 'Monopsony',
+    description: 'A single dominant buyer, or a group of coordinating buyers, sets the terms for purchasing inputs or labor from a market.'
+  },
+  {
+    code: 'FP06',
+    name: 'Monopoly',
+    description: 'A single firm with a dominant market position engages in conduct that prevents or limits the ability of other firms to compete.'
+  },
+  {
+    code: 'FP07',
+    name: 'Oligopoly',
+    description: 'A market with a small number of large, interdependent firms, leading to parallel conduct or strategic interactions.'
+  },
+  {
+    code: 'FP08',
+    name: 'Algorithmic Collusion',
+    description: 'Firms in a market independently use pricing algorithms or AI that result in aligned, parallel, or supracompetitive prices.'
+  },
+  {
+    code: 'FP09',
+    name: 'Labor Coordination',
+    description: 'Multiple competing employers coordinate on policies regarding the hiring, solicitation, or compensation of employees.'
+  },
+  {
+    code: 'FP10',
+    name: 'Coordinated Information Exchange',
+    description: 'Competing firms share non-public data about prices, costs, customers, or strategic plans, either directly or via a third party.'
+  },
+  {
+    code: 'FP11',
+    name: 'Refusal to Deal',
+    description: 'A firm, often with significant market share, ceases or refuses to initiate a business relationship with another firm.'
+  },
+  {
+    code: 'FP12',
+    name: 'Tacit Collusion',
+    description: 'Competing firms in a concentrated market are observed engaging in parallel conduct, such as simultaneous price changes.'
+  },
+  {
+    code: 'FP13',
+    name: 'Predatory Pricing',
+    description: 'A firm sets its prices for a product or service below its own measure of production cost for a period of time.'
+  },
+  {
+    code: 'FP14',
+    name: 'Exclusive Dealing',
+    description: 'A firm enters into agreements that require a customer or supplier to transact only with that firm for a specific product or service.'
+  },
+  {
+    code: 'FP15',
+    name: 'Tying and Bundling',
+    description: 'A seller conditions the sale of one product or service on the buyer\'s agreement to purchase a second, distinct product or service.'
+  },
+  {
+    code: 'FP16',
+    name: 'Merger Control',
+    description: 'Two or more firms, often competitors or in the same supply chain, propose to combine into a single entity.'
+  },
+  {
+    code: 'FP17',
+    name: 'Bid Rigging',
+    description: 'Competing firms coordinate their submissions in a procurement process, auction, or request for proposal.'
+  },
+  {
+    code: 'FP18',
+    name: 'Hub and Spoke Cartel',
+    description: 'A central firm (hub) enters separate vertical agreements with multiple competing firms (spokes) that result in uniform conduct among the spokes.'
+  },
+  {
+    code: 'FP19',
+    name: 'Raising Rivals\' Costs',
+    description: 'A firm engages in conduct, such as acquiring a key supplier or lobbying for regulation, that increases the operational costs of its competitors.'
+  },
+  {
+    code: 'FP20',
+    name: 'Denial of Essential Facility Access',
+    description: 'A firm that controls a key resource, infrastructure, or data set denies access to another firm that requires it to compete.'
+  },
+  {
+    code: 'FP21',
+    name: 'Platform as Competitor',
+    description: 'A firm operates a platform, marketplace, or ecosystem while simultaneously competing on that same platform with its own products or services.'
+  },
+  {
+    code: 'FP22',
+    name: 'Nascent Competitor Acquisition',
+    description: 'Acquisition of a small, innovative, or potential future competitor.'
+  },
+  {
+    code: 'FP23',
+    name: 'Government Petitioning / Litigation',
+    description: 'A firm files a lawsuit, administrative complaint, or other petition with a government body (e.g., court, agency) that impacts a competitor.'
+  },
+  {
+    code: 'FP24',
+    name: 'Discriminatory Pricing',
+    description: 'A seller offers different prices or terms to different arm\'s-length buyers for goods of like grade and quality.'
+  },
+  {
+    code: 'FP25',
+    name: 'No-Poach Agreement',
+    description: 'Multiple competing employers agree not to solicit or hire each other\'s employees.'
+  },
+  {
+    code: 'FP26',
+    name: 'Non-Compete Agreement',
+    description: 'A firm includes a clause in an employment contract restricting an employee from working for a competitor for a set period or in a specific geography.'
+  },
+  {
+    code: 'FP27',
+    name: 'Non-Solicit Agreement',
+    description: 'A firm\'s contract prohibits a former employee from soliciting the firm\'s clients or remaining employees for a set period.'
+  },
+  {
+    code: 'FP28',
+    name: 'Collective Bargaining Agreement',
+    description: 'A union negotiates with an employer (or group of employers) on behalf of employees over wages, hours, and conditions.'
+  },
+  {
+    code: 'FP29',
+    name: 'IP Licensing Agreement',
+    description: 'A patent or copyright holder grants a license to another firm, potentially with terms that restrict competition (e.g., grantbacks, field-of-use).'
+  },
+  {
+    code: 'FP30',
+    name: 'Joint Venture Agreement',
+    description: 'Two or more firms create a new, separate entity or formal collaboration to pursue a specific business objective.'
+  },
+  {
+    code: 'FP31',
+    name: 'Below-Cost Pricing',
+    description: 'A firm sets its prices for a product or service below an appropriate measure of its own production costs.'
+  },
+  {
+    code: 'FP32',
+    name: 'Conditioned Sale',
+    description: 'A seller requires a buyer to purchase a second, distinct product (the "tied" product) to be able to buy a first product (the "tying" product).'
+  },
+  {
+    code: 'FP33',
+    name: 'Requirements Contract',
+    description: 'A buyer agrees to purchase all or a substantial portion of its needs for a specific product from a single seller for a set period.'
+  },
+  {
+    code: 'FP34',
+    name: 'Wage-Fixing Agreement',
+    description: 'Multiple competing employers coordinate to set, cap, or limit the wages or benefits offered to their employees.'
+  },
+  {
+    code: 'FP35',
+    name: 'Interoperability Refusal',
+    description: 'A dominant platform or service provider designs its system to prevent or limit a competitor\'s product from interconnecting or working with it.'
+  },
+  {
+    code: 'FP36',
+    name: 'Horizontal Merger',
+    description: 'Two or more firms that compete directly in the same market propose to combine.'
+  },
+  {
+    code: 'FP37',
+    name: 'Vertical Merger',
+    description: 'A firm proposes to acquire one of its suppliers or a downstream customer/distributor.'
+  },
+  {
+    code: 'FP38',
+    name: 'Termination of Supply',
+    description: 'A firm, often a supplier with market power, terminates a prior, established course of dealing with a customer or distributor.'
+  },
+  {
+    code: 'FP39',
+    name: 'Resale Price Maintenance (RPM)',
+    description: 'A manufacturer sets a minimum or maximum price at which its distributors or retailers can resell its products.'
+  }
+] AS row
+CREATE (:FactPattern {
+  fact_pattern_upload_code: row.code,
+  fact_pattern_id:          randomUUID(),
+  name:                     row.name,
+  name_embedding:           [],
+  description:              row.description,
+  description_embedding:    []
+});
+
+
+// ============================================================================
+// POLICIES
+// ============================================================================
+
+UNWIND [
+{
+    code: 'P01',
+    name: 'Consumer Welfare',
+    description: 'Protecting consumers from harm, typically in the form of higher prices.'
+  },
+  {
+    code: 'P02',
+    name: 'Neo-Brandeisianism',
+    description: 'Addressing concentration of economic and political power, not just consumer prices.'
+  },
+  {
+    code: 'P03',
+    name: 'Economic Efficiency',
+    description: 'Maximizing allocative and productive efficiency within a market.'
+  },
+  {
+    code: 'P04',
+    name: 'Promotion of Innovation',
+    description: 'Prioritizing market structures that encourage innovation and new technology.'
+  },
+  {
+    code: 'P05',
+    name: 'Leniency',
+    description: 'Offering amnesty to cartel members who report the conspiracy.'
+  },
+  {
+    code: 'P06',
+    name: 'Intellectual Property',
+    description: 'Granting limited exclusive rights to creators to incentivize innovation.'
+  },
+  {
+    code: 'P07',
+    name: 'Free Speech',
+    description: 'Protecting free speech and the right to petition the government.'
+  },
+  {
+    code: 'P08',
+    name: 'Consumer Protection',
+    description: 'Protecting consumers from "unfair or deceptive" acts.'
+  },
+  {
+    code: 'P09',
+    name: 'Data Privacy',
+    description: 'Establishing rules and rights for collecting and processing personal information.'
+  },
+  {
+    code: 'P10',
+    name: 'Public Utility',
+    description: 'Regulating price and access for permitted natural monopolies.'
+  },
+  {
+    code: 'P11',
+    name: 'National Interest',
+    description: 'protecting national security, foreign policy, or other overriding interests of the state.'
+  },
+  {
+    code: 'P12',
+    name: 'Labor & Collective Bargaining',
+    description: 'Protecting the rights of workers to organize and bargain collectively.'
+  },
+  {
+    code: 'P13',
+    name: 'Financial Stability',
+    description: 'Preserving the integrity of the financial system.'
+  },
+  {
+    code: 'P14',
+    name: 'Media Pluralism',
+    description: 'Promoting a diversity of media owners and viewpoints.'
+  },
+  {
+    code: 'P15',
+    name: 'Industrial Policy',
+    description: 'Using state power to cultivate specific domestic industries and "national champions."'
+  },
+   {
+    code: 'P16',
+    name: 'Environmental Sustainability',
+    description: 'Promoting economic activity that preserves environmental quality and resources.'
+  },
+  {
+    code: 'P17',
+    name: 'Common Carrier Regulation',
+    description: 'Requiring public infrastructure services to provide neutral, non-discriminatory access.'
+  },
+  {
+    code: 'P18',
+    name: 'Structuralism (SCP Paradigm)',
+    description: 'Policy assuming market structure dictates conduct, which dictates performance.'
+  },
+  {
+    code: 'P19',
+    name: 'Protection of Small Business',
+    description: 'Policy goal of protecting small businesses from larger rivals\' practices.'
+  },
+  {
+    code: 'P20',
+    name: 'Structural vs. Behavioral Remedies',
+    description: 'Policy choice: breaking up a firm (structural) vs. regulating conduct (behavioral).'
+  },
+  {
+    code: 'P21',
+    name: 'Federalism / State Sovereignty',
+    description: 'Policy of deferring to a state\'s regulatory authority; justifies State Action.'
+  },
+  {
+    code: 'P22',
+    name: 'Agricultural Cooperative Exemption',
+    description: 'Policy granting limited antitrust immunity to farmer associations (Capper-Volstead).'
+  },
+  {
+    code: 'P23',
+    name: 'Insurance Regulation (McCarran-Ferguson)',
+    description: 'Policy exempting the "business of insurance" from federal antitrust law.'
+  },
+  {
+    code: 'P24',
+    name: 'Sports League Cohesion',
+    description: 'Policy recognizing sports leagues require coordination to create their entertainment product.'
+  }
+] AS row
+CREATE (:Policy {
+  policy_upload_code: row.code,
+  policy_id:          randomUUID(),
+  name:               row.name,
+  name_embedding:     [],
+  description:        row.description,
+  description_embedding: []
+});
+
+
+// ============================================================================
+// LAWS
+// ============================================================================
+
+UNWIND [
+  {
+    code: 'L0001',
+    name: 'First Amendment',
+    citation: 'U.S. Const. amend. I',
+    text: 'Congress shall make no law respecting an establishment of religion, or prohibiting the free exercise thereof; or abridging the freedom of speech, or of the press; or the right of the people peaceably to assemble, and to petition the Government for a redress of grievances.',
+    type: 'constitution',
+    enactment_date: '1791-12-15'
+  },
+  {
+    code: 'L0002',
+    name: 'Second Amendment',
+    citation: 'U.S. Const. amend. II',
+    text: 'A well regulated Militia, being necessary to the security of a free State, the right of the people to keep and bear Arms, shall not be infringed.',
+    type: 'constitution',
+    enactment_date: '1791-12-15'
+  },
+  {
+    code: 'L0003',
+    name: 'Fourth Amendment',
+    citation: 'U.S. Const. amend. IV',
+    text: 'The right of the people to be secure in their persons, houses, papers, and effects, against unreasonable searches and seizures, shall not be violated, and no Warrants shall issue, but upon probable cause, supported by Oath or affirmation, and particularly describing the place to be searched, and the persons or things to be seized.',
+    type: 'constitution',
+    enactment_date: '1791-12-15'
+  },
+  {
+    code: 'L0004',
+    name: 'Fifth Amendment',
+    citation: 'U.S. Const. amend. V',
+    text: 'No person shall be held to answer for a capital, or otherwise infamous crime, unless on a presentment or indictment of a Grand Jury, except in cases arising in the land or naval forces, or in the Militia, when in actual service in time of War or public danger; nor shall any person be subject for the same offence to be twice put in jeopardy of life or limb; nor shall be compelled in any criminal case to be a witness against himself, nor be deprived of life, liberty, or property, without due process of law; nor shall private property be taken for public use, without just compensation.',
+    type: 'constitution',
+    enactment_date: '1791-12-15'
+  },
+  {
+    code: 'L0005',
+    name: 'Sixth Amendment',
+    citation: 'U.S. Const. amend. VI',
+    text: 'In all criminal prosecutions, the accused shall enjoy the right to a speedy and public trial, by an impartial jury of the State and district wherein the crime shall have been committed, which district shall have been previously ascertained by law, and to be informed of the nature and cause of the accusation; to be confronted with the witnesses against him; to have compulsory process for obtaining witnesses in his favor, and to have the Assistance of Counsel for his defence.',
+    type: 'constitution',
+    enactment_date: '1791-12-15'
+  },
+  {
+    code: 'L0006',
+    name: 'Eighth Amendment',
+    citation: 'U.S. Const. amend. VIII',
+    text: 'Excessive bail shall not be required, nor excessive fines imposed, nor cruel and unusual punishments inflicted.',
+    type: 'constitution',
+    enactment_date: '1791-12-15'
+  },
+  {
+    code: 'L0007',
+    name: 'Fourteenth Amendment – Due Process Clause',
+    citation: 'U.S. Const. amend. XIV, § 1',
+    text: 'No State shall make or enforce any law which shall abridge the privileges or immunities of citizens of the United States; nor shall any State deprive any person of life, liberty, or property, without due process of law; nor deny to any person within its jurisdiction the equal protection of the laws.',
+    type: 'constitution',
+    enactment_date: '1868-07-09'
+  },
+  {
+    code: 'L0008',
+    name: 'Fourteenth Amendment – Equal Protection Clause',
+    citation: 'U.S. Const. amend. XIV, § 1',
+    text: 'No State shall make or enforce any law which shall abridge the privileges or immunities of citizens of the United States; nor shall any State deprive any person of life, liberty, or property, without due process of law; nor deny to any person within its jurisdiction the equal protection of the laws.',
+    type: 'constitution',
+    enactment_date: '1868-07-09'
+  },
+  {
+    code: 'L0009',
+    name: 'Article I – Commerce Clause',
+    citation: 'U.S. Const. art. I, § 8, cl. 3',
+    text: 'To regulate Commerce with foreign Nations, and among the several States, and with the Indian Tribes.',
+    type: 'constitution',
+    enactment_date: '1789-03-04'
+  },
+  {
+    code: 'L0010',
+    name: 'Article I – Necessary and Proper Clause',
+    citation: 'U.S. Const. art. I, § 8, cl. 18',
+    text: 'To make all Laws which shall be necessary and proper for carrying into Execution the foregoing Powers, and all other Powers vested by this Constitution in the Government of the United States, or in any Department or Officer thereof.',
+    type: 'constitution',
+    enactment_date: '1789-03-04'
+  },
+  {
+    code: 'L0011',
+    name: 'Article II – Executive Power',
+    citation: 'U.S. Const. art. II, § 1',
+    text: 'The executive Power shall be vested in a President of the United States of America. He shall hold his Office during the Term of four Years, and, together with the Vice President, chosen for the same Term, be elected, as follows.',
+    type: 'constitution',
+    enactment_date: '1789-03-04'
+  },
+  {
+    code: 'L0012',
+    name: 'Article III – Judicial Power',
+    citation: 'U.S. Const. art. III, § 1–2',
+    text: 'The judicial Power of the United States, shall be vested in one supreme Court, and in such inferior Courts as the Congress may from time to time ordain and establish. The Judges, both of the supreme and inferior Courts, shall hold their Offices during good Behaviour, and shall, at stated Times, receive for their Services, a Compensation, which shall not be diminished during their Continuance in Office. The judicial Power shall extend to all Cases, in Law and Equity, arising under this Constitution, the Laws of the United States, and Treaties made, or which shall be made, under their Authority.',
+    type: 'constitution',
+    enactment_date: '1789-03-04'
+  },
+  {
+    code: 'L0013',
+    name: 'Supremacy Clause',
+    citation: 'U.S. Const. art. VI, cl. 2',
+    text: 'This Constitution, and the Laws of the United States which shall be made in Pursuance thereof; and all Treaties made, or which shall be made, under the Authority of the United States, shall be the supreme Law of the Land; and the Judges in every State shall be bound thereby, any Thing in the Constitution or Laws of any State to the Contrary notwithstanding.',
+    type: 'constitution',
+    enactment_date: '1789-03-04'
+  },
+  {
+    code: 'L0014',
+    name: 'Sherman Act, Section 1',
+    citation: '15 U.S.C. § 1',
+    text: 'Every contract, combination in the form of trust or otherwise, or conspiracy, in restraint of trade or commerce among the several States, or with foreign nations, is hereby declared to be illegal. Every person who shall make any such contract or engage in any such combination or conspiracy, shall be deemed guilty of a misdemeanor, and, on conviction thereof, shall be punished by fine not exceeding five thousand dollars, or by imprisonment not exceeding one year, or by both said punishments, at the discretion of the court.',
+    type: 'statute',
+    enactment_date: '1890-07-02'
+  },
+  {
+    code: 'L0015',
+    name: 'Sherman Act, Section 2',
+    citation: '15 U.S.C. § 2',
+    text: 'Every person who shall monopolize, or attempt to monopolize, or combine or conspire with any other person or persons, to monopolize any part of the trade or commerce among the several States, or with foreign nations, shall be deemed guilty of a misdemeanor, and, on conviction thereof; shall be punished by fine not exceeding five thousand dollars, or by imprisonment not exceeding one year, or by both said punishments, in the discretion of the court.',
+    type: 'statute',
+    enactment_date: '1890-07-02'
+  },
+  {
+    code: 'L0018',
+    name: 'Sherman Act, Section 3',
+    citation: '15 U.S.C. § 3',
+    text: 'Every contract, combination in form of trust or otherwise, or conspiracy, in restraint of trade or commerce in any Territory of the United States or of the District of Columbia, or in restraint of trade or commerce between any such Territory and another, or between any such Territory or Territories and any State or States or the District of Columbia, or with foreign nations, or between the District of Columbia and any State or States or foreign nations, is hereby declared illegal. Every person who shall make any such contract or engage in any such combination or conspiracy, shall be deemed guilty of a misdemeanor, and, on conviction thereof, shall be punished by fine not exceeding five thousand dollars, or by imprisonment not exceeding one year, or by both said punishments, in the discretion of the court.',
+    type: 'statute',
+    enactment_date: '1890-07-02'
+  },
+  {
+    code: 'L0019',
+    name: 'Sherman Act, Section 4',
+    citation: '15 U.S.C. § 4',
+    text: 'The several circuit courts of the United States are hereby invested with jurisdiction to prevent and restrain violations of this act; and it shall be the duty of the several district attorneys of the United States, in their respective districts, under the direction of the Attorney-General, to institute proceedings in equity to prevent and restrain such violations. Such proceedings may be by way of petition setting forth the case and praying that such violation shall be enjoined or otherwise prohibited. When the parties complained of shall have been duly notified of such petition the court shall proceed, as soon as may be, to the hearing and determination of the case; and pending such petition and before final decree, the court may at any time make such temporary restraining order or prohibition as shall be deemed just in the premises.',
+    type: 'statute',
+    enactment_date: '1890-07-02'
+  },
+  {
+    code: 'L0020',
+    name: 'Sherman Act, Section 5',
+    citation: '15 U.S.C. § 5',
+    text: 'Whenever it shall appear to the court before which any proceeding under section four of this act may be pending, that the ends of justice require that other parties should be brought before the court, the court may cause them to be summoned, whether they reside in the district in which the court is held or not; and subpoenas to that end may be served in any district by the marshal thereof.',
+    type: 'statute',
+    enactment_date: '1890-07-02'
+  },
+  {
+    code: 'L0021',
+    name: 'Sherman Act, Section 6',
+    citation: '15 U.S.C. § 6',
+    text: 'Any property owned under any contract or by any combination, or pursuant to any conspiracy (and being the subject thereof) mentioned in section one of this act, and being in the course of transportation from one State to another, or to a foreign country, shall be forfeited to the United States, and may be seized and condemned by like proceedings as those provided by law for the forfeiture, seizure, and condemnation of property imported into the United States contrary to law.',
+    type: 'statute',
+    enactment_date: '1890-07-02'
+  },
+  {
+    code: 'L0022',
+    name: 'Sherman Act, Section 7',
+    citation: '15 U.S.C. § 7',
+    text: 'Any person who shall be injured in his business or property by any other person or corporation by reason of anything forbidden or declared to be unlawful by this act, may sue therefor in any circuit court of the United States in the district in which the defendant resides or is found, without respect to the amount in controversy, and shall recover three fold the damages by him sustained, and the costs of suit, including a reasonable attorney\'s fee.',
+    type: 'statute',
+    enactment_date: '1890-07-02'
+  },
+  {
+    code: 'L0023',
+    name: 'Sherman Act, Section 8',
+    citation: '15 U.S.C. § 8',
+    text: 'That the word "person," or " persons," wherever used in this act shall be deemed to include corporations and associations existing under or authorized by the laws of either the United States, the laws of any of the Territories, the laws of any State, or the laws of any foreign country.',
+    type: 'statute',
+    enactment_date: '1890-07-02'
+  },
+  {
+    code: 'L0016',
+    name: 'Clayton Act, Section 7',
+    citation: '15 U.S.C. § 18',
+    text: 'No person engaged in commerce or in any activity affecting commerce shall acquire, directly or indirectly, the whole or any part of the stock or other share capital and no person subject to the jurisdiction of the Federal Trade Commission shall acquire the whole or any part of the assets of another person engaged also in commerce or in any activity affecting commerce, where in any line of commerce or in any activity affecting commerce in any section of the country, the effect of such acquisition may be substantially to lessen competition, or to tend to create a monopoly.',
+    type: 'statute',
+    enactment_date: '1914-10-15'
+  },
+  {
+    code: 'L0017',
+    name: 'Federal Trade Commission Act, Section 5',
+    citation: '15 U.S.C. § 45',
+    text: 'Unfair methods of competition in or affecting commerce, and unfair or deceptive acts or practices in or affecting commerce, are hereby declared unlawful.',
+    type: 'statute',
+    enactment_date: '1914-09-26'
+  }
+] AS row
+CREATE (:Law {
+  law_upload_code: row.code,
+  law_id:          randomUUID(),
+  name:            row.name,
+  name_embedding:  [],
+  text:            row.text,
+  text_embedding:  [],
+  type:            row.type,
+  enactment_date:  row.enactment_date,
+  citation:        row.citation
+});
+
+
+// ============================================================================
+// JURISDICTIONS
+// ============================================================================
+
+UNWIND [
+  {code:'J0001', name:'First Circuit'},
+  {code:'J0002', name:'Second Circuit'},
+  {code:'J0003', name:'Third Circuit'},
+  {code:'J0004', name:'Fourth Circuit'},
+  {code:'J0005', name:'Fifth Circuit'},
+  {code:'J0006', name:'Sixth Circuit'},
+  {code:'J0007', name:'Seventh Circuit'},
+  {code:'J0008', name:'Eighth Circuit'},
+  {code:'J0009', name:'Ninth Circuit'},
+  {code:'J0010', name:'Tenth Circuit'},
+  {code:'J0011', name:'Eleventh Circuit'},
+  {code:'J0012', name:'D.C. Circuit'},
+  {code:'J0013', name:'U.S. Supreme Court'}
+] AS row
+CREATE (:Jurisdiction {
+  jurisdiction_upload_code: row.code,
+  jurisdiction_id:          randomUUID(),
+  name:                     row.name
+});
+
+
+// ============================================================================
+// FORUMS
+// ============================================================================
+
+UNWIND [
+  // Supreme Court
+  {code:'F0001', name:'U.S. Supreme Court', type:'court', jcode:'J0013'},
+
+  // Courts of Appeals (1st–11th + D.C.)
+  {code:'F0101', name:'First Circuit Court of Appeals',  type:'court', jcode:'J0001'},
+  {code:'F0102', name:'Second Circuit Court of Appeals', type:'court', jcode:'J0002'},
+  {code:'F0103', name:'Third Circuit Court of Appeals',  type:'court', jcode:'J0003'},
+  {code:'F0104', name:'Fourth Circuit Court of Appeals', type:'court', jcode:'J0004'},
+  {code:'F0105', name:'Fifth Circuit Court of Appeals',  type:'court', jcode:'J0005'},
+  {code:'F0106', name:'Sixth Circuit Court of Appeals',  type:'court', jcode:'J0006'},
+  {code:'F0107', name:'Seventh Circuit Court of Appeals',type:'court', jcode:'J0007'},
+  {code:'F0108', name:'Eighth Circuit Court of Appeals', type:'court', jcode:'J0008'},
+  {code:'F0109', name:'Ninth Circuit Court of Appeals',  type:'court', jcode:'J0009'},
+  {code:'F0110', name:'Tenth Circuit Court of Appeals', type:'court', jcode:'J0010'},
+  {code:'F0111', name:'Eleventh Circuit Court of Appeals',type:'court', jcode:'J0011'},
+  {code:'F0112', name:'D.C. Circuit Court of Appeals',   type:'court', jcode:'J0012'},
+
+  // Districts / Territories
+  {code:'F0201', name:'District of Columbia',                      type:'court', jcode:'J0012'},
+  {code:'F0202', name:'District of Puerto Rico',                   type:'court', jcode:'J0001'},
+  {code:'F0203', name:'District of Guam',                          type:'court', jcode:'J0009'},
+  {code:'F0204', name:'District of the Northern Mariana Islands',  type:'court', jcode:'J0009'},
+  {code:'F0205', name:'District of the Virgin Islands',            type:'court', jcode:'J0003'},
+  {code:'F0206', name:'Northern District of Alabama',              type:'court', jcode:'J0011'},
+  {code:'F0207', name:'Middle District of Alabama',                type:'court', jcode:'J0011'},
+  {code:'F0208', name:'Southern District of Alabama',              type:'court', jcode:'J0011'},
+  {code:'F0209', name:'District of Alaska',                        type:'court', jcode:'J0009'},
+  {code:'F0210', name:'District of Arizona',                       type:'court', jcode:'J0009'},
+  {code:'F0211', name:'Eastern District of Arkansas',              type:'court', jcode:'J0008'},
+  {code:'F0212', name:'Western District of Arkansas',              type:'court', jcode:'J0008'},
+  {code:'F0213', name:'Central District of California',            type:'court', jcode:'J0009'},
+  {code:'F0214', name:'Eastern District of California',            type:'court', jcode:'J0009'},
+  {code:'F0215', name:'Northern District of California',           type:'court', jcode:'J0009'},
+  {code:'F0216', name:'Southern District of California',           type:'court', jcode:'J0009'},
+  {code:'F0217', name:'District of Colorado',                      type:'court', jcode:'J0010'},
+  {code:'F0218', name:'District of Connecticut',                   type:'court', jcode:'J0002'},
+  {code:'F0219', name:'District of Delaware',                      type:'court', jcode:'J0003'},
+  {code:'F0220', name:'Northern District of Florida',              type:'court', jcode:'J0011'},
+  {code:'F0221', name:'Middle District of Florida',                type:'court', jcode:'J0011'},
+  {code:'F0222', name:'Southern District of Florida',              type:'court', jcode:'J0011'},
+  {code:'F0223', name:'Northern District of Georgia',              type:'court', jcode:'J0011'},
+  {code:'F0224', name:'Middle District of Georgia',                type:'court', jcode:'J0011'},
+  {code:'F0225', name:'Southern District of Georgia',              type:'court', jcode:'J0011'},
+  {code:'F0226', name:'District of Hawaii',                        type:'court', jcode:'J0009'},
+  {code:'F0227', name:'District of Idaho',                         type:'court', jcode:'J0009'},
+  {code:'F0228', name:'Central District of Illinois',             type:'court', jcode:'J0007'},
+  {code:'F0229', name:'Northern District of Illinois',             type:'court', jcode:'J0007'},
+  {code:'F0230', name:'Southern District of Illinois',             type:'court', jcode:'J0007'},
+  {code:'F0231', name:'Northern District of Indiana',              type:'court', jcode:'J0007'},
+  {code:'F0232', name:'Southern District of Indiana',              type:'court', jcode:'J0007'},
+  {code:'F0233', name:'Northern District of Iowa',                type:'court', jcode:'J0008'},
+  {code:'F0234', name:'Southern District of Iowa',                 type:'court', jcode:'J0008'},
+  {code:'F0235', name:'District of Kansas',                        type:'court', jcode:'J0010'},
+  {code:'F0236', name:'Eastern District of Kentucky',              type:'court', jcode:'J0006'},
+  {code:'F0237', name:'Western District of Kentucky',              type:'court', jcode:'J0006'},
+  {code:'F0238', name:'Eastern District of Louisiana',             type:'court', jcode:'J0005'},
+  {code:'F0239', name:'Middle District of Louisiana',              type:'court', jcode:'J0005'},
+  {code:'F0240', name:'Western District of Louisiana',             type:'court', jcode:'J0005'},
+  {code:'F0241', name:'District of Maine',                         type:'court', jcode:'J0001'},
+  {code:'F0242', name:'District of Maryland',                      type:'court', jcode:'J0004'},
+  {code:'F0243', name:'District of Massachusetts',                 type:'court', jcode:'J0001'},
+  {code:'F0244', name:'Eastern District of Michigan',             type:'court', jcode:'J0006'},
+  {code:'F0245', name:'Western District of Michigan',             type:'court', jcode:'J0006'},
+  {code:'F0246', name:'District of Minnesota',                     type:'court', jcode:'J0008'},
+  {code:'F0247', name:'Northern District of Mississippi',         type:'court', jcode:'J0005'},
+  {code:'F0248', name:'Southern District of Mississippi',          type:'court', jcode:'J0005'},
+  {code:'F0249', name:'Eastern District of Missouri',             type:'court', jcode:'J0008'},
+  {code:'F0250', name:'Western District of Missouri',              type:'court', jcode:'J0008'},
+  {code:'F0251', name:'District of Montana',                       type:'court', jcode:'J0009'},
+  {code:'F0252', name:'District of Nebraska',                      type:'court', jcode:'J0008'},
+  {code:'F0253', name:'District of Nevada',                        type:'court', jcode:'J0009'},
+  {code:'F0254', name:'District of New Hampshire',                type:'court', jcode:'J0001'},
+  {code:'F0255', name:'District of New Jersey',                    type:'court', jcode:'J0003'},
+  {code:'F0256', name:'District of New Mexico',                    type:'court', jcode:'J0010'},
+  {code:'F0257', name:'Eastern District of New York',             type:'court', jcode:'J0002'},
+  {code:'F0258', name:'Northern District of New York',             type:'court', jcode:'J0002'},
+  {code:'F0259', name:'Southern District of New York',            type:'court', jcode:'J0002'},
+  {code:'F0260', name:'Western District of New York',              type:'court', jcode:'J0002'},
+  {code:'F0261', name:'Eastern District of North Carolina',       type:'court', jcode:'J0003'},
+  {code:'F0262', name:'Middle District of North Carolina',        type:'court', jcode:'J0004'},
+  {code:'F0263', name:'Western District of North Carolina',       type:'court', jcode:'J0004'},
+  {code:'F0264', name:'District of North Dakota',                 type:'court', jcode:'J0008'},
+  {code:'F0265', name:'Northern District of Ohio',                 type:'court', jcode:'J0006'},
+  {code:'F0266', name:'Southern District of Ohio',                 type:'court', jcode:'J0006'},
+  {code:'F0267', name:'Eastern District of Oklahoma',             type:'court', jcode:'J0010'},
+  {code:'F0268', name:'Northern District of Oklahoma',             type:'court', jcode:'J0010'},
+  {code:'F0269', name:'Western District of Oklahoma',              type:'court', jcode:'J0010'},
+  {code:'F0270', name:'District of Oregon',                       type:'court', jcode:'J0009'},
+  {code:'F0271', name:'Eastern District of Pennsylvania',         type:'court', jcode:'J0002'},
+  {code:'F0272', name:'Middle District of Pennsylvania',          type:'court', jcode:'J0003'},
+  {code:'F0273', name:'Western District of Pennsylvania',         type:'court', jcode:'J0003'},
+  {code:'F0274', name:'District of Rhode Island',                 type:'court', jcode:'J0001'},
+  {code:'F0275', name:'District of South Carolina',               type:'court', jcode:'J0004'},
+  {code:'F0276', name:'District of South Dakota',                  type:'court', jcode:'J0008'},
+  {code:'F0277', name:'Eastern District of Tennessee',             type:'court', jcode:'J0006'},
+  {code:'F0278', name:'Middle District of Tennessee',             type:'court', jcode:'J0006'},
+  {code:'F0279', name:'Western District of Tennessee',            type:'court', jcode:'J0006'},
+  {code:'F0280', name:'Eastern District of Texas',                type:'court', jcode:'J0005'},
+  {code:'F0281', name:'Northern District of Texas',                type:'court', jcode:'J0005'},
+  {code:'F0282', name:'Southern District of Texas',               type:'court', jcode:'J0005'},
+  {code:'F0283', name:'Western District of Texas',                type:'court', jcode:'J0005'},
+  {code:'F0284', name:'District of Utah',                         type:'court', jcode:'J0010'},
+  {code:'F0285', name:'District of Vermont',                      type:'court', jcode:'J0002'},
+  {code:'F0286', name:'Eastern District of Virginia',             type:'court', jcode:'J0004'},
+  {code:'F0287', name:'Western District of Virginia',             type:'court', jcode:'J0004'},
+  {code:'F0288', name:'Western District of Washington',            type:'court', jcode:'J0009'},
+  {code:'F0289', name:'Eastern District of Washington',           type:'court', jcode:'J0009'},
+  {code:'F0290', name:'Northern District of West Virginia',       type:'court', jcode:'J0004'},
+  {code:'F0291', name:'Southern District of West Virginia',        type:'court', jcode:'J0004'},
+  {code:'F0292', name:'Eastern District of Wisconsin',            type:'court', jcode:'J0007'},
+  {code:'F0293', name:'Western District of Wisconsin',            type:'court', jcode:'J0007'},
+  {code:'F0294', name:'District of Wyoming',                      type:'court', jcode:'J0010'}
+] AS row
+CREATE (f:Forum {
+  forum_upload_code: row.code,
+  forum_id:          randomUUID(),
+  name:              row.name,
+  name_embedding:    [],
+  type:              row.type
+})
+WITH f, row
+MATCH (j:Jurisdiction {jurisdiction_upload_code: row.jcode})
+CREATE (f)-[:PART_OF]->(j);
+
+
+// ============================================================================
+// RELIEF TYPES
+// ============================================================================
+
+UNWIND [
+  {code:'RL0001', type:'injunction'},
+  {code:'RL0002', type:'damages'},
+  {code:'RL0003', type:'declaratory'},
+  {code:'RL0004', type:'habeas corpus'},
+  {code:'RL0005', type:'specific performance'},
+  {code:'RL0006', type:'royalty'},
+  {code:'RL0007', type:'accounting'},
+  {code:'RL0008', type:'divestiture'},
+  {code:'RL0009', type:'dissolution'},
+  {code:'RL0010', type:'reversal'},
+  {code:'RL0011', type:'remand'}
+] AS row
+CREATE (:ReliefType {
+  relief_type_upload_code: row.code,
+  relief_type_id:          randomUUID(),
+  type:                    row.type
+});
+
+
+// ============================================================================
+// DOMAINS
+// ============================================================================
+
+UNWIND [
+  {code:'DOM001', name:'Free Speech'},
+  {code:'DOM002', name:'Antitrust'},
+  {code:'DOM003', name:'Copyright'}
+] AS row
+CREATE (:Domain {
+  domain_upload_code: row.code,
+  domain_id:          randomUUID(),
+  name:               row.name
+});

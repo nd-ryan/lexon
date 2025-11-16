@@ -76,14 +76,50 @@ async def get_property_mappings():
 async def get_catalog_nodes(label: str):
     """Fetch all nodes of a specific label from Neo4j catalog.
     
-    Used for selecting existing catalog nodes (where can_create_new=false).
+    Used for selecting existing catalog nodes (where case_unique=false).
     For Forum: includes related Jurisdiction data.
-    For ReliefType and Jurisdiction: returns nodes directly.
+    Filters out hidden properties (like embeddings) based on schema.
     
     If Neo4j is not available, returns empty list gracefully.
     """
     try:
         from app.lib.neo4j_client import neo4j_client
+        from app.lib.schema_runtime import load_schema_payload
+        
+        # Get schema to determine which properties to filter
+        schema = load_schema_payload()
+        
+        def filter_properties(properties: dict, node_label: str) -> dict:
+            """Filter out hidden properties except _id fields based on schema."""
+            if not schema or not isinstance(schema, list):
+                return properties
+            
+            # Find the schema definition for this label
+            label_schema = next((s for s in schema if s.get('label') == node_label), None)
+            if not label_schema:
+                return properties
+            
+            schema_props = label_schema.get('properties', {})
+            if not isinstance(schema_props, dict):
+                return properties
+            
+            # Filter properties
+            filtered = {}
+            for key, value in properties.items():
+                prop_def = schema_props.get(key, {})
+                if not isinstance(prop_def, dict):
+                    # No schema definition, include it
+                    filtered[key] = value
+                    continue
+                
+                ui_config = prop_def.get('ui', {})
+                is_hidden = ui_config.get('hidden', False)
+                
+                # Include if not hidden, or if it's an _id field (even if hidden)
+                if not is_hidden or key.endswith('_id'):
+                    filtered[key] = value
+            
+            return filtered
         
         nodes = []
         
@@ -107,19 +143,19 @@ async def get_catalog_nodes(label: str):
                 nodes.append({
                     'temp_id': str(forum_id),
                     'label': 'Forum',
-                    'properties': forum_data,
+                    'properties': filter_properties(forum_data, 'Forum'),
                     'is_existing': True,
                     'related': {
                         'jurisdiction': {
                             'temp_id': str(jurisdiction_id),
                             'label': 'Jurisdiction',
-                            'properties': jurisdiction_data,
+                            'properties': filter_properties(jurisdiction_data, 'Jurisdiction'),
                             'is_existing': True
                         }
                     }
                 })
         else:
-            # For other catalog types (ReliefType, Jurisdiction), just fetch the nodes
+            # For other catalog types, just fetch the nodes
             query = f"MATCH (n:`{label}`) RETURN n LIMIT 1000"
             result = neo4j_client.execute_query(query)
             
@@ -145,7 +181,7 @@ async def get_catalog_nodes(label: str):
                 nodes.append({
                     'temp_id': str(temp_id),
                     'label': label,
-                    'properties': node_data,
+                    'properties': filter_properties(node_data, label),
                     'is_existing': True
                 })
         

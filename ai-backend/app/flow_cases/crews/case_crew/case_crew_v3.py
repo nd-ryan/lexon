@@ -168,6 +168,26 @@ class CaseCrew:
             output_pydantic=output_model
         )
 
+    def phase5b_disposition_task(self) -> Task:
+        """
+        Extract disposition_text for Arguments (Phase 5B).
+        
+        Replacements expected: CASE_TEXT, ARGUMENTS_JSON, ARGUMENT_EXAMPLES_JSON
+        """
+        task_spec = self.tasks_config['phase5b_disposition_task'].copy()  # type: ignore[index]
+        desc = (
+            task_spec['description']
+            .replace('{FILENAME}', self.filename)
+            .replace('{FILEPATH}', self.file_path)
+        )
+        for k, v in self.replacements.items():
+            desc = desc.replace('{' + str(k) + '}', str(v))
+        task_spec['description'] = desc
+        return Task(
+            config=task_spec,
+            agent=self.phase1_extract_agent(),
+        )
+
     def phase6_laws_per_ruling_task(self) -> Task:
         """
         Select Laws per Ruling from catalog (Phase 6).

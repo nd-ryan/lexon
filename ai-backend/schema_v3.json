@@ -162,8 +162,8 @@
       "ruling_id": { "type": "STRING", "ui": { "hidden": true } },
       "label": { "type": "STRING", "ui": { "order": 1, "input": "text", "required": true, "label": "Label", "notes": "concise answer to the issue, e.g. 'monopoly power exists'. or 'rinnel has monopoly power'" } },
       "type": { "type": "STRING", "ui": { "order": 3, "input": "select", "options": ["interim", "temporary", "discovery", "jury verdict", "bench verdict", "post-trial decision", "appeal"], "label": "Type", "required": true } },
-      "text": { "type": "STRING", "ui": { "order": 4, "input": "textarea", "label": "Text", "required": true, "notes": "full description of the court's reasoning and decision on issue" } },
-      "text_embedding": { "type": "LIST", "ui": { "hidden": true } },
+      "reasoning": { "type": "STRING", "ui": { "order": 4, "input": "textarea", "label": "Reasoning", "required": true, "notes": "full description of the court's reasoning and decision on issue" } },
+      "reasoning_embedding": { "type": "LIST", "ui": { "hidden": true } },
       "ratio": { "type": "STRING", "ui": { "order": 5, "input": "textarea", "label": "Ratio", "required": true, "notes": "rationale for the court's decision, e.g. 'firms with more than 87% in the market have monopoly power'" } },
       "ratio_embedding": { "type": "LIST", "ui": { "hidden": true } },
       "summary": { "type": "STRING", "ui": { "order": 6, "input": "textarea", "label": "Summary", "required": true, "notes": "summary of the court's decision" } },
@@ -253,7 +253,9 @@
       "label": { "type": "STRING", "ui": { "order": 1, "input": "text", "required": true, "label": "Label" } },
       "text": { "type": "STRING", "ui": { "order": 2, "input": "textarea", "label": "Text", "required": true } },
       "text_embedding": { "type": "LIST", "ui": { "hidden": true } },
-      "raised_by": { "type": "STRING", "ui": { "order": 4, "input": "select", "options": ["plaintiff", "defendant", "appellant", "appellee", "petitioner", "respondent"], "label": "Raised by", "required": true } }
+      "disposition_text": { "type": "STRING", "ui": { "order": 4, "input": "textarea", "label": "Disposition", "required": true } },
+      "disposition_text_embedding": { "type": "LIST", "ui": { "hidden": true } },
+      "raised_by": { "type": "STRING", "ui": { "order": 3, "input": "select", "options": ["plaintiff", "defendant", "appellant", "appellee", "petitioner", "respondent"], "label": "Raised by", "required": true } }
     },
     "relationships": {
       "EVALUATED_IN": {

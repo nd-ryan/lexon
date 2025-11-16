@@ -415,12 +415,14 @@ export function ObjectFields({
   nodeOptions,
   nodeIdToDisplay
 }: ObjectFieldsProps) {
+  // Filter out unwanted properties but preserve the order from backend
+  // Backend orders properties according to schema ui.order
   const entries = Object.entries(obj || {}).filter(([k, v]) => {
     if (k === 'temp_id') return false
     // Hide empty nested objects like properties: {}
     if (v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0) return false
     return true
-  }).sort(([a], [b]) => String(a).localeCompare(String(b)))
+  })
   
   if (entries.length === 0) return null
   

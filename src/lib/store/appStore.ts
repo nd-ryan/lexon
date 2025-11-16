@@ -7,7 +7,7 @@ type AppState = {
   schemaError: string | null
   loadSchema: () => Promise<void>
   
-  // Catalog nodes (for can_create_new=false types: Forum, Jurisdiction, ReliefType)
+  // Catalog nodes (for case_unique=false types: nodes that can be shared across cases)
   catalogNodes: Record<string, GraphNode[]>
   catalogLoading: boolean
   catalogError: string | null
@@ -60,10 +60,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         throw new Error('Schema not available')
       }
       
-      // Find catalog types (where can_create_new=false)
+      // Find catalog types (where case_unique=false - nodes shared across cases)
       const schemaArray = Array.isArray(schema) ? schema : []
       const catalogLabels = schemaArray
-        .filter((s: any) => s?.can_create_new === false)
+        .filter((s: any) => s?.case_unique === false)
         .map((s: any) => s?.label)
         .filter(Boolean) as string[]
       

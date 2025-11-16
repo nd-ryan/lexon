@@ -219,6 +219,38 @@ phase5_arguments_per_ruling_task:
     {RULINGS_JSON}
   expected_output: "A JSON object { results: [ { ruling_temp_id: string, arguments: [{ properties: {...} OR temp_id: string, status: string }, ...] } ] }"
 
+phase5b_disposition_task:
+  description: |
+    For each Argument provided, extract the disposition_text which captures the judge's verbatim words on that argument.
+    
+    CRITICAL - DISPOSITION TEXT EXTRACTION:
+    Your task for disposition_text is to:
+    1. Search the case text to identify where the judge addresses or rules on that argument
+    2. Extract the judge's own words verbatim (do not paraphrase)
+    3. Condense the extracted text into a single, continuous quotation that:
+       - Uses ellipses (…) where nonessential text has been removed
+       - Uses [square brackets] only to clarify referents or ensure grammatical flow when combining non-contiguous sentences
+       - Preserves exact original wording, punctuation, and capitalization from the opinion
+    4. Include all portions necessary to capture the full reasoning and outcome on that argument, even if they appear in multiple sections of the opinion
+    5. Do not modify the court's language, style, or tense
+    6. The quotation must be self-contained and make sense to a reader without additional commentary
+    
+    IMPORTANT: Each argument already has properties like label, text, and raised_by. You are ONLY extracting the disposition_text field.
+    
+    EXAMPLES (showing arguments with their disposition_text):
+    {ARGUMENT_EXAMPLES_JSON}
+    
+    Return JSON as: { "results": [ { "argument_temp_id": string, "disposition_text": string }, ... ] }
+    
+    Use the argument's temp_id from ARGUMENTS_JSON for "argument_temp_id" - do not generate new temp_ids.
+    
+    ARGUMENTS_JSON (contains arguments that need disposition_text):
+    {ARGUMENTS_JSON}
+    
+    CASE_TEXT:
+    {CASE_TEXT}
+  expected_output: "A JSON object { results: [ { argument_temp_id: string, disposition_text: string }, ... ] }"
+
 phase6_laws_per_ruling_task:
   description: |
     For each Ruling, select the Law(s) from the catalog that the ruling explicitly relies upon or cites.

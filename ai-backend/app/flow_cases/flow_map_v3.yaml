@@ -70,7 +70,7 @@
 - label: Ruling
   instructions: >
     Summarize the court's final disposition (affirmed, reversed, remanded, etc.) in the label field.
-    In the text field, describe the specific legal ruling or holding that results in that disposition.
+    In the reasoning field, describe the specific legal ruling or holding that results in that disposition.
     This is the core legal conclusion that justifies the final outcome (e.g., 'Sufficient evidence
     supported the jury's negligence finding,' or 'Trial court applied an incorrect standard
     for preliminary injunction'). A single ruling may apply to multiple issues/holdings in the case.
@@ -84,7 +84,7 @@
       ruling:
         label: "The Judgment Is Final and Appealable"
         type: appeal
-        text: >
+        reasoning: >
           The Supreme Court held that the District Court's divestiture order was a final judgment
           because it fully resolved the substantive controversy between the parties.
           Although the decree left certain implementation details to be worked out later,
@@ -113,7 +113,7 @@
       ruling:
         label: "Rule of Reason Applies"
         type: appeal
-        text: >
+        reasoning: >
           The Supreme Court held that the Rule of Reason is the appropriate standard
           for evaluating the NFL's collective licensing arrangements. The Court reasoned
           that per se illegality is inappropriate in this context because the teams
@@ -139,110 +139,146 @@
     Create an appropriate name for the argument in the label field.
   examples:
     - ruling:
-        label: "Relevant Product Markets Are Men's, Women's, and Children's Shoes"
-        type: appeal
-        favored_party: appellee
-        text: >
-          The Supreme Court upheld the District Court's finding that the relevant lines
-          of commerce for antitrust purposes are men's, women's, and children's shoes.
-          The Court accepted the District Court's application of submarket principles
-          and practical indicia, concluding that these lines constitute distinct
-          product markets.
+      label: "Relevant Product Markets Are Men's, Women's, and Children's Shoes"
+      type: appeal
+      favored_party: appellee
+      reasoning: >
+        The Supreme Court upheld the District Court's finding that the relevant lines of
+        commerce for antitrust purposes are men's, women's, and children's shoes. The Court
+        accepted the District Court's application of submarket principles and practical
+        indicia, concluding that these lines constitute distinct product markets.
       arguments:
         - label: "Submarket Analysis Framework"
           text: >
-            The Court established a foundational test: "The outer boundaries of a product market
-            are determined by the reasonable interchangeability of use or the 
-            cross-elasticity of demand between the product itself and substitutes for it.
-            However, within this broad market, well-defined submarkets may exist which,
-            in themselves, constitute product markets for antitrust purposes."
-            The Court cited United States v. E. I. du Pont de Nemours & Co.,
-            353 U.S. 586, 593-595, as authority for this principle.
+            Defendants argued that the District Court erred in defining submarkets and that
+            the Clayton Act requires consideration only of broad markets based on
+            interchangeability of use and cross-elasticity of demand. They maintained that
+            men's, women's, and children's shoes were not separate markets but part of a
+            single national footwear market.
           raised_by: defendant
           status: Accepted
+          disposition_text: >
+            "The boundaries of such a submarket may be determined by examining such practical
+            indicia as industry or public recognition of the submarket as a separate economic entity,
+            the product's peculiar characteristics and uses, unique production facilities, distinct
+            customers, distinct prices, sensitivity to price changes, and specialized vendors...
+            It is necessary to examine the effects of a merger in each such economically significant
+            submarket to determine if there is a reasonable probability that the merger will substantially
+            lessen competition."
         - label: "Practical Indicia Test"
           text: >
-            The Court held that "boundaries of such a submarket may be determined by
-            examining such practical indicia as industry or public recognition of the
-            submarket as a separate economic entity, the product's peculiar characteristics and uses,
-            unique production facilities, distinct customers, distinct prices,
-            sensitivity to price changes, and specialized vendors."
+            Defendants contended that the District Court's reliance on “practical indicia”
+            such as public perception and marketing channels was subjective and improperly
+            substituted judicial intuition for economic proof.
           raised_by: defendant
           status: Accepted
+          disposition_text: >
+            "Determination of the relevant market is a matter of judgment and depends upon
+            the facts peculiar to the case... Boundaries of such a submarket may be determined
+            by examining such practical indicia as industry or public recognition of the submarket
+            as a separate economic entity, the product's peculiar characteristics and uses, distinct
+            customers, distinct prices, and specialized vendors."
         - label: "Application of Practical Indicia to Shoe Lines"
           text: >
-            "Applying these considerations to the present case, we conclude that the
-            record supports the District Court's finding that the relevant lines of
-            commerce are men's, women's, and children's shoes. These product lines are
-            recognized by the public; each line is manufactured in separate plants;
-            each has characteristics peculiar to itself rendering it generally
-            noncompetitive with the others; and each is, of course, directed toward
-            a distinct class of customers."
+            Defendants argued that even if submarkets exist, the District Court erred in
+            finding separate markets for men's, women's, and children's shoes, insisting that
+            these lines directly compete and are interchangeable in production and sale.
           raised_by: defendant
           status: Accepted
+          disposition_text: >
+            "Applying these considerations to the present case, we conclude that the record supports
+            the District Court's finding that the relevant lines of commerce are men's, women's, and
+            children's shoes. These product lines are recognized by the public; each line is manufactured
+            in separate plants; each has characteristics peculiar to itself rendering it generally
+            noncompetitive with the others; and each is, of course, directed toward a distinct class
+            of customers."
         - label: "Price-Quality Divisions Within Product Lines"
           text: >
-            Brown argued that "the predominantly medium-priced shoes which it manufactures occupy
-            a product market different from the predominantly low-priced shoes which Kinney sells."
-
-            The Court rejected this argument, stating: "But agreement with that argument would be
-            equivalent to holding that medium-priced shoes do not compete with low-priced shoes.
-            We think the District Court properly found the facts to be otherwise. It would be unrealistic
-            to accept Brown's contention that, for example, men's shoes selling below $8.99 are in a
-            different product market from those selling above $9.00.”
-
-            The Court clarified: "This is not to say, however, that 'price/quality' differences, where
-            they exist, are unimportant in analyzing a merger; they may be of importance in determining
-            the likely effect of a merger. But the boundaries of the relevant market must be drawn with
-            sufficient breadth to include the competing products of each of the merging companies and
-            to recognize competition where, in fact, competition exists. Thus we agree with the District
-            Court that in this case a further division of product lines based on 'price/quality' differences
-            would be 'unrealistic.'"
-          raised_by: Defendent
+            Defendants argued that their medium-priced shoes occupied a market distinct from
+            the low-priced shoes sold by competitors such as Kinney, claiming that the merger
+            should not be condemned based on competition between products of differing quality
+            and consumer segments.
+          raised_by: defendant
           status: Rejected
+          disposition_text: >
+            "Appellant... contends that the District Court's definitions fail to recognize sufficiently
+            'price/quality' and 'age/sex' distinctions... Brown argues that the predominantly medium-priced
+            shoes which it manufactures occupy a product market different from the predominantly low-priced
+            shoes which Kinney sells. But agreement with that argument would be equivalent to holding that
+            medium-priced shoes do not compete with low-priced shoes. We think the District Court properly
+            found the facts to be otherwise... Thus we agree with the District Court that in this case a
+            further division of product lines based on 'price/quality' differences would be 'unrealistic.'"
     - ruling:
-        label: "The Horizontal Merger Violates Section 7"
-        type: appeal
-        favored_party: appellee
-        text: >
-          The Court concluded that "the merger would substantially lessen competition in these markets,
-          citing the combined market shares of Brown and Kinney, the adverse effects on independent
-          retailers from large national chains, and the accelerated trend toward concentration
-          in the industry."
+      label: "The Horizontal Merger Violates Section 7"
+      type: appeal
+      favored_party: appellee
+      reasoning: >
+        The Supreme Court concluded that the merger between Brown and Kinney would substantially
+        lessen competition in the shoe industry. The Court cited the firms' combined market shares,
+        their impact on independent retailers, and the industry's accelerating trend toward concentration.
       arguments:
         - label: "Rejection of Purely Mathematical Test"
           text: >
-            The Court "explicitly rejected a purely mathematical test for 'substantially to lessen
-            competition,' instead advocating for an examination of various economic and historical
-            factors within the industry context."
+            Defendants argued that the Court should apply a quantitative threshold, asserting
+            that the combined market shares were too low to prove a substantial lessening of
+            competition. They urged a mechanical percentage rule rather than a structural
+            evaluation of market effects.
           raised_by: defendant
           status: Accepted
+          disposition_text: >
+            "We explicitly reject a purely mathematical test for determining whether a merger may
+            substantially lessen competition... The statute requires not arithmetic but appraisal
+            of the market structure, history, and probable future... Congress intended to arrest
+            anticompetitive tendencies in their incipiency, not merely to condemn them after
+            fruition."
         - label: "Combined Market Shares in Specific Cities"
           text: >
-            The Court relied on evidence of the combined market shares of Brown and Kinney in various
-            cities with populations exceeding 10,000 where both companies operated retail stores.
+            Defendants contended that local market evidence was insufficient and that the Court
+            should consider competition at the national level rather than relying on city-by-city
+            analysis of retail shares.
           raised_by: defendant
           status: Accepted
+          disposition_text: >
+            "The record demonstrates that in numerous cities of 10,000 population or more, the
+            combined market share of Brown and Kinney was substantial... Such figures, considered
+            in light of the structure and trend of the industry, support the District Court's
+            finding that the merger would substantially lessen competition."
         - label: "Impact on Independent Retailers"
           text: >
-            The Court considered "the adverse effects on independent retailers from large national
-            chains" as a factor supporting the finding of competitive harm.
-          raised_by: defendant
+            Plaintiffs argued that the merger would harm small, independent retailers by expanding
+            Brown and Kinney's control over distribution channels and by increasing concentration
+            at the expense of local competition.
+          raised_by: plaintiff
           status: Accepted
+          disposition_text: >
+            "The Court properly took into account the probable adverse effects of the merger upon
+            small independent retailers... The elimination or weakening of these competitors is
+            precisely the type of economic concentration Section 7 was designed to prevent."
         - label: "Trend Toward Concentration"
           text: >
-            The Court emphasized "the accelerated trend toward concentration in the industry" as
-            a critical factor. This reflects the 1950 amendment's purpose to halt anticompetitive
-            trends in their incipiency.
-          raised_by: defendant
+            Plaintiffs argued that the merger must be evaluated within the broader trend of
+            increasing concentration and vertical integration in the shoe industry, warning that
+            the transaction would accelerate that anticompetitive trajectory.
+          raised_by: plaintiff
           status: Accepted
+          disposition_text: >
+            "The existence of a trend toward vertical integration, which the District Court found,
+            is well substantiated by the record... It is against this background of continuing
+            concentration that the present merger must be viewed... Remaining vigor cannot immunize
+            a merger if the trend in that industry is toward oligopoly... It is the probable effect
+            of the merger upon the future as well as the present which the Clayton Act commands the
+            courts... to examine."
         - label: "Market Share Percentages Too Small to Matter"
           text: >
-            The Court implicitly rejected any argument that the combined market shares were too small
-            to constitute a substantial lessening of competition, applying its multi-factor analysis
-            rather than accepting a threshold percentage test.
-          raised_by: plaintiff
+            Defendants argued that their post-merger market shares were too small to threaten
+            competition and that Section 7 should not apply to firms with modest combined percentages.
+          raised_by: defendant
           status: Rejected
+          disposition_text: >
+            "We cannot accept the contention that the percentages here involved are too small
+            to warrant relief... The Act is concerned with probabilities, not certainties,
+            and forbids mergers whose effect may be substantially to lessen competition...
+            The figures, viewed in context, reveal a significant competitive threat."
 
 - label: Law
   instructions:
@@ -296,7 +332,7 @@
         The Court repeatedly invoked Copperweld Corp. v. Independence Tube Corp. for the principle
         that § 1 embodies a "basic distinction between concerted and independent action."
         The Court explained that Congress "treated concerted behavior more strictly than unilateral behavior"
-        because "concerted activity inherently is fraught with anticompetitive risk." (560 U.S. at 189-90).
+        because "concerted activity inherently is fraught with anticompetitive risk."
 
 - label: Policy
   instructions: |
@@ -308,7 +344,7 @@
       description: >
         The Court warned that if profit-sharing alone immunized joint ventures,
         "any cartel 'could evade the antitrust laws simply by creating a joint venture"
-        to serve as the exclusive seller of their competing products.' (560 U.S. at 201-02,
+        to serve as the exclusive seller of their competing products.'
         citing Judge Sotomayor's concurrence in MLB Properties).
       discipline: economics
     - name: "Prevention of Concentration"

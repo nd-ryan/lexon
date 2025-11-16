@@ -18,7 +18,7 @@ interface AddNodeModalProps {
   onSubmit: (payload: { node: GraphNode; edges: GraphEdge[] }) => void
 }
 
-export default function AddNodeModal({ open, nodeType, schema, existingNodes, parentContext, onCancel, onSubmit }: AddNodeModalProps) {
+export default function AddNodeModal({ open, nodeType, schema, existingNodes, parentContext: _parentContext, onCancel, onSubmit }: AddNodeModalProps) {
   const schemaArray: SchemaItem[] = useMemo(() => {
     if (!schema) return []
     if (Array.isArray(schema)) return schema as SchemaItem[]
@@ -61,18 +61,8 @@ export default function AddNodeModal({ open, nodeType, schema, existingNodes, pa
     }
     return {}
   }, [typeDef])
-  const relationshipsMap: Record<string, string> = useMemo(() => {
-    const rels = typeDef?.relationships || {}
-    const out: Record<string, string> = {}
-    Object.entries(rels).forEach(([label, def]) => {
-      out[label] = typeof def === 'string' ? def : (def?.target || '')
-    })
-    return out
-  }, [typeDef])
-
   // Build initial property state
   const [properties, setProperties] = useState<Record<string, any>>({})
-  const [relSelections, setRelSelections] = useState<Array<{ targetTempId: string; relLabel: string | null }>>([])
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [mode, setMode] = useState<'new' | 'existing'>('new')
   const [searchTerm, setSearchTerm] = useState<string>('')
@@ -127,73 +117,12 @@ export default function AddNodeModal({ open, nodeType, schema, existingNodes, pa
       else init[key] = ''
     })
     setProperties(init)
-    setRelSelections([])
     setErrors({})
   }, [open, attributes, visibleAttributeKeys])
 
   const handlePropChange = (key: string, value: any) => {
     setProperties(prev => ({ ...prev, [key]: value }))
   }
-
-  const addRelationshipRow = () => {
-    setRelSelections(prev => [...prev, { targetTempId: '', relLabel: null }])
-  }
-
-  const removeRelationshipRow = (idx: number) => {
-    setRelSelections(prev => prev.filter((_, i) => i !== idx))
-  }
-
-  const onSelectTargetNode = (idx: number, targetTempId: string) => {
-    setRelSelections(prev => {
-      const next = [...prev]
-      const row = next[idx]
-      if (!row) return prev
-      row.targetTempId = targetTempId
-      // Auto-detect rel label based on selected node's label and source type relationships
-      const targetNode = existingNodes.find(n => String(n?.temp_id) === targetTempId)
-      const targetLabel = String(targetNode?.label || '')
-      let rel: string | null = null
-      for (const [relLabel, toLabel] of Object.entries(relationshipsMap)) {
-        if (String(toLabel) === targetLabel) { rel = relLabel; break }
-      }
-      row.relLabel = rel
-      return next
-    })
-  }
-
-  const nodeOptionsByType = useMemo(() => {
-    const truncate = (text: string, max = 60): string => {
-      if (!text) return ''
-      return text.length > max ? `${text.slice(0, max - 1)}…` : text
-    }
-    const byType: Record<string, Array<{ id: string; display: string }>> = {}
-    existingNodes.forEach(n => {
-      const id = String(n?.temp_id || '')
-      if (!id) return
-      const label = String(n?.label || 'Unknown')
-      const name = (() => {
-        const props = (n?.properties ?? {}) as Record<string, unknown>
-        const candidates = ['name', 'title', 'text', 'case_name']
-        for (const key of candidates) {
-          const v = props[key]
-          if (typeof v === 'string' && v.trim()) return v.trim()
-        }
-        return id
-      })()
-      const display = `[${label}] ${truncate(String(name))}`
-      if (!byType[label]) byType[label] = []
-      byType[label].push({ id, display })
-    })
-    return byType
-  }, [existingNodes])
-
-  const allNodeOptions = useMemo(() => {
-    const arr: Array<{ id: string; display: string; label: string }> = []
-    Object.entries(nodeOptionsByType).forEach(([label, opts]) => {
-      opts.forEach(o => arr.push({ id: o.id, display: o.display, label }))
-    })
-    return arr
-  }, [nodeOptionsByType])
 
   const sameTypeExistingOptions = useMemo(() => {
     const wanted = (nodeType || '').toLowerCase()
@@ -269,7 +198,6 @@ export default function AddNodeModal({ open, nodeType, schema, existingNodes, pa
                     className={`p-2 rounded border cursor-pointer text-xs ${selectedExistingId === o.id ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'}`}
                   >
                     <div className="font-medium">{o.name}</div>
-                    <div className="text-[11px] text-gray-500">ID: {o.id}</div>
                   </div>
                 ))
               )}
@@ -385,61 +313,6 @@ export default function AddNodeModal({ open, nodeType, schema, existingNodes, pa
         </div>
         )}
 
-        {/* Relationships */}
-        {parentContext ? (
-          // When context is provided, only show the auto-created relationship
-          <div className="mt-3 space-y-1.5">
-            <div className="text-xs font-semibold text-gray-700">Relationship</div>
-            <div className="bg-blue-50 border border-blue-200 rounded-md px-3 py-2 text-xs">
-              <div className="font-medium text-blue-900 mb-1">Auto-created</div>
-              <div className="text-blue-700">
-                {parentContext.direction === 'incoming' 
-                  ? `← Connected from ${parentContext.parentLabel} via ${parentContext.relationship}`
-                  : `→ Connected to ${parentContext.parentLabel} via ${parentContext.relationship}`
-                }
-              </div>
-            </div>
-          </div>
-        ) : (
-          // When no context, show relationship picker (for standalone node creation)
-          <div className="mt-3 space-y-1.5">
-            <div className="text-xs font-semibold text-gray-700">Relationships</div>
-            
-            {Object.keys(relationshipsMap).length === 0 && (
-              <div className="text-xs text-gray-500">No relationships defined from this node type.</div>
-            )}
-            
-            {relSelections.map((sel, idx) => {
-              const hasMapping = !!sel.relLabel
-              return (
-                <div key={idx} className="flex items-center gap-2">
-                  <select
-                    className="w-80 max-w-full rounded-md border border-gray-300 bg-white px-2 py-1 text-xs"
-                    style={{ textOverflow: 'ellipsis', whiteSpace: 'nowrap', overflow: 'hidden' }}
-                    value={sel.targetTempId}
-                    onChange={e => onSelectTargetNode(idx, e.target.value)}
-                  >
-                    <option value="">Select node</option>
-                    {allNodeOptions.map(o => (
-                      <option key={o.id} value={o.id}>{o.display}</option>
-                    ))}
-                  </select>
-                  <div className={`text-xs ${hasMapping ? 'text-gray-700' : 'text-red-600'}`}>
-                    {sel.targetTempId ? (hasMapping ? sel.relLabel : 'No schema relationship for this pair') : 'Select a node'}
-                  </div>
-                  <button type="button" className="rounded border px-2 py-1 text-xs" onClick={() => removeRelationshipRow(idx)}>Remove</button>
-                </div>
-              )
-            })}
-            
-            {Object.keys(relationshipsMap).length > 0 && (
-              <button type="button" className="rounded border px-2 py-1 text-xs" onClick={addRelationshipRow}>
-                Add relationship
-              </button>
-            )}
-          </div>
-        )}
-
         </div>
         {/* Actions */}
         <div className="flex-shrink-0 p-4 border-t bg-gray-50">
@@ -453,11 +326,7 @@ export default function AddNodeModal({ open, nodeType, schema, existingNodes, pa
                 if (!selectedExistingId) return
                 const existing = existingNodes.find(n => String(n?.temp_id) === String(selectedExistingId))
                 if (!existing) return
-                console.log('AddNodeModal submitting existing node:', existing, 'is_existing:', existing.is_existing)
-                const edges = relSelections
-                  .filter(sel => sel.targetTempId && sel.relLabel)
-                  .map<GraphEdge>(sel => ({ from: existing.temp_id, to: sel.targetTempId, label: sel.relLabel! }))
-                onSubmit({ node: existing, edges })
+                onSubmit({ node: existing, edges: [] })
                 return
               }
 
@@ -493,10 +362,7 @@ export default function AddNodeModal({ open, nodeType, schema, existingNodes, pa
               })
 
               const newNode: GraphNode = { label: nodeType, temp_id: tempId, properties: normalizedProps }
-              const edges = relSelections
-                .filter(sel => sel.targetTempId && sel.relLabel)
-                .map<GraphEdge>(sel => ({ from: tempId, to: sel.targetTempId, label: sel.relLabel! }))
-              onSubmit({ node: newNode, edges })
+              onSubmit({ node: newNode, edges: [] })
             }}
           >
               Save

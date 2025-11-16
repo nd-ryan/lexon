@@ -10,7 +10,7 @@
   "label_display_properties": {
     "Argument": ["argument_text"],
     "Issue": ["issue_text"],
-    "Ruling": ["ruling_text"],
+    "Ruling": ["ruling_reasoning"],
     "Evidence": ["description"]
   },
   "_node_card_comment": "Per-label configuration for which properties and relationships to show on node cards. You can remove items to hide them.",
@@ -72,9 +72,9 @@
       "properties": [
         "ruling_ratio_embedding",
         "ruling_upload_code",
-        "ruling_text_embedding",
+        "ruling_reasoning_embedding",
         "ruling_ratio",
-        "ruling_text",
+        "ruling_reasoning",
         "ruling_id"
       ],
       "relationships": ["RESOLVES", "RESULTS_IN"]

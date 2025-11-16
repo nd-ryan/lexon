@@ -81,14 +81,14 @@ def _get_hidden_properties_for_label(label: str, schema_payload: Any) -> set[str
 
 
 def filter_node_properties(node: Dict[str, Any], schema_payload: Any) -> Dict[str, Any]:
-    """Filter hidden properties from a single node while preserving temp_id.
+    """Filter hidden properties from a single node and order them by schema ui.order.
     
     Args:
         node: Node dict with {temp_id, label, properties}
         schema_payload: The schema array from schema.json
         
     Returns:
-        Filtered node dict
+        Filtered node dict with properties ordered by schema
     """
     if not isinstance(node, dict):
         return node
@@ -103,11 +103,12 @@ def filter_node_properties(node: Dict[str, Any], schema_payload: Any) -> Dict[st
     # Preserve if already set by normalize step
     filtered["is_existing"] = node.get("is_existing", _is_existing_node(node))
     
-    # Filter properties
+    # Filter and order properties
     properties = node.get("properties")
     if isinstance(properties, dict):
         label = node.get("label")
         hidden_props = _get_hidden_properties_for_label(label, schema_payload) if label else set()
+        schema_props = _get_all_schema_properties_for_label(label, schema_payload) if label else {}
         
         # Filter out hidden properties
         filtered_props = {}
@@ -116,7 +117,18 @@ def filter_node_properties(node: Dict[str, Any], schema_payload: Any) -> Dict[st
             if prop_name == "temp_id" or prop_name not in hidden_props:
                 filtered_props[prop_name] = prop_value
         
-        filtered["properties"] = filtered_props
+        # Order properties by schema ui.order
+        # Properties with explicit order come first (sorted by order value),
+        # then properties without order (sorted alphabetically)
+        def get_sort_key(item):
+            prop_name, prop_value = item
+            meta = schema_props.get(prop_name, {})
+            order = _get_property_order(prop_name, meta)
+            # Return tuple: (order, prop_name) for stable sort
+            return (order, prop_name)
+        
+        ordered_items = sorted(filtered_props.items(), key=get_sort_key)
+        filtered["properties"] = dict(ordered_items)
     
     # Preserve any other top-level fields (like 'related' for catalog nodes)
     for key, value in node.items():
@@ -124,6 +136,28 @@ def filter_node_properties(node: Dict[str, Any], schema_payload: Any) -> Dict[st
             filtered[key] = value
     
     return filtered
+
+
+def _get_property_order(prop_name: str, meta: Dict[str, Any]) -> int:
+    """Get the display order for a property from its schema definition.
+    
+    Args:
+        prop_name: The property name
+        meta: The property's schema metadata
+        
+    Returns:
+        Integer order value (defaults to 999 for unspecified)
+    """
+    if not isinstance(meta, dict):
+        return 999
+    
+    ui = meta.get("ui", {}) or {}
+    order = ui.get("order")
+    
+    if isinstance(order, (int, float)):
+        return int(order)
+    
+    return 999
 
 
 def _get_all_schema_properties_for_label(label: str, schema_payload: Any) -> Dict[str, Any]:
