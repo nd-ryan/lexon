@@ -1,0 +1,77 @@
+// ============================================================================
+// NOTE: This hasn't been implemented yet. Just a suggestion for preset constraints.
+// CONSTRAINTS FOR PRESET NODES
+// (Safe to run multiple times because of IF NOT EXISTS)
+// ============================================================================
+
+// DOCTRINE
+CREATE CONSTRAINT doctrine_upload_code_unique IF NOT EXISTS
+FOR (d:Doctrine)
+REQUIRE d.doctrine_upload_code IS UNIQUE;
+
+CREATE CONSTRAINT doctrine_id_unique IF NOT EXISTS
+FOR (d:Doctrine)
+REQUIRE d.doctrine_id IS UNIQUE;
+
+// FACT PATTERN
+CREATE CONSTRAINT fact_pattern_upload_code_unique IF NOT EXISTS
+FOR (fp:FactPattern)
+REQUIRE fp.fact_pattern_upload_code IS UNIQUE;
+
+CREATE CONSTRAINT fact_pattern_id_unique IF NOT EXISTS
+FOR (fp:FactPattern)
+REQUIRE fp.fact_pattern_id IS UNIQUE;
+
+// POLICY
+CREATE CONSTRAINT policy_upload_code_unique IF NOT EXISTS
+FOR (p:Policy)
+REQUIRE p.policy_upload_code IS UNIQUE;
+
+CREATE CONSTRAINT policy_id_unique IF NOT EXISTS
+FOR (p:Policy)
+REQUIRE p.policy_id IS UNIQUE;
+
+// LAW
+CREATE CONSTRAINT law_upload_code_unique IF NOT EXISTS
+FOR (l:Law)
+REQUIRE l.law_upload_code IS UNIQUE;
+
+CREATE CONSTRAINT law_id_unique IF NOT EXISTS
+FOR (l:Law)
+REQUIRE l.law_id IS UNIQUE;
+
+// JURISDICTION
+CREATE CONSTRAINT jurisdiction_upload_code_unique IF NOT EXISTS
+FOR (j:Jurisdiction)
+REQUIRE j.jurisdiction_upload_code IS UNIQUE;
+
+CREATE CONSTRAINT jurisdiction_id_unique IF NOT EXISTS
+FOR (j:Jurisdiction)
+REQUIRE j.jurisdiction_id IS UNIQUE;
+
+// FORUM
+CREATE CONSTRAINT forum_upload_code_unique IF NOT EXISTS
+FOR (f:Forum)
+REQUIRE f.forum_upload_code IS UNIQUE;
+
+CREATE CONSTRAINT forum_id_unique IF NOT EXISTS
+FOR (f:Forum)
+REQUIRE f.forum_id IS UNIQUE;
+
+// RELIEF TYPE
+CREATE CONSTRAINT relief_type_upload_code_unique IF NOT EXISTS
+FOR (r:ReliefType)
+REQUIRE r.relief_type_upload_code IS UNIQUE;
+
+CREATE CONSTRAINT relief_type_id_unique IF NOT EXISTS
+FOR (r:ReliefType)
+REQUIRE r.relief_type_id IS UNIQUE;
+
+// DOMAIN
+CREATE CONSTRAINT domain_upload_code_unique IF NOT EXISTS
+FOR (d:Domain)
+REQUIRE d.domain_upload_code IS UNIQUE;
+
+CREATE CONSTRAINT domain_id_unique IF NOT EXISTS
+FOR (d:Domain)
+REQUIRE d.domain_id IS UNIQUE;
