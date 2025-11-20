@@ -1,0 +1,189 @@
+// ===== CASE =====
+CREATE VECTOR INDEX case_name_embedding_index IF NOT EXISTS
+FOR (c:Case)
+ON (c.name_embedding)
+OPTIONS {
+  indexConfig: {
+    `vector.dimensions`: 1536,
+    `vector.similarity_function`: 'cosine'
+  }
+};
+
+CREATE VECTOR INDEX case_summary_embedding_index IF NOT EXISTS
+FOR (c:Case)
+ON (c.summary_embedding)
+OPTIONS {
+  indexConfig: {
+    `vector.dimensions`: 1536,
+    `vector.similarity_function`: 'cosine'
+  }
+};
+
+// ===== ISSUE =====
+CREATE VECTOR INDEX issue_text_embedding_index IF NOT EXISTS
+FOR (i:Issue)
+ON (i.text_embedding)
+OPTIONS {
+  indexConfig: {
+    `vector.dimensions`: 1536,
+    `vector.similarity_function`: 'cosine'
+  }
+};
+
+// ===== FORUM =====
+CREATE VECTOR INDEX forum_name_embedding_index IF NOT EXISTS
+FOR (f:Forum)
+ON (f.name_embedding)
+OPTIONS {
+  indexConfig: {
+    `vector.dimensions`: 1536,
+    `vector.similarity_function`: 'cosine'
+  }
+};
+
+// ===== RULING =====
+CREATE VECTOR INDEX ruling_reasoning_embedding_index IF NOT EXISTS
+FOR (r:Ruling)
+ON (r.reasoning_embedding)
+OPTIONS {
+  indexConfig: {
+    `vector.dimensions`: 1536,
+    `vector.similarity_function`: 'cosine'
+  }
+};
+
+CREATE VECTOR INDEX ruling_ratio_embedding_index IF NOT EXISTS
+FOR (r:Ruling)
+ON (r.ratio_embedding)
+OPTIONS {
+  indexConfig: {
+    `vector.dimensions`: 1536,
+    `vector.similarity_function`: 'cosine'
+  }
+};
+
+CREATE VECTOR INDEX ruling_summary_embedding_index IF NOT EXISTS
+FOR (r:Ruling)
+ON (r.summary_embedding)
+OPTIONS {
+  indexConfig: {
+    `vector.dimensions`: 1536,
+    `vector.similarity_function`: 'cosine'
+  }
+};
+
+// ===== DOCTRINE =====
+CREATE VECTOR INDEX doctrine_name_embedding_index IF NOT EXISTS
+FOR (d:Doctrine)
+ON (d.name_embedding)
+OPTIONS {
+  indexConfig: {
+    `vector.dimensions`: 1536,
+    `vector.similarity_function`: 'cosine'
+  }
+};
+
+CREATE VECTOR INDEX doctrine_description_embedding_index IF NOT EXISTS
+FOR (d:Doctrine)
+ON (d.description_embedding)
+OPTIONS {
+  indexConfig: {
+    `vector.dimensions`: 1536,
+    `vector.similarity_function`: 'cosine'
+  }
+};
+
+// ===== POLICY =====
+CREATE VECTOR INDEX policy_name_embedding_index IF NOT EXISTS
+FOR (p:Policy)
+ON (p.name_embedding)
+OPTIONS {
+  indexConfig: {
+    `vector.dimensions`: 1536,
+    `vector.similarity_function`: 'cosine'
+  }
+};
+
+CREATE VECTOR INDEX policy_description_embedding_index IF NOT EXISTS
+FOR (p:Policy)
+ON (p.description_embedding)
+OPTIONS {
+  indexConfig: {
+    `vector.dimensions`: 1536,
+    `vector.similarity_function`: 'cosine'
+  }
+};
+
+// ===== ARGUMENT =====
+CREATE VECTOR INDEX argument_text_embedding_index IF NOT EXISTS
+FOR (a:Argument)
+ON (a.text_embedding)
+OPTIONS {
+  indexConfig: {
+    `vector.dimensions`: 1536,
+    `vector.similarity_function`: 'cosine'
+  }
+};
+
+CREATE VECTOR INDEX argument_disposition_text_embedding_index IF NOT EXISTS
+FOR (a:Argument)
+ON (a.disposition_text_embedding)
+OPTIONS {
+  indexConfig: {
+    `vector.dimensions`: 1536,
+    `vector.similarity_function`: 'cosine'
+  }
+};
+
+// ===== RELIEF =====
+CREATE VECTOR INDEX relief_description_embedding_index IF NOT EXISTS
+FOR (r:Relief)
+ON (r.description_embedding)
+OPTIONS {
+  indexConfig: {
+    `vector.dimensions`: 1536,
+    `vector.similarity_function`: 'cosine'
+  }
+};
+
+// ===== LAW =====
+CREATE VECTOR INDEX law_name_embedding_index IF NOT EXISTS
+FOR (l:Law)
+ON (l.name_embedding)
+OPTIONS {
+  indexConfig: {
+    `vector.dimensions`: 1536,
+    `vector.similarity_function`: 'cosine'
+  }
+};
+
+CREATE VECTOR INDEX law_text_embedding_index IF NOT EXISTS
+FOR (l:Law)
+ON (l.text_embedding)
+OPTIONS {
+  indexConfig: {
+    `vector.dimensions`: 1536,
+    `vector.similarity_function`: 'cosine'
+  }
+};
+
+// ===== FACTPATTERN =====
+CREATE VECTOR INDEX factpattern_name_embedding_index IF NOT EXISTS
+FOR (f:FactPattern)
+ON (f.name_embedding)
+OPTIONS {
+  indexConfig: {
+    `vector.dimensions`: 1536,
+    `vector.similarity_function`: 'cosine'
+  }
+};
+
+CREATE VECTOR INDEX factpattern_description_embedding_index IF NOT EXISTS
+FOR (f:FactPattern)
+ON (f.description_embedding)
+OPTIONS {
+  indexConfig: {
+    `vector.dimensions`: 1536,
+    `vector.similarity_function`: 'cosine'
+  }
+};

@@ -207,8 +207,6 @@ async def generate_embeddings_for_cases(case_ids: List[str]) -> bool:
 
 
 
-
-
 def generate_embedding_sync(text: str) -> List[float]:
     """
     Synchronous function to generate an embedding for text.

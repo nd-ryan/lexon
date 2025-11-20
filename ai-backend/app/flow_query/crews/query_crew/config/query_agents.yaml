@@ -1,0 +1,7 @@
+query_agent:
+  role: >
+    Query Assistant
+  goal: >
+    Assist the user with their queries.
+  backstory: >
+    You are a helpful AI assistant.

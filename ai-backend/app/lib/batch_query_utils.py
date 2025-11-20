@@ -24,6 +24,37 @@ def load_display_overrides() -> Dict[str, any]:
         print(f"Warning: Could not derive display overrides from schema.json: {e}")
         return {}
 
+
+def _get_non_embedding_props_for_label(label: str) -> List[str]:
+    """
+    Return all property names for the given label from schema_v3.json that do NOT
+    end with "_embedding" or "_upload_code".
+    """
+    from app.lib.schema_runtime import load_schema_payload
+
+    payload = load_schema_payload()
+    if not isinstance(payload, list):
+        return []
+
+    for node_def in payload:
+        if not isinstance(node_def, dict):
+            continue
+        if node_def.get("label") != label:
+            continue
+        props = node_def.get("properties") or {}
+        if not isinstance(props, dict):
+            return []
+        clean_props: List[str] = []
+        for prop_name in props.keys():
+            if not isinstance(prop_name, str) or not prop_name:
+                continue
+            if prop_name.endswith("_embedding") or prop_name.endswith("_upload_code"):
+                continue
+            clean_props.append(prop_name)
+        return clean_props
+
+    return []
+
 def build_label_based_override_expression(node_alias: str, overrides_config: Dict[str, any]) -> str:
     """Build a Cypher CASE expression that picks a property based on the node label.
 
@@ -60,9 +91,13 @@ def build_batch_query(label: str, id_field: str, id_values: list) -> str:
     Returns:
         str: A Cypher query string for batch retrieval of enriched node data
     """
-    # Load minimal mappings from schema.json
+    # Load minimal mappings from schema.json (for neighbor IDs)
     mappings = _load_simple_mappings()
     id_properties = mappings.get("id_properties", [])
+
+    # Determine which properties to project for `n` based on schema_v3.json,
+    # excluding *_embedding and *_upload_code fields.
+    projected_props = _get_non_embedding_props_for_label(label)
     
     # Convert id_values to a properly formatted Cypher list
     values_str = "[" + ", ".join([f"'{val}'" for val in id_values]) + "]"
@@ -70,6 +105,20 @@ def build_batch_query(label: str, id_field: str, id_values: list) -> str:
     # Build expressions for neighbor node `m`
     id_coalesce_m = "coalesce(" + ", ".join([f"m.{prop}" for prop in id_properties]) + ")" if id_properties else "m.id"
     name_expr_m = "m.name"
+
+    # Build the projection for node `n`:
+    # - Prefer an explicit map of allowed properties (excluding *_embedding/_upload_code)
+    # - Fallback to the legacy `n { .* ... }` if we have no projection info
+    if projected_props:
+        props_projection = ", ".join([f"{prop}: n.{prop}" for prop in projected_props])
+        n_projection = (
+            "{ "
+            + props_projection
+            + ", node_label: head(labels(n)), relationships: rels }"
+        )
+    else:
+        # Fallback: keep legacy behavior if schema payload is unavailable
+        n_projection = "n { .*, node_label: head(labels(n)), relationships: rels }"
 
     return f"""
     MATCH (n:{label})
@@ -82,7 +131,7 @@ def build_batch_query(label: str, id_field: str, id_values: list) -> str:
            target_id: {id_coalesce_m},
            target_name: {name_expr_m}
          }}] AS rels
-    RETURN n {{ .*, node_label: head(labels(n)), relationships: rels }}
+    RETURN {n_projection} AS n
     """
 
 def get_property_mappings_info() -> Dict[str, any]:
@@ -112,6 +161,20 @@ def build_single_node_enrichment_query(label: str, id_value: str) -> str:
     id_coalesce_m = "coalesce(" + ", ".join([f"m.{prop}" for prop in id_properties]) + ")" if id_properties else "m.id"
     name_expr_m = "m.name"
 
+    # Determine which properties to project for `n` based on schema_v3.json,
+    # excluding *_embedding and *_upload_code fields.
+    projected_props = _get_non_embedding_props_for_label(label)
+
+    if projected_props:
+        props_projection = ", ".join([f"{prop}: n.{prop}" for prop in projected_props])
+        n_projection = (
+            "{ "
+            + props_projection
+            + ", node_label: head(labels(n)), relationships: rels }"
+        )
+    else:
+        n_projection = "n { .*, node_label: head(labels(n)), relationships: rels }"
+
     return f"""
     MATCH (n:{label})
     WHERE {where_clause}
@@ -123,5 +186,5 @@ def build_single_node_enrichment_query(label: str, id_value: str) -> str:
            target_id: {id_coalesce_m},
            target_name: {name_expr_m}
          }}] AS rels
-    RETURN n {{ .*, node_label: head(labels(n)), relationships: rels }}
+    RETURN {n_projection} AS n
     """

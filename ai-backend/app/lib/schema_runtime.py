@@ -30,6 +30,103 @@ def load_schema_payload() -> Any:
     return data
 
 
+def derive_all_vector_index_names_from_schema(
+    preferred_labels: Optional[List[str]] = None,
+) -> Dict[str, Dict[str, str]]:
+    """Derive Neo4j vector index names for *all* embedding properties from schema_v3.json.
+
+    The naming pattern follows the DDL in presets_vector_indices.txt:
+
+      <label_lower>_<embedding_property_name>_index
+
+    For each label, we:
+      - Collect all properties whose name ends with "_embedding".
+      - For each such property, emit a vector index name using the pattern above.
+
+    Args:
+        preferred_labels: Optional list of labels to restrict the labels considered.
+                          If None, all labels present in the schema are considered.
+
+    Returns:
+        Dict[label, Dict[embedding_property_name, index_name]]
+    """
+    payload = load_schema_payload()
+    result: Dict[str, Dict[str, str]] = {}
+
+    if not isinstance(payload, list):
+        return result
+
+    for node_def in payload:
+        label = node_def.get("label")
+        if not isinstance(label, str) or label.strip() == "":
+            continue
+        if preferred_labels is not None and label not in preferred_labels:
+            continue
+
+        props = node_def.get("properties") or {}
+        if not isinstance(props, dict):
+            continue
+
+        for prop_name, meta in props.items():
+            if not isinstance(prop_name, str):
+                continue
+            if not isinstance(meta, dict):
+                continue
+            if not prop_name.endswith("_embedding"):
+                continue
+
+            index_name = f"{label.lower()}_{prop_name}_index"
+            if label not in result:
+                result[label] = {}
+            result[label][prop_name] = index_name
+
+    return result
+
+
+def derive_primary_vector_index_names_from_schema(
+    preferred_labels: Optional[List[str]] = None,
+) -> Dict[str, str]:
+    """Derive a single "primary" vector index name per label from schema_v3.json.
+
+    This is a convenience for components (like query flows) that only need one
+    embedding index per label. It is built on top of
+    derive_all_vector_index_names_from_schema and uses the following priority
+    order when multiple embedding properties exist:
+
+      1. summary_embedding
+      2. description_embedding
+      3. text_embedding
+      4. name_embedding
+      5. else: the first embedding property in sorted order.
+
+    Returns:
+        Dict[label, index_name]
+    """
+    all_indices = derive_all_vector_index_names_from_schema(preferred_labels)
+    result: Dict[str, str] = {}
+
+    priority_order = [
+        "summary_embedding",
+        "description_embedding",
+        "text_embedding",
+        "name_embedding",
+    ]
+
+    for label, prop_map in all_indices.items():
+        chosen_prop: Optional[str] = None
+        for candidate in priority_order:
+            if candidate in prop_map:
+                chosen_prop = candidate
+                break
+        if chosen_prop is None:
+            # Fallback: deterministic but arbitrary choice
+            chosen_prop = sorted(prop_map.keys())[0]
+
+        result[label] = prop_map[chosen_prop]
+
+    return result
+
+
 def derive_simple_mappings_from_schema() -> Dict[str, List[str]]:
     """Return minimal mappings derived from schema_v3.json.
 

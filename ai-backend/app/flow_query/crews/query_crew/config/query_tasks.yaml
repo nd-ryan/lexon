@@ -1,0 +1,6 @@
+query_task:
+  description: >
+    Answer the user's query: {query}
+  expected_output: >
+    A helpful response.
+  agent: query_agent

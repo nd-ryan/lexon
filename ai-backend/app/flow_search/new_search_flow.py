@@ -9,7 +9,8 @@ from app.models.search import (
     StructuredSearchResponse
 )
 from crewai.flow.flow import Flow, listen, start
-from app.lib.mcp_integration import MCPEnabledAgents, get_mcp_tools, fetch_neo4j_schema_via_mcp
+from app.lib.mcp_integration import MCPEnabledAgents, get_mcp_tools
+from app.lib.search_schema_static import derive_mcp_style_schema_from_static
 from app.lib.batch_query_utils import build_batch_query
 from app.lib.logging_config import setup_logger
 from typing import Dict, Any, Optional, List
@@ -21,19 +22,6 @@ import re
 
 # Use our custom logger setup
 logger = setup_logger("new-search-flow")
-
-
-def _remove_embedding_fields(data: Any) -> Any:
-    """Recursively remove any keys that end with '_embedding' or '_upload_code' from dict-like structures."""
-    if isinstance(data, dict):
-        return {
-            key: _remove_embedding_fields(value)
-            for key, value in data.items()
-            if not (str(key).endswith("_embedding") or str(key).endswith("_upload_code"))
-        }
-    if isinstance(data, list):
-        return [_remove_embedding_fields(item) for item in data]
-    return data
 
 
 def _strip_cypher_comments(query: str) -> str:
@@ -101,12 +89,15 @@ class NewSearchFlow(Flow[NewSearchState]):
     @listen(search_kickoff)
     def retrieve_schema(self, context: Dict[str, Any]) -> None:
         """
-        Retrieve the Neo4j schema using MCP tools.
+        Retrieve the Neo4j schema from the static schema_v3.json file,
+        formatted in the same MCP-style shape that the search agents expect.
+
+        This removes the dependency on the Neo4j MCP server for schema loading.
         """
-        logger.info("📊 Retrieving Neo4j schema...")
+        logger.info("📊 Retrieving Neo4j schema from static schema_v3.json...")
         schema_start_time = time.time()
         try:
-            schema_result = fetch_neo4j_schema_via_mcp()
+            schema_result = derive_mcp_style_schema_from_static()
             self.state.neo4j_schema = schema_result
             self.state.schema_time = time.time() - schema_start_time
             logger.info(f"✅ Schema retrieved successfully in {self.state.schema_time:.2f}s")
@@ -417,7 +408,8 @@ class NewSearchFlow(Flow[NewSearchState]):
                     if isinstance(parsed_result, list):
                         for record in parsed_result:
                             if isinstance(record, dict) and 'n' in record:
-                                # Include all properties; filtering is handled on the frontend via display_overrides
+                                # Log the enriched node data for manual inspection
+                                logger.info(f"📦 Enriched {block.label} node data: {record['n']}")
                                 enriched_results.append(record['n'])
                         logger.info(f"✅ Retrieved {len(parsed_result)} enriched {block.label} nodes")
                     

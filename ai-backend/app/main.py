@@ -3,6 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.routes.ai import router as ai_router, streaming_router
 from app.routes.cases import router as cases_router
 from app.routes.kg import router as kg_router
+from app.routes.query import router as query_router
+from app.routes.chat import router as chat_router
+from app.routes.eval import router as eval_router
 from app.lib.logging_config import configure_root_logging, setup_logger, setup_clean_file_logging
 from app.lib.db import engine
 from app.lib.schema import ensure_cases_table
@@ -60,6 +63,9 @@ app.include_router(ai_router, prefix="/api/ai", tags=["AI"])
 app.include_router(streaming_router, prefix="/api/ai", tags=["Streaming"])
 app.include_router(cases_router, prefix="/api/ai", tags=["Cases"])
 app.include_router(kg_router, prefix="/api/ai", tags=["KG"])
+app.include_router(query_router, prefix="/api/v1", tags=["Query"])
+app.include_router(chat_router, prefix="/api/v1", tags=["Chat"])
+app.include_router(eval_router, prefix="/api/v1", tags=["Evaluation"])
 
 """Startup handled via lifespan above; deprecated on_event removed."""
 

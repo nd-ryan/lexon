@@ -45,6 +45,9 @@ export default function RootLayout({
                   <Link href="/search" className="text-gray-700 hover:text-gray-900">
                     Search
                   </Link>
+                  <Link href="/chat" className="text-gray-700 hover:text-gray-900">
+                    Chat
+                  </Link>
                   <Link href="/cases/upload" className="text-gray-700 hover:text-gray-900">
                     Upload
                   </Link>
