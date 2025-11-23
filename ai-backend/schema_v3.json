@@ -34,15 +34,6 @@
       "court_level": { "type": "STRING", "ui": { "order": 7, "input": "select", "options": ["district", "circuit", "supreme court", "other"], "label": "Court level", "required": true } }
     },
     "relationships": {
-      "RELATES_TO": {
-        "target": "Case",
-        "cardinality": "many-to-many",
-        "properties": {
-          "type": { "type": "STRING", "ui": { "order": 1, "input": "select", "options": ["follows", "applies", "cited_approvingly", "extends", "distinguishes", "limits", "modifies", "overrules", "conflicts_with", "questions"], "label": "Type", "required": true } },
-          "strength": { "type": "FLOAT", "ui": { "order": 2, "input": "number", "label": "Strength", "required": true } },
-          "rationale": { "type": "STRING", "ui":  { "order": 3, "input": "textarea", "label": "Rationale", "required": true } }
-        }
-      },
       "HAS_PROCEEDING": {
         "target": "Proceeding",
         "cardinality": "one-to-many"
@@ -206,17 +197,7 @@
       "description": { "type": "STRING", "ui": { "order": 2, "input": "textarea", "label": "Description", "required": true } },
       "description_embedding": { "type": "LIST", "ui": { "hidden": true } }
     },
-    "relationships": {
-      "RELATES_TO": {
-        "target": "Doctrine",
-        "cardinality": "many-to-many",
-        "properties": {
-          "type": { "type": "STRING", "ui": { "order": 1, "input": "select", "options": ["FOLLOWS", "APPLIES", "CITED_APPROVINGLY", "EXTENDS", "DISTINGUISHES", "LIMITS", "MODIFIES", "OVERRULES", "CONFLICTS_WITH", "QUESTIONS"], "label": "Type", "required": true } },
-          "relationship_strength": { "type": "FLOAT", "ui": { "order": 2, "input": "number", "label": "Relationship Strength", "required": true } },
-          "relationship_rationale": { "type": "STRING", "ui": { "order": 3, "input": "textarea", "label": "Relationship Rationale", "required": true } }
-        }
-      }
-    }
+    "relationships": {}
   },
   {
     "label": "Policy",
@@ -230,17 +211,7 @@
       "description": { "type": "STRING", "ui": { "order": 2, "input": "textarea", "label": "Description", "required": true } },
       "description_embedding": { "type": "LIST", "ui": { "hidden": true } }
     },
-    "relationships": {
-      "RELATES_TO": {
-        "target": "Policy",
-        "cardinality": "many-to-many",
-        "properties": {
-          "type": { "type": "STRING", "ui": { "order": 1, "input": "select", "options": ["FOLLOWS", "APPLIES", "CITED_APPROVINGLY", "EXTENDS", "DISTINGUISHES", "LIMITS", "MODIFIES", "OVERRULES", "CONFLICTS_WITH", "QUESTIONS"], "label": "Type", "required": true } },
-          "relationship_strength": { "type": "FLOAT", "ui": { "order": 2, "input": "number", "label": "Relationship Strength", "required": true } },
-          "relationship_rationale": { "type": "STRING", "ui": { "order": 3, "input": "textarea", "label": "Relationship Rationale", "required": true } }
-        }
-      }
-    }
+    "relationships": {}
   },
   {
     "label": "Argument",
@@ -335,16 +306,6 @@
       "description": { "type": "STRING", "ui": { "order": 2, "input": "textarea", "label": "Description", "required": true } },
       "description_embedding": { "type": "LIST", "ui": { "hidden": true } }
     },
-    "relationships": {
-      "RELATES_TO": {
-        "target": "FactPattern",
-        "cardinality": "many-to-many",
-        "properties": {
-          "type": { "type": "STRING", "ui": { "order": 1, "input": "select", "options": ["FOLLOWS", "APPLIES", "CITED_APPROVINGLY", "EXTENDS", "DISTINGUISHES", "LIMITS", "MODIFIES", "OVERRULES", "CONFLICTS_WITH", "QUESTIONS"], "label": "Type", "required": true } },
-          "relationship_strength": { "type": "FLOAT", "ui": { "order": 2, "input": "number", "label": "Relationship Strength", "required": true } },
-          "relationship_rationale": { "type": "STRING", "ui": { "order": 3, "input": "textarea", "label": "Relationship Rationale", "required": true } }
-        }
-      }
-    }
+    "relationships": {}
   }
 ]

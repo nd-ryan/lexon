@@ -5,7 +5,7 @@ import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import Button from '@/components/ui/button';
 
-type StepName = 'interpret' | 'searches' | 'traversal' | 'answer';
+type StepName = 'reason' | 'interpret' | 'searches' | 'traversal' | 'answer';
 type StepMode = 'full_chain' | 'isolated';
 
 interface StepResult {
@@ -31,6 +31,8 @@ interface StepResult {
       via?: string;
     }>;
   } | null;
+  // For reason step or included in interpret
+  reasoning?: string;
   // Generic container for per-step inputs and outputs
   input_used?: any;
   output?: any;
@@ -137,10 +139,11 @@ export default function QueryEvalPage() {
             </p>
           </div>
           <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">
-            {step === 'interpret' ? 'Step 1: Interpret & Plan' :
-             step === 'searches' ? 'Step 2: Vector Searches' :
-             step === 'traversal' ? 'Step 3: Deterministic Traversal' :
-             'Step 4: Answer Synthesis'}
+            {step === 'reason' ? 'Step 1: Reasoning' :
+             step === 'interpret' ? 'Step 2: Interpret & Plan' :
+             step === 'searches' ? 'Step 3: Vector Searches' :
+             step === 'traversal' ? 'Step 4: Deterministic Traversal' :
+             'Step 5: Answer Synthesis'}
           </span>
         </div>
 
@@ -172,10 +175,11 @@ export default function QueryEvalPage() {
               onChange={(e) => setStep(e.target.value as StepName)}
               className="w-full border rounded px-3 py-2 text-sm bg-white"
             >
-              <option value="interpret">1. Interpret & Plan</option>
-              <option value="searches">2. Vector Searches</option>
-              <option value="traversal">3. Deterministic Traversal</option>
-              <option value="answer">4. Answer Synthesis</option>
+              <option value="reason">1. Reasoning</option>
+              <option value="interpret">2. Interpret & Plan</option>
+              <option value="searches">3. Vector Searches</option>
+              <option value="traversal">4. Deterministic Traversal</option>
+              <option value="answer">5. Answer Synthesis</option>
             </select>
           </div>
 
@@ -206,8 +210,8 @@ export default function QueryEvalPage() {
           </div>
         </div>
 
-        {/* Seed editor for isolated mode and steps beyond interpret */}
-        {mode === 'isolated' && step !== 'interpret' && (
+        {/* Seed editor for isolated mode and steps beyond reason */}
+        {mode === 'isolated' && step !== 'reason' && (
           <div className="space-y-1">
             <div className="flex items-center justify-between">
               <label className="text-sm font-medium">Seed input JSON</label>
@@ -221,7 +225,9 @@ export default function QueryEvalPage() {
               rows={8}
               className="w-full border rounded px-3 py-2 text-xs font-mono"
               placeholder={
-                step === 'searches'
+                step === 'interpret'
+                  ? '{ "reasoning": "..." }'
+                  : step === 'searches'
                   ? '{ "route_plan": { "steps": [...] } }'
                   : '{ "found_nodes": { "id": { "id": "...", "label": "...", "properties": {...}, "score": 1.0 } } }'
               }
@@ -254,12 +260,24 @@ export default function QueryEvalPage() {
                     {'llm_plan_seconds' in result.timings && (
                       <div>• LLM planning call: {result.timings.llm_plan_seconds?.toFixed(3)}s</div>
                     )}
+                    {'llm_reasoning_seconds' in result.timings && (
+                      <div>• LLM reasoning call: {result.timings.llm_reasoning_seconds?.toFixed(3)}s</div>
+                    )}
                     {'interpret_total_seconds' in result.timings && (
                       <div>• Interpret step total: {result.timings.interpret_total_seconds?.toFixed(3)}s</div>
                     )}
                     {'endpoint_total_seconds' in result.timings && (
                       <div>• Endpoint total (FastAPI route): {result.timings.endpoint_total_seconds?.toFixed(3)}s</div>
                     )}
+                  </div>
+                )}
+                {/* Show reasoning if present */}
+                {result.reasoning && (
+                  <div className="mb-2">
+                    <div className="font-semibold mb-1">Reasoning:</div>
+                    <div className="bg-white p-2 border rounded text-xs whitespace-pre-wrap">
+                        {result.reasoning}
+                    </div>
                   </div>
                 )}
                 {/* Show plan if present (usually for interpret step) */}
@@ -269,17 +287,137 @@ export default function QueryEvalPage() {
                     <pre>{JSON.stringify(result.plan, null, 2)}</pre>
                   </div>
                 )}
+                {/* Special handling for searches/traversal/answer steps - show summary */}
+                {result.output?.state?.summary && (
+                  <div className="mb-3 bg-blue-50 p-3 rounded border border-blue-200">
+                    <div className="font-semibold mb-2 text-blue-900">Results Summary</div>
+                    <div className="text-xs space-y-1">
+                      <div><strong>Total unique nodes:</strong> {result.output.state.summary.total_nodes}</div>
+                      {result.output.state.summary.nodes_by_label && Object.keys(result.output.state.summary.nodes_by_label).length > 0 && (
+                        <div>
+                          <strong>By label (unique):</strong>
+                          <div className="ml-4 mt-1">
+                            {Object.entries(result.output.state.summary.nodes_by_label).map(([label, count]) => (
+                              <div key={label}>• {label}: {count as number}</div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {result.output.state.summary.step_results_summary && Object.keys(result.output.state.summary.step_results_summary).length > 0 && (
+                        <div className="mt-2">
+                          <strong>Per-step results:</strong>
+                          <div className="ml-4 mt-1">
+                            {Object.entries(result.output.state.summary.step_results_summary).map(([stepKey, stepInfo]: [string, any]) => (
+                              <div key={stepKey} className={stepInfo.search_type === 'embedding' ? 'text-green-700' : 'text-purple-700'}>
+                                • {stepKey}: {stepInfo.unique_nodes} unique {stepInfo.node_type} nodes 
+                                {stepInfo.total_results !== stepInfo.unique_nodes && (
+                                  <span className="text-gray-600"> ({stepInfo.total_results} total, {stepInfo.duplicates} duplicates)</span>
+                                )}
+                                <span className="ml-1 text-gray-500">({stepInfo.search_type})</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {result.output.state.summary.nodes_by_step && Object.keys(result.output.state.summary.nodes_by_step).length > 0 && (
+                        <div className="mt-2 pt-2 border-t border-blue-300">
+                          <strong>Deduplication stats:</strong>
+                          <div className="ml-4 mt-1 text-gray-700">
+                            {Object.entries(result.output.state.summary.nodes_by_step).map(([stepKey, stepStats]: [string, any]) => (
+                              <div key={stepKey}>
+                                • {stepKey}: {stepStats.unique_nodes} unique from {stepStats.total_results} results
+                                {stepStats.duplicates > 0 && <span className="text-orange-600"> ({stepStats.duplicates} duplicates removed)</span>}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {/* Sample nodes by step */}
+                {result.output?.state?.found_nodes && result.output?.state?.step_results && (
+                  <div className="mb-3">
+                    <details className="text-xs">
+                      <summary className="cursor-pointer font-semibold text-blue-600 hover:text-blue-800">
+                        View sample nodes by step
+                      </summary>
+                      <div className="mt-2 space-y-3">
+                        {Object.entries(result.output.state.step_results).map(([stepKey, nodeIds]: [string, any]) => {
+                          const stepIdx = parseInt(stepKey);
+                          const stepInfo = result.output?.state?.route_plan?.steps[stepIdx];
+                          const sampleSize = 3;
+                          const sampleIds = Array.isArray(nodeIds) ? nodeIds.slice(0, sampleSize) : [];
+                          
+                          return (
+                            <div key={stepKey} className="border rounded p-2 bg-gray-50">
+                              <div className="font-semibold mb-1">
+                                Step {stepKey}: {stepInfo?.node_type} ({stepInfo?.search_type})
+                              </div>
+                              <div className="text-xs text-gray-600 mb-2">
+                                Showing {sampleSize} of {Array.isArray(nodeIds) ? nodeIds.length : 0} results
+                              </div>
+                              <div className="space-y-2">
+                                {sampleIds.map((nodeId: string) => {
+                                  const node = result.output?.state?.found_nodes?.[nodeId];
+                                  if (!node) return null;
+                                  
+                                  return (
+                                    <div key={nodeId} className="bg-white p-2 rounded border text-xs">
+                                      <div className="font-mono text-gray-500 mb-1">{nodeId.substring(0, 8)}...</div>
+                                      <div><strong>Label:</strong> {node.label}</div>
+                                      <div><strong>Score:</strong> {node.score?.toFixed(4)}</div>
+                                      {node.found_by_steps && (
+                                        <div><strong>Found by steps:</strong> {node.found_by_steps.join(', ')}</div>
+                                      )}
+                                      {node.properties && (
+                                        <div className="mt-1">
+                                          <strong>Properties:</strong>
+                                          <div className="ml-2 mt-1 text-gray-700">
+                                            {Object.entries(node.properties).slice(0, 2).map(([key, value]) => (
+                                              <div key={key}>
+                                                • {key}: {typeof value === 'string' && value.length > 100 ? value.substring(0, 100) + '...' : String(value)}
+                                              </div>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </details>
+                  </div>
+                )}
                 {/* Generic input/output payloads for deeper debugging */}
                 {result.input_used && (
                   <div className="mb-2">
                     <div className="font-semibold mb-1">Input used:</div>
-                    <pre>{JSON.stringify(result.input_used, null, 2)}</pre>
+                    <details className="text-xs">
+                      <summary className="cursor-pointer text-blue-600 hover:text-blue-800">
+                        Click to expand ({Object.keys(result.input_used).length} fields)
+                      </summary>
+                      <pre className="mt-2 bg-white p-2 rounded border overflow-auto max-h-60">
+                        {JSON.stringify(result.input_used, null, 2)}
+                      </pre>
+                    </details>
                   </div>
                 )}
                 {result.output && (
                   <div>
                     <div className="font-semibold mb-1">Output:</div>
-                    <pre>{JSON.stringify(result.output, null, 2)}</pre>
+                    <details className="text-xs" open={!result.output?.state?.summary}>
+                      <summary className="cursor-pointer text-blue-600 hover:text-blue-800">
+                        Click to expand full output
+                      </summary>
+                      <pre className="mt-2 bg-white p-2 rounded border overflow-auto max-h-96">
+                        {JSON.stringify(result.output, null, 2)}
+                      </pre>
+                    </details>
                   </div>
                 )}
               </>

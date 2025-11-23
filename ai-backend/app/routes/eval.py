@@ -28,6 +28,8 @@ async def interpret_query_step(req: InterpretRequest, _=Depends(get_api_key)):
         # Since interpret_query is an @start() method that ultimately calls an async planner,
         # we await it here and rely on the flow's internal metrics for detailed timings.
         start_t = time.time()
+        # We now start from reason_query -> interpret_query
+        await flow.reason_query()
         result_signal = await flow.interpret_query()
         duration = time.time() - start_t
 
@@ -56,6 +58,7 @@ async def interpret_query_step(req: InterpretRequest, _=Depends(get_api_key)):
 
 class StepName(str, Enum):
     interpret = "interpret"
+    reason = "reason"
     searches = "searches"
     traversal = "traversal"
     answer = "answer"
@@ -99,38 +102,103 @@ async def eval_query_step(req: StepEvalRequest, _=Depends(get_api_key)):
     try:
         # Helper to snapshot common pieces of state for the response.
         def snapshot_state_for_step(target_step: str) -> Dict[str, Any]:
+            if target_step == "reason":
+                return {
+                    "reasoning": flow.state.reasoning
+                }
             if target_step == "interpret":
                 return {
+                    "reasoning": flow.state.reasoning,
                     "route_plan": flow.state.route_plan.model_dump()
                     if flow.state.route_plan
                     else None
                 }
             if target_step in ("searches", "traversal", "answer"):
+                # Build a reverse mapping: node_id -> list of step indices that found it
+                node_to_steps: Dict[str, list] = {}
+                for step_idx, node_ids in (flow.state.step_results or {}).items():
+                    for node_id in node_ids:
+                        if node_id not in node_to_steps:
+                            node_to_steps[node_id] = []
+                        if step_idx not in node_to_steps[node_id]:
+                            node_to_steps[node_id].append(step_idx)
+                
+                # Enhance found_nodes with step source information
+                found_nodes_dict = {}
+                for k, v in (flow.state.found_nodes or {}).items():
+                    node_dict = v.model_dump()
+                    # Add which steps found this node
+                    node_dict["found_by_steps"] = sorted(node_to_steps.get(k, []))
+                    found_nodes_dict[k] = node_dict
+                
+                # Add summary statistics
+                summary = {
+                    "total_nodes": len(found_nodes_dict),
+                    "nodes_by_label": {},
+                    "nodes_by_step": {},
+                    "step_results_summary": {}
+                }
+                
+                # Count nodes by label
+                for node_id, node_info in (flow.state.found_nodes or {}).items():
+                    label = node_info.label
+                    summary["nodes_by_label"][label] = summary["nodes_by_label"].get(label, 0) + 1
+                
+                # Count unique nodes per step
+                for step_idx, node_ids in (flow.state.step_results or {}).items():
+                    unique_count = len(set(node_ids))
+                    summary["nodes_by_step"][f"step_{step_idx}"] = {
+                        "unique_nodes": unique_count,
+                        "total_results": len(node_ids),
+                        "duplicates": len(node_ids) - unique_count
+                    }
+                
+                # Summarize step results with more detail
+                for step_idx, node_ids in (flow.state.step_results or {}).items():
+                    step_info = flow.state.route_plan.steps[step_idx] if flow.state.route_plan and step_idx < len(flow.state.route_plan.steps) else None
+                    unique_count = len(set(node_ids))
+                    summary["step_results_summary"][f"step_{step_idx}"] = {
+                        "unique_nodes": unique_count,
+                        "total_results": len(node_ids),
+                        "node_type": step_info.node_type if step_info else "Unknown",
+                        "search_type": step_info.search_type if step_info else "Unknown"
+                    }
+                
                 return {
                     "route_plan": flow.state.route_plan.model_dump()
                     if flow.state.route_plan
                     else None,
-                    "found_nodes": {
-                        k: v.model_dump() for k, v in (flow.state.found_nodes or {}).items()
-                    },
+                    "summary": summary,
+                    "step_results": flow.state.step_results or {},
+                    "found_nodes": found_nodes_dict,
                 }
             return {}
 
         # --- FULL CHAIN EXECUTION ---
         if mode == "full_chain":
-            # Always start with interpret
-            signal_interpret = await flow.interpret_query()
+            # Always start with reason -> interpret
+            signal_reason = await flow.reason_query()
+            
+            if step == "reason":
+                output = {
+                    "signal": signal_reason,
+                    "state": snapshot_state_for_step("reason")
+                }
+                input_used = {"query": req.query}
 
-            if step == "interpret":
+            elif step == "interpret":
+                signal_interpret = await flow.interpret_query()
                 output = {
                     "signal": signal_interpret,
+                    "reasoning": flow.state.reasoning,
                     "route_plan": flow.state.route_plan.model_dump()
                     if flow.state.route_plan
                     else None,
                 }
-                input_used = {"query": req.query}
+                input_used = {"query": req.query, "reasoning": flow.state.reasoning}
 
             elif step == "searches":
+                await flow.interpret_query() # Finish interpret
                 signal_searches = await flow.execute_searches()
                 output = {
                     "signal": signal_searches,
@@ -139,6 +207,7 @@ async def eval_query_step(req: StepEvalRequest, _=Depends(get_api_key)):
                 input_used = snapshot_state_for_step("searches")
 
             elif step == "traversal":
+                await flow.interpret_query() # Finish interpret
                 signal_searches = await flow.execute_searches()
                 signal_traversal = await flow.deterministic_traversal()
                 output = {
@@ -148,6 +217,7 @@ async def eval_query_step(req: StepEvalRequest, _=Depends(get_api_key)):
                 input_used = snapshot_state_for_step("traversal")
 
             elif step == "answer":
+                await flow.interpret_query() # Finish interpret
                 signal_searches = await flow.execute_searches()
                 signal_traversal = await flow.deterministic_traversal()
                 response = await flow.construct_answer()
@@ -163,7 +233,17 @@ async def eval_query_step(req: StepEvalRequest, _=Depends(get_api_key)):
             seed = req.seed or {}
 
             # Step 1 is already isolated by design.
-            if step == "interpret":
+            if step == "reason":
+                signal_reason = await flow.reason_query()
+                output = {
+                     "signal": signal_reason,
+                     "state": snapshot_state_for_step("reason")
+                }
+                input_used = {"query": req.query}
+
+            elif step == "interpret":
+                # Can seed reasoning
+                flow.state.reasoning = seed.get("reasoning", "Pre-seeded reasoning.")
                 signal_interpret = await flow.interpret_query()
                 output = {
                     "signal": signal_interpret,
@@ -171,12 +251,13 @@ async def eval_query_step(req: StepEvalRequest, _=Depends(get_api_key)):
                     if flow.state.route_plan
                     else None,
                 }
-                input_used = {"query": req.query}
+                input_used = {"query": req.query, "reasoning": flow.state.reasoning}
 
             elif step == "searches":
                 # Need a RoutePlan. If not provided, auto-derive by running interpret.
                 route_plan_seed = seed.get("route_plan")
                 if not route_plan_seed:
+                    await flow.reason_query()
                     await flow.interpret_query()
                     route_plan_seed = (
                         flow.state.route_plan.model_dump()
@@ -199,6 +280,7 @@ async def eval_query_step(req: StepEvalRequest, _=Depends(get_api_key)):
                 # Need found_nodes. If not provided, run interpret + searches.
                 found_nodes_seed = seed.get("found_nodes")
                 if not found_nodes_seed:
+                    await flow.reason_query()
                     await flow.interpret_query()
                     await flow.execute_searches()
                     found_nodes_seed = {
@@ -223,6 +305,7 @@ async def eval_query_step(req: StepEvalRequest, _=Depends(get_api_key)):
                 # Need found_nodes. If not provided, run interpret + searches + traversal.
                 found_nodes_seed = seed.get("found_nodes")
                 if not found_nodes_seed:
+                    await flow.reason_query()
                     await flow.interpret_query()
                     await flow.execute_searches()
                     await flow.deterministic_traversal()

@@ -74,6 +74,12 @@ def derive_all_vector_index_names_from_schema(
                 continue
             if not prop_name.endswith("_embedding"):
                 continue
+            
+            # User requested to exclude indices for "name" or "label" properties
+            # The property name is "name_embedding" or "label_embedding"
+            text_prop = prop_name[:-10] # remove "_embedding"
+            if text_prop in ("name", "label"):
+                continue
 
             index_name = f"{label.lower()}_{prop_name}_index"
             if label not in result:
