@@ -11,6 +11,10 @@ export default withAuth(
         if (req.nextUrl.pathname === '/') {
           return true
         }
+        // Allow PDF files (like white paper) without authentication
+        if (req.nextUrl.pathname.endsWith('.pdf')) {
+          return true
+        }
         // Require authentication for all other routes
         return !!token
       },
