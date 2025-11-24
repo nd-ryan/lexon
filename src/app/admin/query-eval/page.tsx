@@ -75,7 +75,7 @@ export default function QueryEvalPage() {
     if (mode === 'isolated' && seedJson.trim()) {
       try {
         parsedSeed = JSON.parse(seedJson);
-      } catch (e: any) {
+      } catch {
         setSeedError('Seed JSON is invalid');
         setIsLoading(false);
         return;

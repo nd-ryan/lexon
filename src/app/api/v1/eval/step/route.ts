@@ -2,9 +2,6 @@ import { getServerSession } from 'next-auth/next';
 import { NextRequest, NextResponse } from 'next/server';
 import { authOptions } from '@/lib/auth';
 
-type StepName = 'interpret' | 'searches' | 'traversal' | 'answer';
-type StepMode = 'full_chain' | 'isolated';
-
 export async function POST(request: NextRequest) {
   // Check authentication - only admin users can access
   const session = await getServerSession(authOptions);

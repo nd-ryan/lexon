@@ -6,7 +6,14 @@ export default withAuth(
   },
   {
     callbacks: {
-      authorized: ({ token }) => !!token,
+      authorized: ({ token, req }) => {
+        // Allow root route without authentication
+        if (req.nextUrl.pathname === '/') {
+          return true
+        }
+        // Require authentication for all other routes
+        return !!token
+      },
     },
   }
 )
