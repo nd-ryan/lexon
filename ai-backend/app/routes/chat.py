@@ -20,7 +20,7 @@ def json_serial(obj):
 
 
 # Model configuration for chat
-MODEL = "gpt-4o"
+MODEL = "gpt-5.1"
 
 # High-level behavior instructions for the Responses API
 INSTRUCTIONS = """
