@@ -12,6 +12,7 @@ from app.lib.embeddings import generate_embedding_sync
 from app.lib.search_schema_static import derive_mcp_style_schema_from_static
 from app.lib.logging_config import setup_logger
 from app.lib.schema_runtime import derive_all_vector_index_names_from_schema
+from app.lib.batch_query_utils import build_batch_query
 
 logger = setup_logger("query-flow")
 
@@ -126,19 +127,27 @@ async def safe_generate_embedding(text: str) -> List[float]:
         logger.error(f"Embedding generation failed: {e}")
         return []
 
+def _camel_to_snake(name: str) -> str:
+    """Convert CamelCase to snake_case."""
+    import re
+    # Insert underscore before uppercase letters that follow lowercase letters
+    s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
+    # Insert underscore before uppercase letters that follow lowercase or uppercase letters
+    return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
+
 def _get_id_property_for_label(label: str) -> str:
     """Get the ID property name for a label using common patterns."""
-    # Common ID property patterns
-    snake_label = label.lower()
+    # Convert CamelCase to snake_case properly (e.g., FactPattern -> fact_pattern)
+    snake_label = _camel_to_snake(label)
     common_patterns = [
-        f"{snake_label}_id",  # e.g., case_id, issue_id
+        f"{snake_label}_id",  # e.g., case_id, fact_pattern_id
         "id",
         "uuid",
     ]
     # Return the most common pattern (will be checked in query)
     return common_patterns[0]
 
-def execute_vector_search(label: str, embedding: List[float], limit: int = 5, target_property: Optional[str] = None) -> List[Dict[str, Any]]:
+def execute_vector_search(label: str, embedding: List[float], limit: int = 5, target_property: Optional[str] = None, threshold: float = 0.7) -> List[Dict[str, Any]]:
     """Directly query Neo4j vector index for speed.
     
     Returns only the text property corresponding to the embedding property being searched,
@@ -174,6 +183,7 @@ def execute_vector_search(label: str, embedding: List[float], limit: int = 5, ta
         query = f"""
         CALL db.index.vector.queryNodes($index_name, $limit, $embedding)
         YIELD node, score
+        WHERE score >= $threshold
         WITH node, score, properties(node) AS props, [k IN keys(node) WHERE k ENDS WITH '_embedding'] AS embeddingKeys
         RETURN apoc.map.removeKeys(props, embeddingKeys) AS node, score, labels(node) AS labels
         """
@@ -184,6 +194,7 @@ def execute_vector_search(label: str, embedding: List[float], limit: int = 5, ta
         query = f"""
         CALL db.index.vector.queryNodes($index_name, $limit, $embedding)
         YIELD node, score
+        WHERE score >= $threshold
         WITH node, score,
              coalesce(node.{id_prop_pattern}, node.id, node.uuid, 
                       node.case_id, node.issue_id, node.doctrine_id, 
@@ -197,7 +208,8 @@ def execute_vector_search(label: str, embedding: List[float], limit: int = 5, ta
         results = neo4j_client.execute_query(query, {
             "index_name": index_name, 
             "limit": limit, 
-            "embedding": embedding
+            "embedding": embedding,
+            "threshold": threshold
         })
         if not results:
             logger.info(f"Neo4j vector query returned 0 rows for label={label}, index={index_name}")
@@ -416,7 +428,16 @@ class QueryFlow(Flow[QueryState]):
             t_llm_end = time.time()
             self.state.timings["llm_reasoning_seconds"] = t_llm_end - t_llm_start
             self.state.reasoning = response.choices[0].message.content
-            logger.info(f"🧠 Reasoning generated: {self.state.reasoning[:100]}...")
+            
+            # Log token usage if available
+            if hasattr(response, 'usage') and response.usage:
+                usage = response.usage
+                prompt_tokens = getattr(usage, 'prompt_tokens', 0)
+                completion_tokens = getattr(usage, 'completion_tokens', 0)
+                total_tokens = getattr(usage, 'total_tokens', 0)
+                logger.info(f"🧠 Reasoning generated: {self.state.reasoning[:100]}... [tokens: {prompt_tokens} prompt + {completion_tokens} completion = {total_tokens} total]")
+            else:
+                logger.info(f"🧠 Reasoning generated: {self.state.reasoning[:100]}...")
             return "reasoning_ready"
         except Exception as e:
             logger.error(f"Reasoning failed: {e}")
@@ -642,9 +663,6 @@ class QueryFlow(Flow[QueryState]):
         Based on the reasoning strategy above, generate the formal JSON search plan steps.
         CRITICAL: Ensure every 'deterministic' step has a 'depends_on' field pointing to the correct previous step indices.
         """
-
-        logger.info(f"Plan system prompt: {json.dumps(system_instruction, indent=2)}")
-        logger.info(f"Plan user input: {json.dumps(user_input, indent=2)}")
         
         t_prompt_end = time.time()
         self.state.timings["prompt_build_seconds"] = t_prompt_end - t_prompt_start
@@ -666,7 +684,16 @@ class QueryFlow(Flow[QueryState]):
             content = response.choices[0].message.content
             plan_dict = json.loads(content)
             self.state.route_plan = RoutePlan(**plan_dict)
-            logger.info(f"📋 Plan generated: {len(self.state.route_plan.steps)} steps")
+            
+            # Log token usage if available
+            if hasattr(response, 'usage') and response.usage:
+                usage = response.usage
+                prompt_tokens = getattr(usage, 'prompt_tokens', 0)
+                completion_tokens = getattr(usage, 'completion_tokens', 0)
+                total_tokens = getattr(usage, 'total_tokens', 0)
+                logger.info(f"📋 Plan generated: {len(self.state.route_plan.steps)} steps [tokens: {prompt_tokens} prompt + {completion_tokens} completion = {total_tokens} total]")
+            else:
+                logger.info(f"📋 Plan generated: {len(self.state.route_plan.steps)} steps")
             # Total time spent in interpret step (from when it was started)
             if self.state.start_time:
                 self.state.timings["interpret_total_seconds"] = t_llm_end - self.state.start_time
@@ -762,7 +789,7 @@ class QueryFlow(Flow[QueryState]):
 
         logger.info(
             f"Executing vector search for label={step.node_type}, "
-            f"target_property={step.embedding_property}, embedding_dim={len(vec)}, limit=5"
+            f"target_property={step.embedding_property}, embedding_dim={len(vec)}, limit=10, threshold=0.7"
         )
 
         # Run DB query
@@ -770,8 +797,9 @@ class QueryFlow(Flow[QueryState]):
             execute_vector_search, 
             step.node_type, 
             vec, 
-            5, 
-            step.embedding_property
+            10, 
+            step.embedding_property,
+            0.7
         )
         logger.info(
             f"Completed vector search for label={step.node_type}, "
@@ -885,15 +913,9 @@ class QueryFlow(Flow[QueryState]):
                 LIMIT 10
                 """
                 
-                # Log the actual Cypher query for debugging
-                logger.debug(f"Step {i}, Node {nid}: Executing Cypher:\n{query}\nParams: {{'id': '{nid}'}}")
-                
                 try:
                     res = await asyncio.to_thread(neo4j_client.execute_query, query, {"id": nid})
                     step_total_results += len(res)
-                    
-                    if len(res) == 0:
-                        logger.debug(f"Step {i}, Node {nid}: Query returned 0 results")
                     
                     for row in res:
                         t = row.get("t")
@@ -914,7 +936,8 @@ class QueryFlow(Flow[QueryState]):
                     logger.error(f"Step {i}, Node {nid}: Failed query was:\n{query}")
             
             # Store results and provide appropriate feedback
-            self.state.step_results[i] = step_new_ids
+            # Deduplicate IDs before storing to avoid polluting stats
+            self.state.step_results[i] = list(set(step_new_ids))
             
             if len(step_new_ids) == 0:
                 if step_total_results == 0:
@@ -932,62 +955,66 @@ class QueryFlow(Flow[QueryState]):
         return "traversal_done"
 
     @listen("traversal_done")
-    async def construct_answer(self):
-        """Step 4: Construct Final Answer"""
-        logger.info("Synthesizing answer...")
+    async def gather_enriched_data(self):
+        """Step 4: Gather Enriched Data for Found Nodes"""
+        logger.info("Gathering enriched data for found nodes...")
         
-        # Prepare minimal context for the LLM
-        # Sort by score and iterate over items to access both id (key) and node (value)
-        sorted_nodes = sorted(self.state.found_nodes.items(), key=lambda x: x[1].score, reverse=True)
+        # Group found nodes by label
+        nodes_by_label: Dict[str, List[str]] = {}
+        for nid, node_info in self.state.found_nodes.items():
+            if node_info.label not in nodes_by_label:
+                nodes_by_label[node_info.label] = []
+            nodes_by_label[node_info.label].append(nid)
         
-        context_items = []
-        for nid, n in sorted_nodes[:15]: # Hard limit to prevent context overflow/latency
-            context_items.append({
-                "type": n.label,
-                "name": n.properties.get("name") or n.properties.get("case_name") or "Unknown",
-                "summary": n.properties.get("summary") or n.properties.get("description") or "N/A",
-                "id": nid
-            })
+        # Log the breakdown before enrichment
+        label_counts = {label: len(ids) for label, ids in nodes_by_label.items()}
+        logger.info(f"Nodes to enrich by label: {label_counts}")
             
-        prompt = f"""
-        User Query: "{self.state.query}"
+        all_enriched_nodes = []
         
-        Graph Data:
-        {json.dumps(context_items, indent=2)}
+        for label, ids in nodes_by_label.items():
+            if not ids:
+                continue
+                
+            # Get ID property for this label
+            id_prop = _get_id_property_for_label(label)
+            
+            # Build batch query using the helper
+            # Note: helper returns a string query
+            # We use summary_relationships=True to get aggregated counts instead of full details
+            query = build_batch_query(label, id_prop, ids, summary_relationships=True)
+            
+            try:
+                # Execute query (no params needed as ids are baked into the query string by the helper)
+                # The helper generates a query that returns 'n' which contains the projected properties
+                # and 'relationships'
+                results = await asyncio.to_thread(neo4j_client.execute_query, query)
+                
+                for row in results:
+                    node_data = row.get("n")
+                    if node_data:
+                        all_enriched_nodes.append(node_data)
+                        
+            except Exception as e:
+                logger.error(f"Enrichment failed for label={label}: {e}")
         
-        Task:
-        1. Answer the user's question using ONLY the provided graph data.
-        2. Return a structured JSON response.
+        # Store the raw enriched data in the response
+        self.state.response = {
+            "query": self.state.query,
+            "enriched_nodes": all_enriched_nodes
+        }
         
-        Format:
-        {{
-            "query": "...",
-            "cases": [ {{ "name": "...", "citation": "...", "summary": "...", "jurisdiction": "..." }} ],
-            "doctrines": [ {{ "name": "...", "description": "..." }} ],
-            "analysis": "A synthesized legal analysis answering the question..."
-        }}
-        """
+        # Count nodes by label for summary logging
+        node_counts = {}
+        for node in all_enriched_nodes:
+            label = node.get("node_label", "Unknown")
+            node_counts[label] = node_counts.get(label, 0) + 1
         
-        try:
-            response = await acompletion(
-                model="gpt-5.1",
-                messages=[
-                    {"role": "system", "content": "You are a helpful legal assistant. Output valid JSON."}, 
-                    {"role": "user", "content": prompt}
-                ],
-                response_format={"type": "json_object"}
-            )
-            self.state.response = json.loads(response.choices[0].message.content)
-        except Exception as e:
-            logger.error(f"Answer generation failed: {e}")
-            self.state.response = {
-                "query": self.state.query,
-                "error": "Failed to generate answer.",
-                "details": str(e)
-            }
+        # Format the breakdown as a readable string
+        breakdown = ", ".join([f"{count} {label}" for label, count in sorted(node_counts.items())])
             
         elapsed = time.time() - self.state.start_time
-        logger.info(f"✅ Query Flow completed in {elapsed:.2f}s")
+        logger.info(f"✅ Query Flow completed in {elapsed:.2f}s. Returned {len(all_enriched_nodes)} nodes: {breakdown}")
         return self.state.response
 
 

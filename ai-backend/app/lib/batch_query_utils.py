@@ -78,7 +78,7 @@ def build_label_based_override_expression(node_alias: str, overrides_config: Dic
         return "NULL"
     return f"CASE head(labels({node_alias})) " + " ".join(cases) + " ELSE NULL END"
 
-def build_batch_query(label: str, id_field: str, id_values: list) -> str:
+def build_batch_query(label: str, id_field: str, id_values: list, summary_relationships: bool = False) -> str:
     """
     Build a batch query to get enriched data for nodes of a specific label.
     Uses static property mappings file to build coalesce expressions.
@@ -87,6 +87,7 @@ def build_batch_query(label: str, id_field: str, id_values: list) -> str:
         label: The Neo4j node label
         id_field: The field name used as the identifier
         id_values: List of identifier values to query for
+        summary_relationships: If True, returns a summary of relationship counts by label instead of full details
         
     Returns:
         str: A Cypher query string for batch retrieval of enriched node data
@@ -120,19 +121,35 @@ def build_batch_query(label: str, id_field: str, id_values: list) -> str:
         # Fallback: keep legacy behavior if schema payload is unavailable
         n_projection = "n { .*, node_label: head(labels(n)), relationships: rels }"
 
-    return f"""
-    MATCH (n:{label})
-    WHERE n.{id_field} IN {values_str}
-    WITH n,
-         [(n)-[r]-(m) | {{
-           type: type(r),
-           direction: CASE WHEN startNode(r) = n THEN 'out' ELSE 'in' END,
-           target_label: head(labels(m)),
-           target_id: {id_coalesce_m},
-           target_name: {name_expr_m}
-         }}] AS rels
-    RETURN {n_projection} AS n
-    """
+    if summary_relationships:
+        # Return a map of {target_label_snake_case: count}
+        # We use OPTIONAL MATCH to preserve n even if no relationships exist
+        # We use apoc.text.snakeCase to normalize keys if possible, or toLower as fallback
+        return f"""
+        MATCH (n:{label})
+        WHERE n.{id_field} IN {values_str}
+        OPTIONAL MATCH (n)-[r]-(m)
+        WHERE head(labels(m)) IS NOT NULL
+        WITH n, head(labels(m)) as target_label, count(r) as rel_count
+        WITH n, collect([apoc.text.snakeCase(target_label), rel_count]) as all_pairs
+        WITH n, [p IN all_pairs WHERE p[0] IS NOT NULL] as valid_pairs
+        WITH n, apoc.map.fromPairs(valid_pairs) as rels
+        RETURN {n_projection} AS n
+        """
+    else:
+        return f"""
+        MATCH (n:{label})
+        WHERE n.{id_field} IN {values_str}
+        WITH n,
+             [(n)-[r]-(m) | {{
+               type: type(r),
+               direction: CASE WHEN startNode(r) = n THEN 'out' ELSE 'in' END,
+               target_label: head(labels(m)),
+               target_id: {id_coalesce_m},
+               target_name: {name_expr_m}
+             }}] AS rels
+        RETURN {n_projection} AS n
+        """
 
 def get_property_mappings_info() -> Dict[str, any]:
     """Get basic information about current property mappings derived from schema.json."""
@@ -143,7 +160,7 @@ def get_property_mappings_info() -> Dict[str, any]:
         "schema_source": "schema.json",
     } 
 
-def build_single_node_enrichment_query(label: str, id_value: str) -> str:
+def build_single_node_enrichment_query(label: str, id_value: str, summary_relationships: bool = False) -> str:
     """
     Build a query to retrieve a single node by trying the configured id properties
     against the provided id_value, and return enriched data with relationships.
@@ -175,16 +192,29 @@ def build_single_node_enrichment_query(label: str, id_value: str) -> str:
     else:
         n_projection = "n { .*, node_label: head(labels(n)), relationships: rels }"
 
-    return f"""
-    MATCH (n:{label})
-    WHERE {where_clause}
-    WITH n,
-         [(n)-[r]-(m) | {{
-           type: type(r),
-           direction: CASE WHEN startNode(r) = n THEN 'out' ELSE 'in' END,
-           target_label: head(labels(m)),
-           target_id: {id_coalesce_m},
-           target_name: {name_expr_m}
-         }}] AS rels
-    RETURN {n_projection} AS n
-    """
+    if summary_relationships:
+        return f"""
+        MATCH (n:{label})
+        WHERE {where_clause}
+        OPTIONAL MATCH (n)-[r]-(m)
+        WHERE head(labels(m)) IS NOT NULL
+        WITH n, head(labels(m)) as target_label, count(r) as rel_count
+        WITH n, collect([apoc.text.snakeCase(target_label), rel_count]) as all_pairs
+        WITH n, [p IN all_pairs WHERE p[0] IS NOT NULL] as valid_pairs
+        WITH n, apoc.map.fromPairs(valid_pairs) as rels
+        RETURN {n_projection} AS n
+        """
+    else:
+        return f"""
+        MATCH (n:{label})
+        WHERE {where_clause}
+        WITH n,
+             [(n)-[r]-(m) | {{
+               type: type(r),
+               direction: CASE WHEN startNode(r) = n THEN 'out' ELSE 'in' END,
+               target_label: head(labels(m)),
+               target_id: {id_coalesce_m},
+               target_name: {name_expr_m}
+             }}] AS rels
+        RETURN {n_projection} AS n
+        """

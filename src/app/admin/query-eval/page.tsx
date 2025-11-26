@@ -36,6 +36,11 @@ interface StepResult {
   // Generic container for per-step inputs and outputs
   input_used?: any;
   output?: any;
+  chain_history?: Array<{
+    step: string;
+    input: any;
+    output: any;
+  }>;
   error?: string;
 }
 
@@ -179,7 +184,7 @@ export default function QueryEvalPage() {
               <option value="interpret">2. Interpret & Plan</option>
               <option value="searches">3. Vector Searches</option>
               <option value="traversal">4. Deterministic Traversal</option>
-              <option value="answer">5. Answer Synthesis</option>
+              <option value="answer">5. Gather Enriched Data (Raw Answer)</option>
             </select>
           </div>
 
@@ -251,24 +256,9 @@ export default function QueryEvalPage() {
                 {result.timings && (
                   <div className="mb-3 text-xs text-gray-700 space-y-1">
                     <div className="font-semibold">Timing breakdown:</div>
-                    {'schema_load_seconds' in result.timings && (
-                      <div>• Schema load: {result.timings.schema_load_seconds?.toFixed(3)}s</div>
-                    )}
-                    {'prompt_build_seconds' in result.timings && (
-                      <div>• Prompt build: {result.timings.prompt_build_seconds?.toFixed(3)}s</div>
-                    )}
-                    {'llm_plan_seconds' in result.timings && (
-                      <div>• LLM planning call: {result.timings.llm_plan_seconds?.toFixed(3)}s</div>
-                    )}
-                    {'llm_reasoning_seconds' in result.timings && (
-                      <div>• LLM reasoning call: {result.timings.llm_reasoning_seconds?.toFixed(3)}s</div>
-                    )}
-                    {'interpret_total_seconds' in result.timings && (
-                      <div>• Interpret step total: {result.timings.interpret_total_seconds?.toFixed(3)}s</div>
-                    )}
-                    {'endpoint_total_seconds' in result.timings && (
-                      <div>• Endpoint total (FastAPI route): {result.timings.endpoint_total_seconds?.toFixed(3)}s</div>
-                    )}
+                    {Object.entries(result.timings).map(([key, value]) => (
+                      <div key={key}>• {key}: {value?.toFixed(3)}s</div>
+                    ))}
                   </div>
                 )}
                 {/* Show reasoning if present */}
@@ -343,48 +333,60 @@ export default function QueryEvalPage() {
                         View sample nodes by step
                       </summary>
                       <div className="mt-2 space-y-3">
-                        {Object.entries(result.output.state.step_results).map(([stepKey, nodeIds]: [string, any]) => {
+                        {Object.entries(result.output.state.step_results)
+                          .sort((a, b) => parseInt(a[0]) - parseInt(b[0]))
+                          .map(([stepKey, nodeIds]: [string, any]) => {
                           const stepIdx = parseInt(stepKey);
-                          const stepInfo = result.output?.state?.route_plan?.steps[stepIdx];
+                          // Use safe access for steps array
+                          const steps = result.output?.state?.route_plan?.steps || [];
+                          const stepInfo = stepIdx < steps.length ? steps[stepIdx] : null;
                           const sampleSize = 3;
                           const sampleIds = Array.isArray(nodeIds) ? nodeIds.slice(0, sampleSize) : [];
                           
                           return (
-                            <div key={stepKey} className="border rounded p-2 bg-gray-50">
-                              <div className="font-semibold mb-1">
-                                Step {stepKey}: {stepInfo?.node_type} ({stepInfo?.search_type})
+                            <div key={stepKey} className="border rounded overflow-hidden">
+                              <div className={`px-3 py-2 font-medium flex justify-between items-center ${
+                                stepInfo?.search_type === 'embedding' ? 'bg-green-50 text-green-900 border-b border-green-100' : 'bg-purple-50 text-purple-900 border-b border-purple-100'
+                              }`}>
+                                <span>Step {stepKey}: {stepInfo?.node_type || 'Unknown'}</span>
+                                <span className="text-xs opacity-75 uppercase tracking-wide">{stepInfo?.search_type || 'N/A'}</span>
                               </div>
-                              <div className="text-xs text-gray-600 mb-2">
-                                Showing {sampleSize} of {Array.isArray(nodeIds) ? nodeIds.length : 0} results
-                              </div>
-                              <div className="space-y-2">
-                                {sampleIds.map((nodeId: string) => {
-                                  const node = result.output?.state?.found_nodes?.[nodeId];
-                                  if (!node) return null;
-                                  
-                                  return (
-                                    <div key={nodeId} className="bg-white p-2 rounded border text-xs">
-                                      <div className="font-mono text-gray-500 mb-1">{nodeId.substring(0, 8)}...</div>
-                                      <div><strong>Label:</strong> {node.label}</div>
-                                      <div><strong>Score:</strong> {node.score?.toFixed(4)}</div>
-                                      {node.found_by_steps && (
-                                        <div><strong>Found by steps:</strong> {node.found_by_steps.join(', ')}</div>
-                                      )}
-                                      {node.properties && (
-                                        <div className="mt-1">
-                                          <strong>Properties:</strong>
-                                          <div className="ml-2 mt-1 text-gray-700">
-                                            {Object.entries(node.properties).slice(0, 2).map(([key, value]) => (
-                                              <div key={key}>
-                                                • {key}: {typeof value === 'string' && value.length > 100 ? value.substring(0, 100) + '...' : String(value)}
-                                              </div>
-                                            ))}
-                                          </div>
+                              <div className="p-2 bg-gray-50">
+                                <div className="text-xs text-gray-600 mb-2 flex justify-between">
+                                  <span>Path: {stepInfo?.path ? stepInfo.path.join(' → ') : 'N/A'}</span>
+                                  <span>Showing {sampleSize} of {Array.isArray(nodeIds) ? nodeIds.length : 0} results</span>
+                                </div>
+                                <div className="space-y-2">
+                                  {sampleIds.map((nodeId: string) => {
+                                    const node = result.output?.state?.found_nodes?.[nodeId];
+                                    if (!node) return null;
+                                    
+                                    return (
+                                      <div key={nodeId} className="bg-white p-2 rounded border text-xs shadow-sm">
+                                        <div className="font-mono text-gray-500 mb-1 flex justify-between">
+                                          <span>{nodeId.substring(0, 8)}...</span>
+                                          <span className="font-semibold text-gray-700">Score: {node.score?.toFixed(4)}</span>
                                         </div>
-                                      )}
-                                    </div>
-                                  );
-                                })}
+                                        <div className="font-medium text-gray-900 mb-1">{node.label}</div>
+                                        {node.found_by_steps && (
+                                          <div className="text-gray-500 mb-1">Found by steps: {node.found_by_steps.join(', ')}</div>
+                                        )}
+                                        {node.properties && (
+                                          <div className="mt-1 pt-1 border-t border-gray-100">
+                                            <div className="text-gray-700 space-y-1">
+                                              {Object.entries(node.properties).slice(0, 2).map(([key, value]) => (
+                                                <div key={key} className="flex gap-2">
+                                                  <span className="font-semibold min-w-[80px]">{key}:</span>
+                                                  <span className="truncate">{typeof value === 'string' && value.length > 100 ? value.substring(0, 100) + '...' : String(value)}</span>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
                               </div>
                             </div>
                           );
@@ -393,31 +395,83 @@ export default function QueryEvalPage() {
                     </details>
                   </div>
                 )}
-                {/* Generic input/output payloads for deeper debugging */}
-                {result.input_used && (
-                  <div className="mb-2">
-                    <div className="font-semibold mb-1">Input used:</div>
-                    <details className="text-xs">
-                      <summary className="cursor-pointer text-blue-600 hover:text-blue-800">
-                        Click to expand ({Object.keys(result.input_used).length} fields)
-                      </summary>
-                      <pre className="mt-2 bg-white p-2 rounded border overflow-auto max-h-60">
-                        {JSON.stringify(result.input_used, null, 2)}
-                      </pre>
-                    </details>
+                {/* Chain History Display */}
+                {result.chain_history && Array.isArray(result.chain_history) ? (
+                  <div className="space-y-6 border-t pt-4 mt-4">
+                    <h3 className="text-lg font-bold text-gray-800">Execution History (Full Chain)</h3>
+                    {result.chain_history.map((stepData: any, idx: number) => (
+                      <div key={idx} className="border rounded-lg overflow-hidden shadow-sm">
+                        <div className="bg-gray-100 px-4 py-2 font-semibold flex justify-between items-center">
+                          <span>Step {idx + 1}: {stepData.step.toUpperCase()}</span>
+                        </div>
+                        <div className="p-4 space-y-4">
+                          {/* Input Section */}
+                          <div>
+                            <div className="font-semibold text-sm mb-1 text-gray-700">Input</div>
+                            <details className="text-xs">
+                              <summary className="cursor-pointer text-blue-600 hover:text-blue-800 mb-1">
+                                View input payload ({Object.keys(stepData.input || {}).length} fields)
+                              </summary>
+                              <pre className="bg-white p-3 rounded border border-gray-200 overflow-auto max-h-40 shadow-inner">
+                                {JSON.stringify(stepData.input, null, 2)}
+                              </pre>
+                            </details>
+                          </div>
+
+                          {/* Output Section */}
+                          <div>
+                            <div className="font-semibold text-sm mb-1 text-gray-700">Output</div>
+                            <details className="text-xs" open={true}>
+                              <summary className="cursor-pointer text-blue-600 hover:text-blue-800 mb-1">
+                                View output payload
+                              </summary>
+                              <pre className="bg-white p-3 rounded border border-gray-200 overflow-auto max-h-60 shadow-inner">
+                                {JSON.stringify(stepData.output, null, 2)}
+                              </pre>
+                            </details>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                )}
-                {result.output && (
-                  <div>
-                    <div className="font-semibold mb-1">Output:</div>
-                    <details className="text-xs" open={!result.output?.state?.summary}>
-                      <summary className="cursor-pointer text-blue-600 hover:text-blue-800">
-                        Click to expand full output
-                      </summary>
-                      <pre className="mt-2 bg-white p-2 rounded border overflow-auto max-h-96">
-                        {JSON.stringify(result.output, null, 2)}
-                      </pre>
-                    </details>
+                ) : (
+                  /* Generic input/output payloads for isolated mode or fallback */
+                  <div className="flex flex-col gap-4 border-t pt-4 mt-4">
+                    {/* Output first (most relevant) */}
+                    {result.output && (
+                      <div>
+                        <div className="font-semibold mb-1 flex justify-between items-center">
+                          <span>Output (Result of {step})</span>
+                          <span className="text-xs font-normal text-gray-500">JSON Payload</span>
+                        </div>
+                        <details className="text-xs" open={!result.output?.state?.summary}>
+                          <summary className="cursor-pointer text-blue-600 hover:text-blue-800 mb-1">
+                            View full output payload
+                          </summary>
+                          <pre className="bg-white p-3 rounded border border-gray-200 overflow-auto max-h-96 shadow-inner">
+                            {JSON.stringify(result.output, null, 2)}
+                          </pre>
+                        </details>
+                      </div>
+                    )}
+                    
+                    {/* Input second */}
+                    {result.input_used && (
+                      <div>
+                        <div className="font-semibold mb-1 flex justify-between items-center">
+                          <span>Input (Context for {step})</span>
+                          <span className="text-xs font-normal text-gray-500">JSON Payload</span>
+                        </div>
+                        <details className="text-xs">
+                          <summary className="cursor-pointer text-blue-600 hover:text-blue-800 mb-1">
+                            View input payload ({Object.keys(result.input_used).length} fields)
+                          </summary>
+                          <pre className="bg-white p-3 rounded border border-gray-200 overflow-auto max-h-60 shadow-inner">
+                            {JSON.stringify(result.input_used, null, 2)}
+                          </pre>
+                        </details>
+                      </div>
+                    )}
                   </div>
                 )}
               </>

@@ -102,6 +102,8 @@ async def eval_query_step(req: StepEvalRequest, _=Depends(get_api_key)):
     try:
         # Helper to snapshot common pieces of state for the response.
         def snapshot_state_for_step(target_step: str) -> Dict[str, Any]:
+            import copy
+            
             if target_step == "reason":
                 return {
                     "reasoning": flow.state.reasoning
@@ -114,9 +116,13 @@ async def eval_query_step(req: StepEvalRequest, _=Depends(get_api_key)):
                     else None
                 }
             if target_step in ("searches", "traversal", "answer"):
+                # CRITICAL: We must deepcopy mutable state like step_results so that 
+                # historical snapshots in chain_history don't get updated by subsequent steps.
+                current_step_results = copy.deepcopy(flow.state.step_results or {})
+                
                 # Build a reverse mapping: node_id -> list of step indices that found it
                 node_to_steps: Dict[str, list] = {}
-                for step_idx, node_ids in (flow.state.step_results or {}).items():
+                for step_idx, node_ids in current_step_results.items():
                     for node_id in node_ids:
                         if node_id not in node_to_steps:
                             node_to_steps[node_id] = []
@@ -124,6 +130,7 @@ async def eval_query_step(req: StepEvalRequest, _=Depends(get_api_key)):
                             node_to_steps[node_id].append(step_idx)
                 
                 # Enhance found_nodes with step source information
+                # found_nodes is already being copied by value via model_dump loop below
                 found_nodes_dict = {}
                 for k, v in (flow.state.found_nodes or {}).items():
                     node_dict = v.model_dump()
@@ -145,7 +152,7 @@ async def eval_query_step(req: StepEvalRequest, _=Depends(get_api_key)):
                     summary["nodes_by_label"][label] = summary["nodes_by_label"].get(label, 0) + 1
                 
                 # Count unique nodes per step
-                for step_idx, node_ids in (flow.state.step_results or {}).items():
+                for step_idx, node_ids in current_step_results.items():
                     unique_count = len(set(node_ids))
                     summary["nodes_by_step"][f"step_{step_idx}"] = {
                         "unique_nodes": unique_count,
@@ -154,7 +161,7 @@ async def eval_query_step(req: StepEvalRequest, _=Depends(get_api_key)):
                     }
                 
                 # Summarize step results with more detail
-                for step_idx, node_ids in (flow.state.step_results or {}).items():
+                for step_idx, node_ids in current_step_results.items():
                     step_info = flow.state.route_plan.steps[step_idx] if flow.state.route_plan and step_idx < len(flow.state.route_plan.steps) else None
                     unique_count = len(set(node_ids))
                     summary["step_results_summary"][f"step_{step_idx}"] = {
@@ -169,67 +176,108 @@ async def eval_query_step(req: StepEvalRequest, _=Depends(get_api_key)):
                     if flow.state.route_plan
                     else None,
                     "summary": summary,
-                    "step_results": flow.state.step_results or {},
+                    "step_results": current_step_results,
                     "found_nodes": found_nodes_dict,
                 }
             return {}
 
         # --- FULL CHAIN EXECUTION ---
         if mode == "full_chain":
-            # Always start with reason -> interpret
+            # To capture outputs per step, we accumulate them in a list
+            chain_history = []
+
+            # Step 1: Reason
             signal_reason = await flow.reason_query()
-            
-            if step == "reason":
-                output = {
+            chain_history.append({
+                "step": "reason",
+                "input": {"query": req.query},
+                "output": {
                     "signal": signal_reason,
                     "state": snapshot_state_for_step("reason")
                 }
-                input_used = {"query": req.query}
-
-            elif step == "interpret":
+            })
+            
+            if step == "reason":
+                # If only asked for reason, we are done
+                output = chain_history[-1]["output"]
+                input_used = chain_history[-1]["input"]
+            else:
+                # Step 2: Interpret
                 signal_interpret = await flow.interpret_query()
-                output = {
-                    "signal": signal_interpret,
-                    "reasoning": flow.state.reasoning,
-                    "route_plan": flow.state.route_plan.model_dump()
-                    if flow.state.route_plan
-                    else None,
-                }
-                input_used = {"query": req.query, "reasoning": flow.state.reasoning}
+                chain_history.append({
+                    "step": "interpret",
+                    "input": {"query": req.query, "reasoning": flow.state.reasoning},
+                    "output": {
+                        "signal": signal_interpret,
+                        "reasoning": flow.state.reasoning,
+                        "route_plan": flow.state.route_plan.model_dump() if flow.state.route_plan else None,
+                    }
+                })
 
-            elif step == "searches":
-                await flow.interpret_query() # Finish interpret
-                signal_searches = await flow.execute_searches()
-                output = {
-                    "signal": signal_searches,
-                    "state": snapshot_state_for_step("searches"),
-                }
-                input_used = snapshot_state_for_step("searches")
+                if step == "interpret":
+                    output = chain_history[-1]["output"]
+                    input_used = chain_history[-1]["input"]
+                else:
+                    # Step 3: Searches
+                    signal_searches = await flow.execute_searches()
+                    chain_history.append({
+                        "step": "searches",
+                        "input": snapshot_state_for_step("interpret"), # Uses plan from prev step
+                        "output": {
+                            "signal": signal_searches,
+                            "state": snapshot_state_for_step("searches"),
+                        }
+                    })
 
-            elif step == "traversal":
-                await flow.interpret_query() # Finish interpret
-                signal_searches = await flow.execute_searches()
-                signal_traversal = await flow.deterministic_traversal()
-                output = {
-                    "signal": signal_traversal,
-                    "state": snapshot_state_for_step("traversal"),
-                }
-                input_used = snapshot_state_for_step("traversal")
+                    if step == "searches":
+                        output = chain_history[-1]["output"]
+                        input_used = chain_history[-1]["input"]
+                    else:
+                        # Step 4: Traversal
+                        signal_traversal = await flow.deterministic_traversal()
+                        chain_history.append({
+                            "step": "traversal",
+                            "input": snapshot_state_for_step("searches"), # Uses nodes from prev step
+                            "output": {
+                                "signal": signal_traversal,
+                                "state": snapshot_state_for_step("traversal"),
+                            }
+                        })
 
-            elif step == "answer":
-                await flow.interpret_query() # Finish interpret
-                signal_searches = await flow.execute_searches()
-                signal_traversal = await flow.deterministic_traversal()
-                response = await flow.construct_answer()
-                output = {
-                    "signal": "answer_ready",
-                    "response": response,
-                    "state": snapshot_state_for_step("answer"),
-                }
-                input_used = snapshot_state_for_step("answer")
+                        if step == "traversal":
+                            output = chain_history[-1]["output"]
+                            input_used = chain_history[-1]["input"]
+                        else:
+                            # Step 5: Answer
+                            response = await flow.gather_enriched_data()
+                            chain_history.append({
+                                "step": "answer",
+                                "input": snapshot_state_for_step("traversal"),
+                                "output": {
+                                    "signal": "answer_ready",
+                                    "response": response,
+                                    "state": snapshot_state_for_step("answer"),
+                                }
+                            })
+                            
+                            output = chain_history[-1]["output"]
+                            input_used = chain_history[-1]["input"]
+
+            # Include full history in the response for the frontend to render
+            # We return it at the top level to avoid recursion issues with jsonable_encoder
+            # because chain_history elements contain output, and output might be a reference
+            # to one of those elements.
+            
+            # Create a safe copy of the output for the top-level return
+            import copy
+            safe_output = copy.deepcopy(output)
+            
+            final_chain_history = chain_history
 
         # --- ISOLATED EXECUTION ---
         else:
+            safe_output = output
+            final_chain_history = None
             seed = req.seed or {}
 
             # Step 1 is already isolated by design.
@@ -344,7 +392,8 @@ async def eval_query_step(req: StepEvalRequest, _=Depends(get_api_key)):
             "duration_seconds": duration,
             "timings": timings,
             "input_used": input_used,
-            "output": output,
+            "output": safe_output,
+            "chain_history": final_chain_history
         }
 
     except Exception as e:
