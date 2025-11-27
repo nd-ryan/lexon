@@ -16,6 +16,24 @@ def json_serial(obj):
     """JSON serializer for objects not serializable by default json code"""
     if isinstance(obj, (datetime, date)):
         return obj.isoformat()
+    
+    # Handle Neo4j date/time types
+    try:
+        # Check if it's a Neo4j time type by checking the module
+        obj_type = type(obj)
+        if obj_type.__module__ == 'neo4j.time':
+            # Try iso_format() method first (works for Date, DateTime, Time)
+            if hasattr(obj, 'iso_format'):
+                return obj.iso_format()
+            # For Date objects, format manually if iso_format doesn't exist
+            elif hasattr(obj, 'year') and hasattr(obj, 'month') and hasattr(obj, 'day'):
+                return f"{obj.year}-{obj.month:02d}-{obj.day:02d}"
+            # Fallback to string representation for other Neo4j time types (Duration, etc.)
+            else:
+                return str(obj)
+    except (AttributeError, TypeError):
+        pass
+    
     raise TypeError(f"Type {type(obj)} not serializable")
 
 
