@@ -339,8 +339,8 @@ class QueryFlow(Flow[QueryState]):
         You must follow these rules exactly:
 
         1. **Identify the final target node types first.**
-        - These are the node types the answer must ultimately draw from.
-        - Examples: Doctrine, Ruling, Issue, Law, FactPattern, Case.
+        - These are the node types the answer must ultimately draw from, based on the schema.
+        - Examples: Doctrine, Ruling, Issue, Law, FactPattern, Case, etc
         - Select ONLY the node types that are truly necessary for answering the query.
         - Do NOT list every connected node type.
 
@@ -377,7 +377,7 @@ class QueryFlow(Flow[QueryState]):
 
         # WHAT TO EXPLAIN IN THE PARAGRAPH
 
-        Write 1–2 paragraphs describing:
+        Write 3-4 concise sentences describing:
 
         1. Which node types are the final targets and why.
         2. Which SINGLE embedding anchor type(s) you will use, and which property to match.
@@ -397,8 +397,7 @@ class QueryFlow(Flow[QueryState]):
         - The final targets are Rulings because the user wants "rulings," and we also need Law nodes
         to identify Sherman Act statutes.
         - The embedding anchor should be Law.text to find Sherman Act references.
-        - From the Law nodes, deterministically traverse Law<-RELIES_ON_LAW-Ruling (backward traversal 
-          since Ruling points to Law, not the other way around).
+        - From the Law nodes, deterministically traverse Law to Ruling.
         - Since the target is Rulings, no Issue or Doctrine traversal is needed.
 
         ---
