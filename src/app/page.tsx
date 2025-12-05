@@ -180,7 +180,7 @@ export default function Home() {
         <section>
           <h1>Lexon: Building the Cognitive Core of Law</h1>
           <div className="cta-row">
-            <a href="/whitepaper.pdf" target="_blank" rel="noopener noreferrer" className="btn">📘 Read the White Paper</a>
+            <a href="/white-paper" target="_blank" rel="noopener noreferrer" className="btn">📘 Read the White Paper</a>
           </div>
           <p className="subheading">A community-governed legal knowledge graph for transparent reasoning and trusted AI.</p>
           <p>Lexon transforms unstructured legal data into a shared, verifiable foundation for research and AI. Built by legal stewards. Owned by the community.</p>
