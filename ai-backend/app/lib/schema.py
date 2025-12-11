@@ -13,15 +13,95 @@ def ensure_cases_table(engine: Engine) -> None:
           schema_version TEXT,
           revisions JSONB NOT NULL DEFAULT '[]'::jsonb,
           meta JSONB NOT NULL DEFAULT '{}'::jsonb,
+          original_author_id TEXT,
+          file_key TEXT,
+          kg_submitted_by TEXT,
+          kg_submitted_at TIMESTAMPTZ,
           created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
         );
 
         CREATE INDEX IF NOT EXISTS idx_cases_updated_at ON cases (updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_cases_status ON cases (status);
+        
+        -- Add columns if they don't exist (for existing databases)
+        DO $$ 
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'cases' AND column_name = 'original_author_id') THEN
+                ALTER TABLE cases ADD COLUMN original_author_id TEXT;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'cases' AND column_name = 'file_key') THEN
+                ALTER TABLE cases ADD COLUMN file_key TEXT;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'cases' AND column_name = 'kg_submitted_by') THEN
+                ALTER TABLE cases ADD COLUMN kg_submitted_by TEXT;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'cases' AND column_name = 'kg_submitted_at') THEN
+                ALTER TABLE cases ADD COLUMN kg_submitted_at TIMESTAMPTZ;
+            END IF;
+        END $$;
         """
     )
     with engine.begin() as conn:
         conn.execute(ddl)
+
+
+def ensure_graph_events_table(engine: Engine) -> None:
+    """Create the graph_events table for audit logging."""
+    ddl = text(
+        """
+        CREATE TABLE IF NOT EXISTS graph_events (
+          id UUID PRIMARY KEY,
+          case_id UUID NOT NULL,
+          entity_type TEXT NOT NULL,
+          entity_id TEXT NOT NULL,
+          entity_label TEXT NOT NULL,
+          action TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          content_hash TEXT,
+          property_changes JSONB,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_graph_events_case_id ON graph_events (case_id);
+        CREATE INDEX IF NOT EXISTS idx_graph_events_entity_id ON graph_events (entity_id);
+        CREATE INDEX IF NOT EXISTS idx_graph_events_user_id ON graph_events (user_id);
+        CREATE INDEX IF NOT EXISTS idx_graph_events_created_at ON graph_events (created_at DESC);
+        """
+    )
+    with engine.begin() as conn:
+        conn.execute(ddl)
+
+
+def ensure_pending_kg_deletions_table(engine: Engine) -> None:
+    """Create the pending_kg_deletions table for admin approval workflow."""
+    ddl = text(
+        """
+        CREATE TABLE IF NOT EXISTS pending_kg_deletions (
+          id UUID PRIMARY KEY,
+          case_id UUID NOT NULL,
+          node_label TEXT NOT NULL,
+          node_id TEXT NOT NULL,
+          node_name TEXT,
+          requested_by TEXT NOT NULL,
+          requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          status TEXT NOT NULL DEFAULT 'pending',
+          resolved_by TEXT,
+          resolved_at TIMESTAMPTZ
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_pending_kg_deletions_status ON pending_kg_deletions (status);
+        CREATE INDEX IF NOT EXISTS idx_pending_kg_deletions_case_id ON pending_kg_deletions (case_id);
+        """
+    )
+    with engine.begin() as conn:
+        conn.execute(ddl)
+
+
+def ensure_all_tables(engine: Engine) -> None:
+    """Ensure all required tables exist."""
+    ensure_cases_table(engine)
+    ensure_graph_events_table(engine)
+    ensure_pending_kg_deletions_table(engine)
 
 

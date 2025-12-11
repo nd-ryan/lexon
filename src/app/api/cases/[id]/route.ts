@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth/next'
+import { authOptions } from '@/lib/auth'
 
 export async function GET(_: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
@@ -30,13 +32,22 @@ export async function GET(_: NextRequest, { params }: { params: Promise<{ id: st
 }
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const session = await getServerSession(authOptions)
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
   const { id } = await params
   const body = await req.json()
   const FASTAPI_URL = process.env.AI_BACKEND_URL || 'http://localhost:8000'
   const apiKey = process.env.FASTAPI_API_KEY || ''
   const res = await fetch(`${FASTAPI_URL}/api/ai/cases/${id}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
+    headers: { 
+      'Content-Type': 'application/json', 
+      'X-API-Key': apiKey,
+      'X-User-Id': session.user.id,  // Server-extracted, not client-provided
+    },
     body: JSON.stringify(body),
   })
   const data = await res.json()
@@ -44,12 +55,20 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 }
 
 export async function DELETE(_: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const session = await getServerSession(authOptions)
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
   const { id } = await params
   const FASTAPI_URL = process.env.AI_BACKEND_URL || 'http://localhost:8000'
   const apiKey = process.env.FASTAPI_API_KEY || ''
   const res = await fetch(`${FASTAPI_URL}/api/ai/cases/${id}`, {
     method: 'DELETE',
-    headers: { 'X-API-Key': apiKey },
+    headers: { 
+      'X-API-Key': apiKey,
+      'X-User-Id': session.user.id,
+    },
   })
   const contentType = res.headers.get('content-type') || ''
   let data: any = null

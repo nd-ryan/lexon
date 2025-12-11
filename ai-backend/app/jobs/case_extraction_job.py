@@ -142,7 +142,12 @@ def run_case_extraction(job_id: str, filename: str, file_extension: str, case_id
             cleaned_result = strip_embeddings(result)
             cleaned_result = strip_catalog_nodes(cleaned_result)
             case_repo.save_extraction(db.connection(), case_id, cleaned_result)
+            
+            # Note: No event logging here - events are only logged when user submits to KG
+            # This is just an AI-generated draft; the submitting user gets attribution
+            
             db.commit()
+            logger.info(f"Saved extraction for case {case_id} (no events logged - draft stage)")
         finally:
             db.close()
         

@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
 import { useAppStore } from '@/lib/store/appStore';
+import { DocumentDownloadButton } from '@/components/cases/DocumentDownloadButton';
 
 export default function CasesListPage() {
   const [data, setData] = useState<any>(null);
@@ -195,13 +196,16 @@ export default function CasesListPage() {
                         </div>
                       </Link>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => { setCaseToDelete(c); setDeleteError(null); setConfirmOpen(true); }}
-                      className="text-xs text-red-600 hover:text-red-700 hover:underline"
-                    >
-                      Delete
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <DocumentDownloadButton caseId={c.id} hasFile={c.has_file} />
+                      <button
+                        type="button"
+                        onClick={() => { setCaseToDelete(c); setDeleteError(null); setConfirmOpen(true); }}
+                        className="text-xs text-red-600 hover:text-red-700 hover:underline"
+                      >
+                        Delete
+                      </button>
+                    </div>
                   </div>
                 </div>
               );

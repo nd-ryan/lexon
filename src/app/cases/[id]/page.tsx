@@ -37,6 +37,7 @@ import { EditRelationshipModal } from '@/components/cases/editor/modals/EditRela
 import { DeleteRelationshipConfirmation } from '@/components/cases/editor/modals/DeleteRelationshipConfirmation'
 import { ForumSelector } from '@/components/cases/editor/ForumSelector'
 import { IssueSection } from './_components/IssueSection'
+import { DocumentDownloadButton } from '@/components/cases/DocumentDownloadButton'
 
 export default function CaseEditorPage() {
   const params = useParams()
@@ -823,9 +824,15 @@ export default function CaseEditorPage() {
         <div className="p-6 space-y-6 text-xs flex-1 overflow-y-auto">
           {/* Header with case name and domain */}
           <div className="flex items-center justify-between mb-4">
-            <h1 className="text-2xl font-semibold tracking-tight">
-              {caseNode ? pickNodeName(caseNode) || 'Case' : 'Case'}
-            </h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-2xl font-semibold tracking-tight">
+                {caseNode ? pickNodeName(caseNode) || 'Case' : 'Case'}
+              </h1>
+              <DocumentDownloadButton 
+                caseId={id} 
+                hasFile={Boolean(data?.file_key)} 
+              />
+            </div>
             {isViewMode ? (
               <span className="px-3 py-1 bg-blue-500 text-white rounded-full text-sm font-medium">
                 {domainName}
@@ -1036,6 +1043,7 @@ export default function CaseEditorPage() {
           scrollHistory={uiState.scrollHistory}
           saving={saving}
           submittingKg={submittingKg}
+          kgDiverged={Boolean(data?.kg_diverged)}
           error={error}
           onSave={onSave}
           onSubmitToKg={submitToKg}

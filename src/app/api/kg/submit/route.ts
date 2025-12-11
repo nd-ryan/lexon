@@ -21,11 +21,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Server configuration error' }, { status: 500 })
     }
 
+    const userId = (session.user as { id?: string })?.id || ''
     const res = await fetch(`${backendUrl}/api/ai/kg/submit`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`,
+        'X-User-Id': userId,  // Server-extracted, not client-provided
       },
       body: JSON.stringify({ case_id: id })
     })

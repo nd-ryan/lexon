@@ -1,7 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth/next'
+import { authOptions } from '@/lib/auth'
 
 export async function POST(req: NextRequest) {
   try {
+    const session = await getServerSession(authOptions)
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
     const formData = await req.formData()
     const FASTAPI_URL = process.env.AI_BACKEND_URL || 'http://localhost:8000'
     const apiKey = process.env.FASTAPI_API_KEY || ''
@@ -9,7 +16,10 @@ export async function POST(req: NextRequest) {
     // Start async extraction job - returns immediately with job_id
     const res = await fetch(`${FASTAPI_URL}/api/ai/cases/upload`, {
       method: 'POST',
-      headers: { 'X-API-Key': apiKey },
+      headers: { 
+        'X-API-Key': apiKey,
+        'X-User-Id': session.user.id,  // Server-extracted, not client-provided
+      },
       body: formData,
     })
     

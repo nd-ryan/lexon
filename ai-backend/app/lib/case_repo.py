@@ -20,15 +20,31 @@ cases = Table(
     Column("schema_version", String),
     Column("revisions", JSONB, nullable=False, server_default='[]'),
     Column("meta", JSONB, nullable=False, server_default='{}'),
+    Column("original_author_id", String, nullable=True),  # set on upload, immutable
+    Column("file_key", String, nullable=True),  # Tigris object storage key for original file
+    Column("kg_submitted_by", String, nullable=True),
+    Column("kg_submitted_at", DateTime(timezone=True), nullable=True),
     Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
     Column("updated_at", DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False),
 )
 
 
 class CaseRepo:
-    def create_case(self, conn: Connection, filename: str) -> str:
+    def create_case(
+        self,
+        conn: Connection,
+        filename: str,
+        original_author_id: Optional[str] = None,
+        file_key: Optional[str] = None,
+    ) -> str:
         cid = uuid.uuid4()
-        conn.execute(insert(cases).values(id=cid, filename=filename, status="pending"))
+        conn.execute(insert(cases).values(
+            id=cid, 
+            filename=filename, 
+            status="pending",
+            original_author_id=original_author_id,
+            file_key=file_key,
+        ))
         return str(cid)
 
     def save_extraction(self, conn: Connection, case_id: str, data: Dict[str, Any]):
@@ -79,7 +95,8 @@ class CaseRepo:
                 "extracted": {
                     "case_name": case_name
                 },
-                "domain_id": domain_id  # Send domain_id instead of domain_name
+                "domain_id": domain_id,  # Send domain_id instead of domain_name
+                "has_file": bool(case_dict.get("file_key")),  # Whether original file is available
             })
         
         return result
@@ -115,6 +132,22 @@ class CaseRepo:
         except Exception:
             affected = 0
         return affected > 0
+
+    def set_kg_submitted(self, conn: Connection, case_id: str, user_id: str) -> None:
+        """Set kg_submitted_by and kg_submitted_at on successful KG submit."""
+        conn.execute(
+            update(cases)
+            .where(cases.c.id == uuid.UUID(case_id))
+            .values(kg_submitted_by=user_id, kg_submitted_at=func.now())
+        )
+
+    def set_file_key(self, conn: Connection, case_id: str, file_key: str) -> None:
+        """Set the Tigris file_key for the uploaded document."""
+        conn.execute(
+            update(cases)
+            .where(cases.c.id == uuid.UUID(case_id))
+            .values(file_key=file_key)
+        )
 
 
 case_repo = CaseRepo()

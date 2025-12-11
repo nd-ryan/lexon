@@ -413,3 +413,141 @@ class Neo4jUploader:
             logger.error(f"Transaction failed: {e}")
             raise
 
+    def check_node_isolation(self, label: str, node_id: str, case_node_ids: Set[str]) -> bool:
+        """Check if a node only connects to nodes within the case.
+        
+        Args:
+            label: Node label
+            node_id: The node's *_id property value
+            case_node_ids: Set of *_id values for all nodes in this case
+            
+        Returns:
+            True if node only connects to case nodes (safe to delete), False otherwise
+        """
+        id_prop = get_id_prop_for_label(label, self.schema_payload)
+        
+        # Query all connected nodes
+        query = f"""
+        MATCH (n:`{label}` {{{id_prop}: $node_id}})-[r]-(connected)
+        RETURN connected, keys(connected) as props
+        """
+        
+        try:
+            results = self.neo4j_client.execute_query(query, {"node_id": node_id})
+            
+            for record in results:
+                connected = record.get("connected", {})
+                props = record.get("props", [])
+                
+                # Check if any *_id property is in case_node_ids
+                is_case_node = False
+                for prop in props:
+                    if prop.endswith("_id"):
+                        connected_id = connected.get(prop)
+                        if connected_id and str(connected_id) in case_node_ids:
+                            is_case_node = True
+                            break
+                
+                if not is_case_node:
+                    # Found a connection outside the case
+                    logger.info(f"Node {label}:{node_id} has external connections")
+                    return False
+            
+            return True
+            
+        except Exception as e:
+            logger.warning(f"Failed to check node isolation for {label}:{node_id}: {e}")
+            # Default to False (not isolated) to be safe
+            return False
+
+    def delete_node(self, label: str, node_id: str) -> bool:
+        """Delete a node from Neo4j.
+        
+        Args:
+            label: Node label
+            node_id: The node's *_id property value
+            
+        Returns:
+            True if deleted successfully, False otherwise
+        """
+        id_prop = get_id_prop_for_label(label, self.schema_payload)
+        
+        query = f"MATCH (n:`{label}` {{{id_prop}: $node_id}}) DETACH DELETE n"
+        
+        try:
+            self.neo4j_client.execute_query(query, {"node_id": node_id})
+            logger.info(f"Deleted node {label}:{node_id} from Neo4j")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete node {label}:{node_id}: {e}")
+            return False
+
+    def detach_node_from_case(self, label: str, node_id: str, case_node_ids: Set[str]) -> int:
+        """Detach a node from all case-related nodes (delete relationships only).
+        
+        This removes relationships between the target node and any nodes belonging
+        to the case, without deleting the node itself. Used for non-case-unique
+        nodes that may be shared across multiple cases.
+        
+        Args:
+            label: Node label
+            node_id: The node's *_id property value
+            case_node_ids: Set of *_id values for all nodes in this case
+            
+        Returns:
+            Number of relationships deleted
+        """
+        id_prop = get_id_prop_for_label(label, self.schema_payload)
+        
+        # Find and delete relationships to case nodes
+        # We match the target node and any connected node whose *_id is in case_node_ids
+        query = f"""
+        MATCH (n:`{label}` {{{id_prop}: $node_id}})-[r]-(connected)
+        WHERE any(key IN keys(connected) WHERE key ENDS WITH '_id' AND connected[key] IN $case_node_ids)
+        DELETE r
+        RETURN count(r) as deleted_count
+        """
+        
+        try:
+            results = self.neo4j_client.execute_query(query, {
+                "node_id": node_id,
+                "case_node_ids": list(case_node_ids)
+            })
+            
+            deleted_count = 0
+            if results and len(results) > 0:
+                deleted_count = results[0].get("deleted_count", 0)
+            
+            logger.info(f"Detached node {label}:{node_id} from case - deleted {deleted_count} relationships")
+            return deleted_count
+            
+        except Exception as e:
+            logger.error(f"Failed to detach node {label}:{node_id} from case: {e}")
+            return 0
+
+    def check_node_has_connections(self, label: str, node_id: str) -> bool:
+        """Check if a node has any remaining connections in the KG.
+        
+        Args:
+            label: Node label
+            node_id: The node's *_id property value
+            
+        Returns:
+            True if node has connections, False if orphaned
+        """
+        id_prop = get_id_prop_for_label(label, self.schema_payload)
+        
+        query = f"""
+        MATCH (n:`{label}` {{{id_prop}: $node_id}})-[r]-()
+        RETURN count(r) as connection_count
+        """
+        
+        try:
+            results = self.neo4j_client.execute_query(query, {"node_id": node_id})
+            if results and len(results) > 0:
+                return results[0].get("connection_count", 0) > 0
+            return False
+        except Exception as e:
+            logger.warning(f"Failed to check connections for {label}:{node_id}: {e}")
+            return True  # Assume connected to be safe
+

@@ -1,8 +1,8 @@
 'use client'
 
+import React, { useState, useRef, useEffect } from 'react'
 import { useSession } from 'next-auth/react'
 import Link from 'next/link'
-import { useState, useRef, useEffect } from 'react'
 
 export default function AdminLink() {
   const { data: session } = useSession()
@@ -52,6 +52,20 @@ export default function AdminLink() {
             onClick={() => setIsOpen(false)}
           >
             Query Evaluation
+          </Link>
+          <Link
+            href="/admin/pending-deletions"
+            className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+            onClick={() => setIsOpen(false)}
+          >
+            Pending Deletions
+          </Link>
+          <Link
+            href="/admin/event-logs"
+            className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+            onClick={() => setIsOpen(false)}
+          >
+            Event Logs
           </Link>
         </div>
       )}

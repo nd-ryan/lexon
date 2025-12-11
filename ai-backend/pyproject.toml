@@ -3,8 +3,7 @@ name = "ai-backend"
 version = "0.1.0"
 description = "AI backend for the Lexon project"
 authors = ["Your Name <you@example.com>"]
-readme = "README.md"
-packages = [{include = "app"}]
+package-mode = false
 
 [tool.poetry.dependencies]
 python = ">=3.11, <3.12"
@@ -22,6 +21,7 @@ auth0-python = "^4.10.0"
 backoff = "^2.2.1"
 bcrypt = "^4.3.0"
 beautifulsoup4 = "^4.13.4"
+boto3 = "^1.35.0"
 blinker = "^1.9.0"
 build = "^1.2.2"
 cachetools = "^5.5.2"
@@ -218,6 +218,11 @@ zstandard = "^0.23.0"
 redis = "^6.2.0"
 rq = "^2.4.0"
 psycopg2-binary = "^2.9.10"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.4"
+pytest-asyncio = "^0.24.0"
+pytest-cov = "^5.0.0"
 
 [build-system]
 requires = ["poetry-core"]
