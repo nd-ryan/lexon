@@ -1,10 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextRequest } from 'next/server'
 
-// Mock next-auth BEFORE importing the route
-const getServerSession = vi.fn()
+// Mock fetch
+const mockFetch = vi.fn()
+global.fetch = mockFetch
+
+// Mock next-auth
 vi.mock('next-auth/next', () => ({
-  getServerSession,
+  getServerSession: vi.fn(),
 }))
 
 // Mock auth options
@@ -12,12 +15,11 @@ vi.mock('@/lib/auth', () => ({
   authOptions: {},
 }))
 
-// Mock fetch
-const mockFetch = vi.fn()
-global.fetch = mockFetch
-
 // Import AFTER mocks are set up
 import { GET, PUT, DELETE } from '../route'
+import { getServerSession } from 'next-auth/next'
+
+const mockedGetServerSession = vi.mocked(getServerSession)
 
 const createParams = (label: string, nodeId: string) => 
   Promise.resolve({ label, nodeId })
@@ -31,7 +33,7 @@ describe('GET /api/admin/shared-nodes/[label]/[nodeId]', () => {
   })
 
   it('returns 401 for unauthenticated users', async () => {
-    getServerSession.mockResolvedValue(null)
+    mockedGetServerSession.mockResolvedValue(null)
 
     const request = new NextRequest('http://localhost:3000/api/admin/shared-nodes/Party/p1')
     const response = await GET(request, { params: createParams('Party', 'p1') })
@@ -40,7 +42,7 @@ describe('GET /api/admin/shared-nodes/[label]/[nodeId]', () => {
   })
 
   it('returns 401 for non-admin users', async () => {
-    getServerSession.mockResolvedValue({
+    mockedGetServerSession.mockResolvedValue({
       user: { email: 'user@example.com' },
     } as any)
 
@@ -51,7 +53,7 @@ describe('GET /api/admin/shared-nodes/[label]/[nodeId]', () => {
   })
 
   it('proxies request to backend for admin users', async () => {
-    getServerSession.mockResolvedValue({
+    mockedGetServerSession.mockResolvedValue({
       user: { email: 'admin@example.com' },
     } as any)
 
@@ -81,7 +83,7 @@ describe('PUT /api/admin/shared-nodes/[label]/[nodeId]', () => {
   })
 
   it('returns 401 for unauthenticated users', async () => {
-    getServerSession.mockResolvedValue(null)
+    mockedGetServerSession.mockResolvedValue(null)
 
     const request = new NextRequest('http://localhost:3000/api/admin/shared-nodes/Party/p1', {
       method: 'PUT',
@@ -93,7 +95,7 @@ describe('PUT /api/admin/shared-nodes/[label]/[nodeId]', () => {
   })
 
   it('sends X-User-Id header to backend', async () => {
-    getServerSession.mockResolvedValue({
+    mockedGetServerSession.mockResolvedValue({
       user: { email: 'admin@example.com', id: 'admin-user-id' },
     } as any)
 
@@ -120,7 +122,7 @@ describe('PUT /api/admin/shared-nodes/[label]/[nodeId]', () => {
   })
 
   it('forwards request body to backend', async () => {
-    getServerSession.mockResolvedValue({
+    mockedGetServerSession.mockResolvedValue({
       user: { email: 'admin@example.com', id: 'admin-id' },
     } as any)
 
@@ -156,7 +158,7 @@ describe('DELETE /api/admin/shared-nodes/[label]/[nodeId]', () => {
   })
 
   it('returns 401 for unauthenticated users', async () => {
-    getServerSession.mockResolvedValue(null)
+    mockedGetServerSession.mockResolvedValue(null)
 
     const request = new NextRequest('http://localhost:3000/api/admin/shared-nodes/Party/p1', {
       method: 'DELETE',
@@ -167,7 +169,7 @@ describe('DELETE /api/admin/shared-nodes/[label]/[nodeId]', () => {
   })
 
   it('sends X-User-Id header to backend', async () => {
-    getServerSession.mockResolvedValue({
+    mockedGetServerSession.mockResolvedValue({
       user: { email: 'admin@example.com', id: 'admin-user-id' },
     } as any)
 
@@ -193,7 +195,7 @@ describe('DELETE /api/admin/shared-nodes/[label]/[nodeId]', () => {
   })
 
   it('forwards force_partial query parameter', async () => {
-    getServerSession.mockResolvedValue({
+    mockedGetServerSession.mockResolvedValue({
       user: { email: 'admin@example.com', id: 'admin-id' },
     } as any)
 
@@ -216,7 +218,7 @@ describe('DELETE /api/admin/shared-nodes/[label]/[nodeId]', () => {
   })
 
   it('returns backend response status', async () => {
-    getServerSession.mockResolvedValue({
+    mockedGetServerSession.mockResolvedValue({
       user: { email: 'admin@example.com', id: 'admin-id' },
     } as any)
 
@@ -235,7 +237,7 @@ describe('DELETE /api/admin/shared-nodes/[label]/[nodeId]', () => {
   })
 
   it('returns 500 on fetch error', async () => {
-    getServerSession.mockResolvedValue({
+    mockedGetServerSession.mockResolvedValue({
       user: { email: 'admin@example.com', id: 'admin-id' },
     } as any)
 

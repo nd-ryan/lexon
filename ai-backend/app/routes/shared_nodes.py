@@ -468,7 +468,76 @@ def delete_shared_node(
             "remainingCases": [{"case_id": c["case_id"], "case_name": c["case_name"]} for c in blocked_cases],
         }
     
+    # Check if this is a catalog node (can_create_new=false)
+    node_def = next((n for n in schema if n.get("label") == label), {})
+    is_catalog_node = node_def.get("can_create_new") is False
+    
+    all_cases = blocked_cases + deletable_cases
+    
+    # If catalog node with connections, only allow detachment (not full deletion)
+    if is_catalog_node and len(all_cases) > 0:
+        # Catalog nodes can only be detached, not deleted
+        # Detach from all cases but keep the node in the KG
+        with db.connection() as conn:
+            for case in all_cases:
+                try:
+                    # Get node IDs from Postgres extracted data
+                    case_node_ids = list(get_case_node_ids(case["extracted"].get("nodes", [])))
+                    
+                    # Delete relationships between the shared node and case nodes
+                    detach_query = f"""
+                        MATCH (n:{label} {{{id_prop}: $node_id}})-[r]-(connected)
+                        WHERE any(key IN keys(connected) WHERE key ENDS WITH '_id' AND connected[key] IN $case_node_ids)
+                        DELETE r
+                        RETURN count(r) as deleted
+                    """
+                    results = neo4j_client.execute_query(detach_query, {"node_id": node_id, "case_node_ids": case_node_ids})
+                    deleted_count = results[0]["deleted"] if results else 0
+                    
+                    # Log delete event for this case (node detached from case)
+                    try:
+                        graph_events_repo.log_node_event(
+                            conn=conn,
+                            case_id=case["case_id"],
+                            node_temp_id=node_id,
+                            node_label=label,
+                            action="delete",
+                            user_id=user_id,
+                            properties=node_props,
+                        )
+                        events_logged += 1
+                    except Exception as e:
+                        logger.error(f"Failed to log delete event for case {case['case_id']}: {e}")
+                    
+                    deleted_from_cases.append({
+                        "case_id": case["case_id"],
+                        "case_name": case["case_name"],
+                        "status": "detached",
+                        "relationshipsRemoved": deleted_count,
+                    })
+                    logger.info(f"Detached catalog node {label}:{node_id} from case {case['case_id']} ({deleted_count} relationships)")
+                except Exception as e:
+                    logger.error(f"Failed to detach {label}:{node_id} from case {case['case_id']}: {e}")
+                    deleted_from_cases.append({
+                        "case_id": case["case_id"],
+                        "case_name": case["case_name"],
+                        "status": "failed",
+                        "error": str(e),
+                    })
+            conn.commit()
+        
+        logger.info(f"Detached catalog node {label}:{node_id} from {len(all_cases)} case(s) by {user_id} (node preserved in KG, {events_logged} events logged)")
+        
+        return {
+            "success": True,
+            "partial": False,
+            "catalogNodePreserved": True,
+            "message": f"Catalog node detached from all cases but preserved in Knowledge Graph",
+            "deletedFromCases": deleted_from_cases,
+        }
+    
     # Full deletion - delete the node and all its relationships
+    # This is only for non-catalog nodes OR orphaned catalog nodes
     delete_query = f"""
         MATCH (n:{label} {{{id_prop}: $node_id}})
         DETACH DELETE n
@@ -476,34 +545,35 @@ def delete_shared_node(
     """
     neo4j_client.execute_query(delete_query, {"node_id": node_id})
     
-    all_cases = blocked_cases + deletable_cases
+    # Log delete events for all affected cases (if any)
+    if len(all_cases) > 0:
+        with db.connection() as conn:
+            for case in all_cases:
+                try:
+                    graph_events_repo.log_node_event(
+                        conn=conn,
+                        case_id=case["case_id"],
+                        node_temp_id=node_id,
+                        node_label=label,
+                        action="delete",
+                        user_id=user_id,
+                        properties=node_props,
+                    )
+                    events_logged += 1
+                except Exception as e:
+                    logger.error(f"Failed to log delete event for case {case['case_id']}: {e}")
+            conn.commit()
     
-    # Log delete events for all affected cases
-    with db.connection() as conn:
-        for case in all_cases:
-            try:
-                graph_events_repo.log_node_event(
-                    conn=conn,
-                    case_id=case["case_id"],
-                    node_temp_id=node_id,
-                    node_label=label,
-                    action="delete",
-                    user_id=user_id,
-                    properties=node_props,
-                )
-                events_logged += 1
-            except Exception as e:
-                logger.error(f"Failed to log delete event for case {case['case_id']}: {e}")
-        conn.commit()
-    
-    logger.info(f"Deleted shared node {label}:{node_id} by {user_id} (was connected to {len(all_cases)} cases, {events_logged} events logged)")
+    node_type = "catalog" if is_catalog_node else "shared"
+    status_msg = f"orphaned {node_type}" if len(all_cases) == 0 else node_type
+    logger.info(f"Deleted {status_msg} node {label}:{node_id} by {user_id} (was connected to {len(all_cases)} cases, {events_logged} events logged)")
     
     return {
         "success": True,
         "partial": False,
-        "message": f"Node deleted successfully",
+        "message": f"Node deleted successfully from Knowledge Graph",
         "deletedFromCases": [
             {"case_id": c["case_id"], "case_name": c["case_name"], "status": "deleted"}
             for c in all_cases
-        ],
+        ] if len(all_cases) > 0 else [],
     }

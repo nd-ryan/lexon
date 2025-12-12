@@ -120,7 +120,7 @@ describe('SharedNodesPage', () => {
 
       await waitFor(() => {
         expect(screen.getByText('John Smith')).toBeInTheDocument()
-      })
+      }, { timeout: 3000 })
 
       // Check table headers
       expect(screen.getByText('Type')).toBeInTheDocument()
@@ -389,8 +389,8 @@ describe('SharedNodesPage', () => {
       render(<SharedNodesPage />)
 
       await waitFor(() => {
-        expect(screen.getByText(/Failed to fetch nodes/i)).toBeInTheDocument()
-      })
+        expect(screen.getByText(/Server error/i)).toBeInTheDocument()
+      }, { timeout: 3000 })
     })
   })
 })

@@ -1,10 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextRequest } from 'next/server'
 
-// Mock next-auth BEFORE importing the route
-const getServerSession = vi.fn()
+// Mock fetch
+const mockFetch = vi.fn()
+global.fetch = mockFetch
+
+// Mock next-auth
 vi.mock('next-auth/next', () => ({
-  getServerSession,
+  getServerSession: vi.fn(),
 }))
 
 // Mock auth options
@@ -12,12 +15,11 @@ vi.mock('@/lib/auth', () => ({
   authOptions: {},
 }))
 
-// Mock fetch
-const mockFetch = vi.fn()
-global.fetch = mockFetch
-
 // Import AFTER mocks are set up
 import { GET } from '../route'
+import { getServerSession } from 'next-auth/next'
+
+const mockedGetServerSession = vi.mocked(getServerSession)
 
 describe('GET /api/admin/shared-nodes', () => {
   beforeEach(() => {
@@ -28,7 +30,7 @@ describe('GET /api/admin/shared-nodes', () => {
   })
 
   it('returns 401 for unauthenticated users', async () => {
-    getServerSession.mockResolvedValue(null)
+    mockedGetServerSession.mockResolvedValue(null)
 
     const request = new NextRequest('http://localhost:3000/api/admin/shared-nodes')
     const response = await GET(request)
@@ -39,7 +41,7 @@ describe('GET /api/admin/shared-nodes', () => {
   })
 
   it('returns 401 for non-admin users', async () => {
-    getServerSession.mockResolvedValue({
+    mockedGetServerSession.mockResolvedValue({
       user: { email: 'user@example.com' },
     } as any)
 
@@ -50,7 +52,7 @@ describe('GET /api/admin/shared-nodes', () => {
   })
 
   it('proxies request to backend for admin users', async () => {
-    getServerSession.mockResolvedValue({
+    mockedGetServerSession.mockResolvedValue({
       user: { email: 'admin@example.com' },
     } as any)
 
@@ -75,7 +77,7 @@ describe('GET /api/admin/shared-nodes', () => {
   })
 
   it('forwards query parameters to backend', async () => {
-    getServerSession.mockResolvedValue({
+    mockedGetServerSession.mockResolvedValue({
       user: { email: 'admin@example.com' },
     } as any)
 
@@ -101,7 +103,7 @@ describe('GET /api/admin/shared-nodes', () => {
   })
 
   it('returns 500 on fetch error', async () => {
-    getServerSession.mockResolvedValue({
+    mockedGetServerSession.mockResolvedValue({
       user: { email: 'admin@example.com' },
     } as any)
 

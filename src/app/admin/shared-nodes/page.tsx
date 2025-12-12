@@ -76,9 +76,9 @@ export default function SharedNodesPage() {
             .filter(node => node.case_unique === false)
             .map(node => node.label)
           setSharedLabels(labels)
-          // Default to first label for faster initial load
+          // Default to 'all' for initial load to show all shared nodes
           if (labels.length > 0 && !selectedLabel) {
-            setSelectedLabel(labels[0])
+            setSelectedLabel('all')
           }
         }
       } catch (e) {
@@ -282,8 +282,9 @@ export default function SharedNodesPage() {
         <div className="bg-white rounded-lg shadow p-4 mb-6">
           <div className="flex flex-wrap gap-4 items-center">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Node Type</label>
+              <label htmlFor="node-type-select" className="block text-sm font-medium text-gray-700 mb-1">Node Type</label>
               <select
+                id="node-type-select"
                 value={selectedLabel}
                 onChange={(e) => setSelectedLabel(e.target.value)}
                 className="border rounded px-3 py-2 text-sm min-w-[140px]"
@@ -297,8 +298,9 @@ export default function SharedNodesPage() {
             </div>
             
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Search</label>
+              <label htmlFor="search-input" className="block text-sm font-medium text-gray-700 mb-1">Search</label>
               <input
+                id="search-input"
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
@@ -532,11 +534,38 @@ export default function SharedNodesPage() {
                 </div>
               ) : (
                 <>
-                  <div className="bg-red-50 border border-red-200 rounded p-4 mb-4">
-                    <p className="text-red-800 text-sm">
-                      This will permanently delete this node from the Knowledge Graph and remove it from all connected cases.
-                    </p>
-                  </div>
+                  {/* Warning message - different for catalog vs regular nodes */}
+                  {(() => {
+                    const catalogNodes = ['Domain', 'Forum', 'Jurisdiction']
+                    const isCatalogNode = catalogNodes.includes(modal.node.label)
+                    const hasConnections = modal.detail && modal.detail.connectedCases.length > 0
+                    
+                    return (
+                      <div className={`border rounded p-4 mb-4 ${isCatalogNode && hasConnections ? 'bg-blue-50 border-blue-200' : 'bg-red-50 border-red-200'}`}>
+                        <p className={`text-sm ${isCatalogNode && hasConnections ? 'text-blue-800' : 'text-red-800'}`}>
+                          {isCatalogNode && hasConnections ? (
+                            <>
+                              <strong>ℹ️ Catalog Node Detachment:</strong> This is a catalog node (Domain, Forum, or Jurisdiction). 
+                              It will be <strong>detached from all connected cases</strong> but <strong>preserved in the Knowledge Graph</strong> for future use.
+                            </>
+                          ) : isCatalogNode && !hasConnections ? (
+                            <>
+                              <strong>⚠️ Orphaned Catalog Node:</strong> This catalog node has no case connections. 
+                              It will be <strong>permanently deleted</strong> from the Knowledge Graph.
+                            </>
+                          ) : hasConnections ? (
+                            <>
+                              <strong>⚠️ Permanent Deletion:</strong> This node will be <strong>permanently deleted</strong> from the Knowledge Graph and removed from all connected cases.
+                            </>
+                          ) : (
+                            <>
+                              <strong>⚠️ Orphaned Node:</strong> This orphaned node will be <strong>permanently deleted</strong> from the Knowledge Graph.
+                            </>
+                          )}
+                        </p>
+                      </div>
+                    );
+                  })()}
                   
                   {/* Connected Cases */}
                   {modal.detail && modal.detail.connectedCases.length > 0 && (

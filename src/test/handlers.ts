@@ -57,7 +57,8 @@ export const sharedNodesHandlers: HttpHandler[] = [
 
     let nodes = [...mockSharedNodes]
     
-    if (label && label !== 'all') {
+    // Only filter by label if a specific label is provided (not "all" or empty)
+    if (label && label !== 'all' && label !== '') {
       nodes = nodes.filter(n => n.label === label)
     }
     
