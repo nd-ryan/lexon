@@ -177,14 +177,12 @@ When a user deletes a node and submits to KG:
 Nodes that only exist within one case (e.g., Proceeding, Ruling, Issue, Argument, Relief):
 1. Check if node is isolated (no external connections in KG)
 2. If isolated → delete from Neo4j immediately
-3. If has external connections → **detach from this case first**, then queue for admin approval
+3. If has external connections → detach from this case (unexpected, logged as warning)
 
-### Non-Case-Unique Nodes
+### Non-Case-Unique (Shared) Nodes
 Nodes that can be shared across cases (e.g., Party, Doctrine, Policy, Law, FactPattern):
-1. **Detach relationships** from this case's nodes only (reflects the edit immediately)
-2. Check if node is now orphaned (no remaining connections anywhere)
-3. If orphaned → queue for admin approval to fully delete
-4. If still connected to other cases → leave in KG (deletion complete for this case)
+- **Detach relationships** from this case's nodes only
+- Node remains in KG - managed via Admin Shared Nodes page
 
 ### Deletion Flow Diagram
 
@@ -200,7 +198,7 @@ User deletes node in Case Editor
      ┌────────┴────────┐
      │                 │
      ▼                 ▼
-   YES                NO
+   YES            NO (shared)
      │                 │
      ▼                 ▼
 ┌─────────────┐   ┌─────────────────────┐
@@ -209,28 +207,19 @@ User deletes node in Case Editor
 └──────┬──────┘   └──────────┬──────────┘
        │                     │
   ┌────┴────┐                ▼
-  │         │         ┌─────────────┐
-  ▼         ▼         │ Check if    │
- YES       NO         │ orphaned    │
-  │         │         └──────┬──────┘
-  │         │                │
-  │         ▼           ┌────┴────┐
-  │   ┌───────────┐     │         │
-  │   │ Detach    │     ▼         ▼
-  │   │ from case │    YES       NO
-  │   └─────┬─────┘     │         │
-  │         │           │         │
-  │         ▼           │         │
-  ▼    ┌────────┐       │         ▼
-┌─────┐│Queue   │       │     ┌──────┐
-│DELETE││for     │◄──────┘     │ DONE │
-│ NOW ││admin   │             │(still│
-└─────┘└────────┘             │used) │
-                              └──────┘
+  │         │            ┌──────┐
+  ▼         ▼            │ DONE │
+ YES       NO            └──────┘
+  │         │
+  ▼         ▼
+┌─────┐ ┌──────────┐
+│DELETE│ │ Detach   │
+│ NOW │ │ from case│
+└─────┘ └──────────┘
 ```
 
-**Key point**: In both cases, the user's edit is reflected immediately (node is detached from this case). 
-Admin approval is only needed for graph-wide deletion of nodes that still exist.
+**Key point**: Users can only detach shared nodes from their case. 
+KG-wide deletion of shared nodes is done via the Admin Shared Nodes page.
 
 ## Case Deletion
 
@@ -272,21 +261,41 @@ Full cleanup is performed:
 - Filter by action, entity type, user, case
 - See event statistics
 
-### Pending Deletions (`/admin/pending-deletions`)
-- Review deletion requests for shared nodes
-- Approve or reject deletions
-- View node details and requesting user
+### Shared Nodes (`/admin/shared-nodes`)
+- View all non-case-unique nodes in the KG
+- Filter by label (Party, Doctrine, Policy, etc.)
+- Orphaned nodes are flagged (not connected to any case)
+- Admin can edit or delete shared nodes directly
+- Shows connected cases before edit/delete confirmation
+- Respects `min_per_case` constraint when deleting
+
+#### min_per_case Schema Property
+Some node types require at least one instance per case:
+
+| Node Type | min_per_case | Notes |
+|-----------|--------------|-------|
+| Domain | 1 | Every case needs a domain |
+| Forum | 1 | Every case needs a forum |
+| Jurisdiction | 1 | Every case needs a jurisdiction |
+| Party | 1 | Every case needs at least one party |
+| ReliefType | 1 | Every case needs a relief type |
+| Case | 1 | - |
+| Proceeding | 1 | - |
+| Issue | 1 | - |
+| Ruling | 1 | - |
+| Argument | 1 | - |
+| Relief | 1 | - |
+
+When admin deletes a shared node:
+1. System checks if deletion would violate `min_per_case` for any connected case
+2. If violated, admin can choose to delete from cases where allowed, or cancel
+3. If not violated, node is deleted from all cases and removed from KG
 
 ## API Endpoints
 
 ### Graph Events
 - `GET /api/ai/graph-events` - List events with filters
 - `GET /api/ai/graph-events/stats` - Get event statistics
-
-### Pending Deletions
-- `GET /api/ai/pending-deletions` - List pending deletion requests
-- `POST /api/ai/pending-deletions/{id}/approve` - Approve deletion
-- `POST /api/ai/pending-deletions/{id}/reject` - Reject deletion
 
 ## Example Event Timeline
 

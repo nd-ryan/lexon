@@ -4,6 +4,7 @@
     "case_unique": false,
     "can_create_new": false,
     "ai_ignore": false,
+    "min_per_case": 1,
     "properties": {
       "domain_upload_code": { "type": "STRING", "ui": { "hidden": true } },
       "domain_id": { "type": "STRING", "ui": { "hidden": true } },
@@ -20,6 +21,7 @@
     "label": "Case",
     "case_unique": true,
     "can_create_new": true,
+    "min_per_case": 1,
     "properties": {
       "case_upload_code": { "type": "STRING", "ui": { "hidden": true } },
       "case_id": { "type": "STRING", "ui": { "hidden": true } },
@@ -44,6 +46,7 @@
     "label": "Proceeding",
     "case_unique": true,
     "can_create_new": true,
+    "min_per_case": 1,
     "properties": {
       "proceeding_upload_code": { "type": "STRING", "ui": { "hidden": true } },
       "proceeding_id": { "type": "STRING", "ui": { "hidden": true } },
@@ -80,6 +83,7 @@
     "label": "Issue",
     "case_unique": true,
     "can_create_new": true,
+    "min_per_case": 1,
     "properties": {
       "issue_upload_code": { "type": "STRING", "ui": { "hidden": true } },
       "issue_id": { "type": "STRING", "ui": { "hidden": true } },
@@ -107,6 +111,7 @@
     "label": "Forum",
     "case_unique": false,
     "can_create_new": false,
+    "min_per_case": 1,
     "properties": {
       "forum_upload_code": { "type": "STRING", "ui": { "hidden": true } },
       "forum_id": { "type": "STRING", "ui": { "hidden": true } },
@@ -125,6 +130,7 @@
     "label": "Jurisdiction",
     "case_unique": false,
     "can_create_new": false,
+    "min_per_case": 1,
     "properties": {
       "jurisdiction_upload_code": { "type": "STRING", "ui": { "hidden": true } },
       "jurisdiction_id": { "type": "STRING", "ui": { "hidden": true } },
@@ -136,6 +142,7 @@
     "label": "Party",
     "case_unique": false,
     "can_create_new": true,
+    "min_per_case": 1,
     "properties": {
       "party_upload_code": { "type": "STRING", "ui": { "hidden": true } },
       "party_id": { "type": "STRING", "ui": { "hidden": true } },
@@ -148,6 +155,7 @@
     "label": "Ruling",
     "case_unique": true,
     "can_create_new": true,
+    "min_per_case": 1,
     "properties": {
       "ruling_upload_code": { "type": "STRING", "ui": { "hidden": true } },
       "ruling_id": { "type": "STRING", "ui": { "hidden": true } },
@@ -217,6 +225,7 @@
     "label": "Argument",
     "case_unique": true,
     "can_create_new": true,
+    "min_per_case": 1,
     "properties": {
       "argument_upload_code": { "type": "STRING", "ui": { "hidden": true } },
       "argument_id": { "type": "STRING", "ui": { "hidden": true } },
@@ -253,6 +262,7 @@
     "label": "Relief",
     "case_unique": true,
     "can_create_new": true,
+    "min_per_case": 1,
     "properties": {
       "relief_upload_code": { "type": "STRING", "ui": { "hidden": true } },
       "relief_id": { "type": "STRING", "ui": { "hidden": true } },
@@ -270,6 +280,7 @@
     "label": "ReliefType",
     "case_unique": false,
     "can_create_new": false,
+    "min_per_case": 1,
     "properties": {
       "relief_type_upload_code": { "type": "STRING", "ui": { "hidden": true } },
       "relief_type_id": { "type": "STRING", "ui": { "hidden": true } },

@@ -73,35 +73,9 @@ def ensure_graph_events_table(engine: Engine) -> None:
         conn.execute(ddl)
 
 
-def ensure_pending_kg_deletions_table(engine: Engine) -> None:
-    """Create the pending_kg_deletions table for admin approval workflow."""
-    ddl = text(
-        """
-        CREATE TABLE IF NOT EXISTS pending_kg_deletions (
-          id UUID PRIMARY KEY,
-          case_id UUID NOT NULL,
-          node_label TEXT NOT NULL,
-          node_id TEXT NOT NULL,
-          node_name TEXT,
-          requested_by TEXT NOT NULL,
-          requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-          status TEXT NOT NULL DEFAULT 'pending',
-          resolved_by TEXT,
-          resolved_at TIMESTAMPTZ
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_pending_kg_deletions_status ON pending_kg_deletions (status);
-        CREATE INDEX IF NOT EXISTS idx_pending_kg_deletions_case_id ON pending_kg_deletions (case_id);
-        """
-    )
-    with engine.begin() as conn:
-        conn.execute(ddl)
-
-
 def ensure_all_tables(engine: Engine) -> None:
     """Ensure all required tables exist."""
     ensure_cases_table(engine)
     ensure_graph_events_table(engine)
-    ensure_pending_kg_deletions_table(engine)
 
 

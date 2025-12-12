@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session
 
 from app.lib.db import get_db
 from app.lib.case_repo import case_repo
-from app.lib.pending_deletions_repo import pending_deletions_repo
 from app.lib.graph_events_repo import graph_events_repo
 from app.flow_kg import create_flow
 from app.lib.property_filter import filter_case_data
@@ -185,54 +184,18 @@ async def submit_to_kg(payload: dict, request: Request, db: Session = Depends(ge
                             uploader.delete_node(label, node_id)
                             logger.info(f"Deleted case-unique node {label}:{node_id}")
                         else:
-                            # Has external connections - detach from this case first, then queue for admin
-                            logger.warning(f"Case-unique node {label}:{node_id} has external connections")
+                            # Has external connections - just detach from this case
+                            # (unexpected for case-unique, but handle gracefully)
+                            logger.warning(f"Case-unique node {label}:{node_id} has external connections, detaching only")
                             old_case_node_ids = get_case_node_ids(old_nodes)
                             detached_count = uploader.detach_node_from_case(label, node_id, old_case_node_ids)
                             logger.info(f"Detached case-unique node {label}:{node_id} from case ({detached_count} relationships)")
-                            
-                            # Queue for admin to decide on graph-wide deletion
-                            pending_deletions_repo.create_deletion_request(
-                                conn=db.connection(),
-                                case_id=case_id,
-                                node_label=label,
-                                node_id=node_id,
-                                node_name=get_node_display_name(node),
-                                requested_by=user_id,
-                            )
-                            logger.info(f"Queued case-unique node {label}:{node_id} for admin deletion approval")
                     else:
-                        # Non-case-unique node: first detach from this case, then queue for admin approval
-                        # This reflects the edit in the KG while protecting shared nodes
-                        
-                        # Detach from this case's nodes in Neo4j
-                        # We need the old case node IDs to know what to detach from
+                        # Non-case-unique (shared) node: only detach from this case
+                        # Shared nodes are managed separately via admin interface
                         old_case_node_ids = get_case_node_ids(old_nodes)
                         detached_count = uploader.detach_node_from_case(label, node_id, old_case_node_ids)
-                        logger.info(f"Detached non-case-unique node {label}:{node_id} from case ({detached_count} relationships)")
-                        
-                        # Check if node is now orphaned (no remaining connections)
-                        has_connections = uploader.check_node_has_connections(label, node_id)
-                        
-                        if not has_connections:
-                            # Node is orphaned - queue for admin to confirm deletion
-                            existing = pending_deletions_repo.check_existing_request(
-                                conn=db.connection(),
-                                node_label=label,
-                                node_id=node_id,
-                            )
-                            if not existing:
-                                pending_deletions_repo.create_deletion_request(
-                                    conn=db.connection(),
-                                    case_id=case_id,
-                                    node_label=label,
-                                    node_id=node_id,
-                                    node_name=get_node_display_name(node),
-                                    requested_by=user_id,
-                                )
-                                logger.info(f"Queued orphaned non-case-unique node {label}:{node_id} for admin deletion approval")
-                        else:
-                            logger.info(f"Non-case-unique node {label}:{node_id} still has connections to other cases, not queuing for deletion")
+                        logger.info(f"Detached shared node {label}:{node_id} from case ({detached_count} relationships)")
             
             # Capture original temp_ids BEFORE the nodes go through the flow/upload
             # Build a map: temp_id -> (label, index within that label)
