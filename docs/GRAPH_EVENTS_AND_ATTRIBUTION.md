@@ -291,6 +291,17 @@ When admin deletes a shared node:
 2. If violated, admin can choose to delete from cases where allowed, or cancel
 3. If not violated, node is deleted from all cases and removed from KG
 
+#### Admin Operations Event Logging
+All admin operations on shared nodes are logged to `graph_events`:
+
+| Operation | Action | Events Logged |
+|-----------|--------|---------------|
+| Edit node properties | `update` | One event per connected case |
+| Delete node (full) | `delete` | One event per affected case |
+| Delete node (partial) | `delete` | One event per case where node was detached |
+
+This ensures complete audit trail even for admin KG-wide operations.
+
 ## API Endpoints
 
 ### Graph Events
@@ -337,6 +348,14 @@ Timeline for Case "Smith v. Jones"
            → 30 edge delete events (user_id = "user123")
            → Original file deleted from storage
            → Case record deleted from Postgres
+
+--- Admin manages shared nodes ---
+
+3:00 PM  - Admin edits a Party node's name (shared across 5 cases)
+           → 5 update events (user_id = "admin@example.com")
+
+3:15 PM  - Admin deletes an orphaned Doctrine node
+           → 0 events (node had no case connections)
 ```
 
 ## Implementation Files
@@ -346,6 +365,8 @@ Timeline for Case "Smith v. Jones"
 | `ai-backend/app/lib/graph_events_repo.py` | Event logging repository |
 | `ai-backend/app/lib/schema.py` | Table DDL (ensure_graph_events_table) |
 | `ai-backend/app/routes/kg.py` | KG submit event logging |
-| `ai-backend/app/routes/cases.py` | Save event logging |
+| `ai-backend/app/routes/cases.py` | Save event logging, case deletion logging |
+| `ai-backend/app/routes/shared_nodes.py` | Admin shared node edit/delete logging |
 | `ai-backend/app/routes/graph_events.py` | API endpoints |
 | `src/app/admin/event-logs/page.tsx` | Admin UI for events |
+| `src/app/admin/shared-nodes/page.tsx` | Admin UI for shared nodes |

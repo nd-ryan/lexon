@@ -42,7 +42,7 @@ describe('AdminLink', () => {
 
     fireEvent.click(button)
     expect(screen.getByText(/Bulk Case Upload/i)).toBeInTheDocument()
-    expect(screen.getByText(/Pending Deletions/i)).toBeInTheDocument()
+    expect(screen.getByText(/Shared Nodes/i)).toBeInTheDocument()
 
     fireEvent.mouseDown(document.body)
     expect(screen.queryByText(/Bulk Case Upload/i)).not.toBeInTheDocument()

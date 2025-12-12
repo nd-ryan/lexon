@@ -49,6 +49,7 @@ export async function PUT(
       headers: {
         'Content-Type': 'application/json',
         'X-API-Key': apiKey,
+        'X-User-Id': session.user.id || session.user.email,
       },
       body: JSON.stringify(body),
     })
@@ -80,7 +81,10 @@ export async function DELETE(
     const url = `${backendUrl}/api/ai/shared-nodes/${label}/${nodeId}?force_partial=${forcePartial}`
     const res = await fetch(url, {
       method: 'DELETE',
-      headers: { 'X-API-Key': apiKey },
+      headers: {
+        'X-API-Key': apiKey,
+        'X-User-Id': session.user.id || session.user.email,
+      },
     })
     const data = await res.json()
     return NextResponse.json(data, { status: res.status })

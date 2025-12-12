@@ -3,7 +3,7 @@
 import json
 import logging
 from typing import Any, Dict, List, Optional, Set
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -11,10 +11,16 @@ from app.lib.security import get_api_key
 from app.lib.neo4j_client import neo4j_client
 from app.lib.logging_config import setup_logger
 from app.lib.db import get_db
+from app.lib.graph_events_repo import graph_events_repo, compute_content_hash
 
 
 logger = setup_logger("shared-nodes")
 router = APIRouter(prefix="/shared-nodes", dependencies=[Depends(get_api_key)])
+
+
+def get_user_id(request: Request) -> str:
+    """Extract user ID from X-User-Id header (set by Next.js API routes)."""
+    return request.headers.get("X-User-Id", "admin")
 
 
 def load_schema() -> List[Dict[str, Any]]:
@@ -231,7 +237,13 @@ class UpdateNodeRequest(BaseModel):
 
 
 @router.put("/{label}/{node_id}")
-def update_shared_node(label: str, node_id: str, request: UpdateNodeRequest):
+def update_shared_node(
+    label: str, 
+    node_id: str, 
+    body: UpdateNodeRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
     """Update a shared node's properties."""
     schema = load_schema()
     shared_labels = get_shared_labels(schema)
@@ -240,11 +252,23 @@ def update_shared_node(label: str, node_id: str, request: UpdateNodeRequest):
         raise HTTPException(400, f"Label '{label}' is not a shared node type")
     
     id_prop = get_id_property(label)
+    user_id = get_user_id(request)
+    
+    # Get current node properties for change tracking
+    get_query = f"""
+        MATCH (n:{label} {{{id_prop}: $node_id}})
+        RETURN n
+    """
+    current_result = neo4j_client.execute_query(get_query, {"node_id": node_id})
+    if not current_result:
+        raise HTTPException(404, "Node not found")
+    
+    old_props = dict(current_result[0]["n"])
     
     # Filter out protected properties
     protected_props = {id_prop, f"{label.lower()}_upload_code"}
     props_to_update = {
-        k: v for k, v in request.properties.items() 
+        k: v for k, v in body.properties.items() 
         if k not in protected_props and not k.endswith("_embedding")
     }
     
@@ -266,14 +290,44 @@ def update_shared_node(label: str, node_id: str, request: UpdateNodeRequest):
     if not results:
         raise HTTPException(404, "Node not found")
     
-    logger.info(f"Updated shared node {label}:{node_id}")
+    new_props = dict(results[0]["n"])
+    
+    # Compute property changes
+    property_changes = {}
+    for key in props_to_update:
+        if old_props.get(key) != new_props.get(key):
+            property_changes[key] = {"old": old_props.get(key), "new": new_props.get(key)}
+    
+    # Log update events for each connected case
+    cases_data = find_cases_containing_node(db, node_id, label)
+    events_logged = 0
+    
+    with db.connection() as conn:
+        for case in cases_data:
+            try:
+                graph_events_repo.log_node_event(
+                    conn=conn,
+                    case_id=case["case_id"],
+                    node_temp_id=node_id,
+                    node_label=label,
+                    action="update",
+                    user_id=user_id,
+                    properties=new_props,
+                    property_changes=property_changes if property_changes else None,
+                )
+                events_logged += 1
+            except Exception as e:
+                logger.error(f"Failed to log update event for case {case['case_id']}: {e}")
+        conn.commit()
+    
+    logger.info(f"Updated shared node {label}:{node_id} by {user_id} ({events_logged} events logged)")
     
     return {
         "success": True,
         "node": {
             "label": label,
             "id": node_id,
-            "properties": results[0]["n"],
+            "properties": new_props,
         }
     }
 
@@ -283,7 +337,13 @@ class DeleteNodeRequest(BaseModel):
 
 
 @router.delete("/{label}/{node_id}")
-def delete_shared_node(label: str, node_id: str, force_partial: bool = Query(False), db: Session = Depends(get_db)):
+def delete_shared_node(
+    label: str, 
+    node_id: str, 
+    request: Request,
+    force_partial: bool = Query(False), 
+    db: Session = Depends(get_db),
+):
     """Delete a shared node from the Knowledge Graph.
     
     This will:
@@ -300,8 +360,9 @@ def delete_shared_node(label: str, node_id: str, force_partial: bool = Query(Fal
     
     id_prop = get_id_property(label)
     min_per_case = get_min_per_case(schema, label)
+    user_id = get_user_id(request)
     
-    # Check if node exists in Neo4j
+    # Check if node exists in Neo4j and get its properties for logging
     check_query = f"""
         MATCH (n:{label} {{{id_prop}: $node_id}})
         RETURN n
@@ -309,6 +370,8 @@ def delete_shared_node(label: str, node_id: str, force_partial: bool = Query(Fal
     check_result = neo4j_client.execute_query(check_query, {"node_id": node_id})
     if not check_result:
         raise HTTPException(404, "Node not found")
+    
+    node_props = dict(check_result[0]["n"])
     
     # Get connected cases from Postgres (authoritative source for case membership)
     cases_data = find_cases_containing_node(db, node_id, label)
@@ -343,39 +406,59 @@ def delete_shared_node(label: str, node_id: str, force_partial: bool = Query(Fal
     
     # Perform deletion
     deleted_from_cases = []
+    events_logged = 0
     
     if force_partial and blocked_cases:
         # Only detach from deletable cases, leave node connected to blocked cases
-        for case in deletable_cases:
-            try:
-                # Get node IDs from Postgres extracted data (no graph traversal!)
-                case_node_ids = list(get_case_node_ids(case["extracted"].get("nodes", [])))
-                
-                # Delete relationships between the shared node and case nodes
-                detach_query = f"""
-                    MATCH (n:{label} {{{id_prop}: $node_id}})-[r]-(connected)
-                    WHERE any(key IN keys(connected) WHERE key ENDS WITH '_id' AND connected[key] IN $case_node_ids)
-                    DELETE r
-                    RETURN count(r) as deleted
-                """
-                results = neo4j_client.execute_query(detach_query, {"node_id": node_id, "case_node_ids": case_node_ids})
-                deleted_count = results[0]["deleted"] if results else 0
-                
-                deleted_from_cases.append({
-                    "case_id": case["case_id"],
-                    "case_name": case["case_name"],
-                    "status": "deleted",
-                    "relationshipsRemoved": deleted_count,
-                })
-                logger.info(f"Detached {label}:{node_id} from case {case['case_id']} ({deleted_count} relationships)")
-            except Exception as e:
-                logger.error(f"Failed to detach {label}:{node_id} from case {case['case_id']}: {e}")
-                deleted_from_cases.append({
-                    "case_id": case["case_id"],
-                    "case_name": case["case_name"],
-                    "status": "failed",
-                    "error": str(e),
-                })
+        with db.connection() as conn:
+            for case in deletable_cases:
+                try:
+                    # Get node IDs from Postgres extracted data (no graph traversal!)
+                    case_node_ids = list(get_case_node_ids(case["extracted"].get("nodes", [])))
+                    
+                    # Delete relationships between the shared node and case nodes
+                    detach_query = f"""
+                        MATCH (n:{label} {{{id_prop}: $node_id}})-[r]-(connected)
+                        WHERE any(key IN keys(connected) WHERE key ENDS WITH '_id' AND connected[key] IN $case_node_ids)
+                        DELETE r
+                        RETURN count(r) as deleted
+                    """
+                    results = neo4j_client.execute_query(detach_query, {"node_id": node_id, "case_node_ids": case_node_ids})
+                    deleted_count = results[0]["deleted"] if results else 0
+                    
+                    # Log delete event for this case (node detached from case)
+                    try:
+                        graph_events_repo.log_node_event(
+                            conn=conn,
+                            case_id=case["case_id"],
+                            node_temp_id=node_id,
+                            node_label=label,
+                            action="delete",
+                            user_id=user_id,
+                            properties=node_props,
+                        )
+                        events_logged += 1
+                    except Exception as e:
+                        logger.error(f"Failed to log delete event for case {case['case_id']}: {e}")
+                    
+                    deleted_from_cases.append({
+                        "case_id": case["case_id"],
+                        "case_name": case["case_name"],
+                        "status": "deleted",
+                        "relationshipsRemoved": deleted_count,
+                    })
+                    logger.info(f"Detached {label}:{node_id} from case {case['case_id']} ({deleted_count} relationships)")
+                except Exception as e:
+                    logger.error(f"Failed to detach {label}:{node_id} from case {case['case_id']}: {e}")
+                    deleted_from_cases.append({
+                        "case_id": case["case_id"],
+                        "case_name": case["case_name"],
+                        "status": "failed",
+                        "error": str(e),
+                    })
+            conn.commit()
+        
+        logger.info(f"Partial delete of {label}:{node_id} by {user_id} ({events_logged} events logged)")
         
         return {
             "success": True,
@@ -394,7 +477,26 @@ def delete_shared_node(label: str, node_id: str, force_partial: bool = Query(Fal
     neo4j_client.execute_query(delete_query, {"node_id": node_id})
     
     all_cases = blocked_cases + deletable_cases
-    logger.info(f"Deleted shared node {label}:{node_id} (was connected to {len(all_cases)} cases)")
+    
+    # Log delete events for all affected cases
+    with db.connection() as conn:
+        for case in all_cases:
+            try:
+                graph_events_repo.log_node_event(
+                    conn=conn,
+                    case_id=case["case_id"],
+                    node_temp_id=node_id,
+                    node_label=label,
+                    action="delete",
+                    user_id=user_id,
+                    properties=node_props,
+                )
+                events_logged += 1
+            except Exception as e:
+                logger.error(f"Failed to log delete event for case {case['case_id']}: {e}")
+        conn.commit()
+    
+    logger.info(f"Deleted shared node {label}:{node_id} by {user_id} (was connected to {len(all_cases)} cases, {events_logged} events logged)")
     
     return {
         "success": True,

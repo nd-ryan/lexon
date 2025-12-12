@@ -9,7 +9,7 @@ async def client(monkeypatch):
     # Skip DB table creation during tests
     monkeypatch.setattr(main, "ensure_all_tables", lambda engine: None)
 
-    transport = ASGITransport(app=main.app, lifespan="on")
+    transport = ASGITransport(app=main.app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as c:
         yield c
 
