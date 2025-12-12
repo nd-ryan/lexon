@@ -18,6 +18,8 @@ interface SharedNode {
   properties: Record<string, any>
   connectionCount: number
   isOrphaned: boolean
+  caseConnectionCount?: number
+  graphConnectionCount?: number
 }
 
 interface ConnectedCase {
@@ -49,6 +51,7 @@ export default function SharedNodesPage() {
   const [selectedLabel, setSelectedLabel] = useState<string>('')
   const [showOrphanedOnly, setShowOrphanedOnly] = useState(false)
   const [sharedLabels, setSharedLabels] = useState<string[]>([])
+  const [schemaByLabel, setSchemaByLabel] = useState<Record<string, SchemaNode>>({})
   const [searchQuery, setSearchQuery] = useState<string>('')
   const [modal, setModal] = useState<ModalState>({ type: 'none' })
   const [editForm, setEditForm] = useState<Record<string, any>>({})
@@ -72,13 +75,30 @@ export default function SharedNodesPage() {
         if (res.ok) {
           const data = await res.json()
           const schema: SchemaNode[] = data.schema || []
+          const byLabel: Record<string, SchemaNode> = {}
+          schema.forEach((n) => {
+            if (n?.label) byLabel[n.label] = n
+          })
+          setSchemaByLabel(byLabel)
           const labels = schema
             .filter(node => node.case_unique === false)
             .map(node => node.label)
           setSharedLabels(labels)
-          // Default to 'all' for initial load to show all shared nodes
+          // Default selection:
+          // - use last selection if available
+          // - else default to a single label (faster than "all")
           if (labels.length > 0 && !selectedLabel) {
-            setSelectedLabel('all')
+            const stored = typeof window !== 'undefined'
+              ? window.localStorage.getItem('admin_shared_nodes_selected_label')
+              : null
+            const storedOk = stored && labels.includes(stored)
+            if (storedOk) {
+              setSelectedLabel(stored!)
+            } else if (labels.includes('Party')) {
+              setSelectedLabel('Party')
+            } else {
+              setSelectedLabel(labels[0])
+            }
           }
         }
       } catch (e) {
@@ -86,6 +106,16 @@ export default function SharedNodesPage() {
       }
     }
     fetchSchema()
+  }, [selectedLabel])
+
+  // Persist selected label so page navigations don't default back to "all"
+  useEffect(() => {
+    if (!selectedLabel) return
+    try {
+      window.localStorage.setItem('admin_shared_nodes_selected_label', selectedLabel)
+    } catch {
+      // ignore
+    }
   }, [selectedLabel])
   
   // Fetch nodes
@@ -96,7 +126,7 @@ export default function SharedNodesPage() {
     setError(null)
     try {
       const params = new URLSearchParams()
-      if (selectedLabel !== 'all') params.set('label', selectedLabel)
+      params.set('label', selectedLabel)
       if (showOrphanedOnly) params.set('orphaned_only', 'true')
       
       const res = await fetch(`/api/admin/shared-nodes?${params}`)
@@ -215,16 +245,19 @@ export default function SharedNodesPage() {
         if (data.deletedFromCases) {
           const deleted = new Set<string>()
           data.deletedFromCases.forEach((c: ConnectedCase) => {
-            if (c.status === 'deleted') deleted.add(c.case_id)
+            if (c.status === 'deleted' || c.status === 'detached') deleted.add(c.case_id)
           })
           setDeletedCases(deleted)
         }
         
+        const hasCaseConnections = modal.detail && modal.detail.connectedCases.length > 0
         setActionResult({ 
           success: true, 
           message: data.partial 
-            ? `Node partially deleted. ${data.message}` 
-            : 'Node deleted successfully from all cases'
+            ? `Node partially detached. ${data.message}` 
+            : hasCaseConnections
+              ? 'Node detached from all cases (preserved in Knowledge Graph)'
+              : 'Orphaned node deleted from Knowledge Graph'
         })
         
         // Refresh the list after a short delay
@@ -290,7 +323,6 @@ export default function SharedNodesPage() {
                 className="border rounded px-3 py-2 text-sm min-w-[140px]"
               >
                 {sharedLabels.length === 0 && <option value="">Loading...</option>}
-                <option value="all">All Types</option>
                 {sharedLabels.map(label => (
                   <option key={label} value={label}>{label}</option>
                 ))}
@@ -353,7 +385,7 @@ export default function SharedNodesPage() {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Connections</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Case Connections</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
                 </tr>
@@ -536,26 +568,14 @@ export default function SharedNodesPage() {
                 <>
                   {/* Warning message - different for catalog vs regular nodes */}
                   {(() => {
-                    const catalogNodes = ['Domain', 'Forum', 'Jurisdiction']
-                    const isCatalogNode = catalogNodes.includes(modal.node.label)
                     const hasConnections = modal.detail && modal.detail.connectedCases.length > 0
                     
                     return (
-                      <div className={`border rounded p-4 mb-4 ${isCatalogNode && hasConnections ? 'bg-blue-50 border-blue-200' : 'bg-red-50 border-red-200'}`}>
-                        <p className={`text-sm ${isCatalogNode && hasConnections ? 'text-blue-800' : 'text-red-800'}`}>
-                          {isCatalogNode && hasConnections ? (
+                      <div className={`border rounded p-4 mb-4 ${hasConnections ? 'bg-blue-50 border-blue-200' : 'bg-red-50 border-red-200'}`}>
+                        <p className={`text-sm ${hasConnections ? 'text-blue-800' : 'text-red-800'}`}>
+                          {hasConnections ? (
                             <>
-                              <strong>ℹ️ Catalog Node Detachment:</strong> This is a catalog node (Domain, Forum, or Jurisdiction). 
-                              It will be <strong>detached from all connected cases</strong> but <strong>preserved in the Knowledge Graph</strong> for future use.
-                            </>
-                          ) : isCatalogNode && !hasConnections ? (
-                            <>
-                              <strong>⚠️ Orphaned Catalog Node:</strong> This catalog node has no case connections. 
-                              It will be <strong>permanently deleted</strong> from the Knowledge Graph.
-                            </>
-                          ) : hasConnections ? (
-                            <>
-                              <strong>⚠️ Permanent Deletion:</strong> This node will be <strong>permanently deleted</strong> from the Knowledge Graph and removed from all connected cases.
+                              <strong>ℹ️ Detach from Cases:</strong> This node will be <strong>detached from all connected cases</strong> but <strong>preserved in the Knowledge Graph</strong>.
                             </>
                           ) : (
                             <>
@@ -626,7 +646,7 @@ export default function SharedNodesPage() {
                 {modal.loading && (
                   <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full"></div>
                 )}
-                Delete Node
+                {modal.detail && modal.detail.connectedCases.length > 0 ? 'Detach from Cases' : 'Delete Node'}
               </button>
             </div>
           </div>
@@ -638,14 +658,14 @@ export default function SharedNodesPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-hidden flex flex-col">
             <div className="px-6 py-4 border-b">
-              <h2 className="text-lg font-semibold text-yellow-600">Cannot Delete Completely</h2>
+              <h2 className="text-lg font-semibold text-yellow-600">Cannot Detach From All Cases</h2>
               <p className="text-sm text-gray-500">{modal.node.name}</p>
             </div>
             
             <div className="px-6 py-4 overflow-y-auto flex-1">
               <div className="bg-yellow-50 border border-yellow-200 rounded p-4 mb-4">
                 <p className="text-yellow-800 text-sm">
-                  Some cases require at least one {modal.node.label} node. Deleting this node would violate that constraint.
+                  Some cases require at least one {modal.node.label} node. Detaching this node from those cases would violate that constraint.
                 </p>
               </div>
               
@@ -699,7 +719,7 @@ export default function SharedNodesPage() {
                   }}
                   className="px-4 py-2 bg-yellow-600 text-white rounded hover:bg-yellow-700"
                 >
-                  Delete from {modal.deletableCases.length} case(s) only
+                  Detach from {modal.deletableCases.length} case(s) only
                 </button>
               )}
             </div>

@@ -11,7 +11,14 @@ logger = setup_logger("neo4j-uploader")
 def to_snake_case(label: str) -> str:
     """Convert CamelCase to snake_case."""
     import re
-    return re.sub(r"(?<!^)(?=[A-Z])", "_", label).lower()
+    if not isinstance(label, str):
+        return str(label)
+    if label == "":
+        return ""
+    # Handle acronyms properly: URLValue -> url_value (not u_r_l_value)
+    s = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", label)
+    s = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s)
+    return s.lower()
 
 
 def get_id_prop_for_label(label: str, schema_payload: Any) -> str:

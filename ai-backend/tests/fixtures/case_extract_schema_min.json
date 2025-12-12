@@ -1,0 +1,79 @@
+[
+  {
+    "label": "Case",
+    "case_unique": true,
+    "can_create_new": true,
+    "properties": {
+      "case_id": { "type": "STRING", "ui": { "required": true } },
+      "name": { "type": "STRING", "ui": { "required": true } },
+      "citation": { "type": "STRING", "ui": { "required": false } }
+    },
+    "relationships": {
+      "HAS_PROCEEDING": "Proceeding"
+    }
+  },
+  {
+    "label": "Proceeding",
+    "case_unique": true,
+    "can_create_new": true,
+    "properties": {
+      "proceeding_id": { "type": "STRING", "ui": { "required": true } },
+      "stage": { "type": "STRING", "ui": { "required": false } }
+    },
+    "relationships": {
+      "ADDRESSES": "Issue",
+      "IN_FORUM": "Forum",
+      "INVOLVES": {
+        "target": "Party",
+        "properties": {
+          "role": { "type": "STRING", "ui": { "required": true } }
+        }
+      }
+    }
+  },
+  {
+    "label": "Issue",
+    "case_unique": true,
+    "can_create_new": true,
+    "properties": {
+      "issue_id": { "type": "STRING", "ui": { "required": true } },
+      "name": { "type": "STRING", "ui": { "required": true } }
+    },
+    "relationships": {}
+  },
+  {
+    "label": "Forum",
+    "case_unique": false,
+    "can_create_new": false,
+    "properties": {
+      "forum_id": { "type": "STRING", "ui": { "required": true } },
+      "name": { "type": "STRING", "ui": { "required": true } }
+    },
+    "relationships": {
+      "PART_OF": "Jurisdiction"
+    }
+  },
+  {
+    "label": "Jurisdiction",
+    "case_unique": false,
+    "can_create_new": false,
+    "properties": {
+      "jurisdiction_id": { "type": "STRING", "ui": { "required": true } },
+      "name": { "type": "STRING", "ui": { "required": true } }
+    },
+    "relationships": {}
+  },
+  {
+    "label": "Party",
+    "case_unique": false,
+    "can_create_new": true,
+    "properties": {
+      "party_id": { "type": "STRING", "ui": { "required": false } },
+      "name": { "type": "STRING", "ui": { "required": true } },
+      "party_type": { "type": "STRING", "ui": { "required": false } }
+    },
+    "relationships": {}
+  }
+]
+
+

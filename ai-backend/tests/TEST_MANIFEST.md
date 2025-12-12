@@ -4,9 +4,9 @@
 
 This document provides a centralized reference for all backend tests, organized by test file and category.
 
-**Total Tests:** 76  
+**Total Tests:** 97  
 **Test Framework:** pytest with async support  
-**Coverage Areas:** Shared nodes management, graph event logging, catalog node preservation, API security  
+**Coverage Areas:** Case extraction flow (V3), shared nodes management, graph event logging, Neo4j uploader helpers, optional Neo4j/Search integration checks, API security  
 **Pass Rate:** 100% ✅
 
 ---
@@ -30,7 +30,7 @@ This document provides a centralized reference for all backend tests, organized 
 
 ---
 
-## 2. `test_shared_nodes.py` - Shared Node Management (46 tests)
+## 2. `test_shared_nodes.py` - Shared Node Management (47 tests)
 
 ### Helper Function Tests (20 tests)
 
@@ -202,17 +202,69 @@ Tests mapping of temporary node IDs to permanent Neo4j UUIDs.
 
 ---
 
+## 4. `test_case_extract_flow_v3_*.py` - Case Extraction Flow V3 (10 tests)
+
+**Purpose:** Validates orchestration of the crucial [`app/flow_cases/case_extract_flow_v3.py`](../app/flow_cases/case_extract_flow_v3.py) workflow using **light integration** (real schema/validation code, deterministic mocked CrewAI + Neo4j).
+
+**Files:**
+- `test_case_extract_flow_v3_phases.py` (6 tests) - Phase 0–3 orchestration (schema prep, foundation extraction, forum selection, party extraction)
+- `test_case_extract_flow_v3_helpers.py` (3 tests) - Unit tests for parsing/validation helpers used by the flow
+- `test_case_extract_flow_v3_golden.py` (1 test) - Small “golden” shape test (phases 0–3 + `validate_case_graph`)
+
+**Fixtures/Helpers:**
+- `fixtures/case_extract_schema_min.json` - Minimal schema payload used for deterministic tests
+- `_case_extract_test_utils.py` - Small test-only stubs for CrewAI outputs
+
+---
+
+## 5. `test_neo4j_uploader.py` - Neo4j Uploader Helpers (2 tests)
+
+**Purpose:** Validates helper utilities in `app/lib/neo4j_uploader.py` (e.g., snake_case conversion and ID property mapping).
+
+---
+
+## 6. Integration Tests (optional / external dependencies)
+
+These are marked with `@pytest.mark.integration` and are **skipped** unless required environment variables are present.
+
+**Neo4j driver direct checks:**
+- `test_neo4j_integration_direct.py` (3 tests)
+
+**Neo4j client wrapper checks:**
+- `test_neo4j_integration_client.py` (2 tests)
+
+**Doctrine query shape check:**
+- `test_doctrine_query_integration.py` (1 test)
+
+**Full SearchFlow end-to-end (very heavyweight):**
+- `test_search_flow_integration.py` (1 test) - additionally requires `RUN_SEARCH_FLOW_INTEGRATION=1`
+
+---
+
 ## Running Tests
 
 ### All Backend Tests
 ```bash
 cd ai-backend
-PYTHONPATH=/Users/john/WebDev/lexon/ai-backend poetry run pytest tests/ -v
+poetry run pytest -v
 ```
 
 ### Specific Test File
 ```bash
-PYTHONPATH=/Users/john/WebDev/lexon/ai-backend poetry run pytest tests/test_shared_nodes.py -v
+cd ai-backend
+poetry run pytest tests/test_shared_nodes.py -v
+```
+
+### Exclude Integration Tests
+```bash
+cd ai-backend
+poetry run pytest -m "not integration" -v
+```
+
+### Run Only Integration Tests
+```bash
+cd ai-backend
+poetry run pytest -m integration -v
 ```
 
 ### With Coverage
@@ -223,7 +275,8 @@ make test-cov
 
 ### Single Test
 ```bash
-PYTHONPATH=/Users/john/WebDev/lexon/ai-backend poetry run pytest tests/test_shared_nodes.py::TestGetIdProperty::test_simple_label -v
+cd ai-backend
+poetry run pytest tests/test_shared_nodes.py::TestGetIdProperty::test_simple_label -v
 ```
 
 ---
@@ -278,4 +331,4 @@ def test_inserts_event_record(self):
 - **Schema Changes:** Update `SAMPLE_SCHEMA` in `conftest.py`
 - **New Endpoints:** Add new test classes following existing patterns
 
-Last Updated: December 11, 2024
+Last Updated: December 12, 2025

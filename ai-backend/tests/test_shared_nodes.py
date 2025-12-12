@@ -762,7 +762,7 @@ class TestDeleteSharedNodeEndpoint:
     
     @pytest.mark.asyncio
     async def test_non_catalog_node_deleted_after_detachment(self, async_client, api_key_header, user_id_header, monkeypatch, sample_schema):
-        """Non-catalog nodes (can_create_new=true) should be fully deleted from KG after detachment."""
+        """Shared nodes referenced by cases should be detached from cases but preserved in KG (even if non-catalog)."""
         monkeypatch.setattr("app.routes.shared_nodes.load_schema", lambda: sample_schema)
         
         neo4j_queries = []
@@ -770,8 +770,8 @@ class TestDeleteSharedNodeEndpoint:
             neo4j_queries.append({"query": query, "params": params})
             if "RETURN n" in query:
                 return [{"n": {"party_id": "p1", "name": "John Doe"}}]
-            elif "DETACH DELETE" in query:
-                return [{"deleted": 1}]
+            elif "DELETE r" in query:
+                return [{"deleted": 2}]
             return []
         
         monkeypatch.setattr("app.routes.shared_nodes.neo4j_client.execute_query", mock_execute)
@@ -780,7 +780,7 @@ class TestDeleteSharedNodeEndpoint:
         monkeypatch.setattr(
             "app.routes.shared_nodes.find_cases_containing_node",
             lambda db, nid, label: [
-                {"case_id": "case-1", "case_name": "Case 1", "labelCount": 2, "extracted": {}},
+                {"case_id": "case-1", "case_name": "Case 1", "labelCount": 2, "extracted": {"nodes": [{"properties": {"case_id": "c1"}}]}},
             ]
         )
         
@@ -799,10 +799,54 @@ class TestDeleteSharedNodeEndpoint:
         data = response.json()
         assert data["success"] is True
         assert data.get("catalogNodePreserved") is not True
+        assert data.get("nodePreserved") is True
+        assert "detached from all cases but preserved" in data["message"]
         
-        # Verify DETACH DELETE was executed (full deletion)
+        # Verify no DETACH DELETE was executed (node preserved)
         delete_queries = [q for q in neo4j_queries if "DETACH DELETE" in q["query"]]
-        assert len(delete_queries) == 1, "Non-catalog node should be fully deleted"
+        assert len(delete_queries) == 0, "Node should be preserved when referenced by cases"
+
+        # Verify relationship detachment was executed
+        detach_queries = [q for q in neo4j_queries if "DELETE r" in q["query"]]
+        assert len(detach_queries) == 1, "Should detach relationships"
+
+    @pytest.mark.asyncio
+    async def test_orphaned_non_catalog_node_can_be_deleted(self, async_client, api_key_header, user_id_header, monkeypatch, sample_schema):
+        """Orphaned non-catalog shared nodes (no case references) can be fully deleted from KG."""
+        monkeypatch.setattr("app.routes.shared_nodes.load_schema", lambda: sample_schema)
+
+        neo4j_queries = []
+        def mock_execute(query, params=None):
+            neo4j_queries.append({"query": query, "params": params})
+            if "RETURN n" in query:
+                return [{"n": {"party_id": "p1", "name": "Orphaned Party"}}]
+            elif "DETACH DELETE" in query:
+                return [{"deleted": 1}]
+            return []
+
+        monkeypatch.setattr("app.routes.shared_nodes.neo4j_client.execute_query", mock_execute)
+
+        # Mock empty cases (orphaned node)
+        monkeypatch.setattr(
+            "app.routes.shared_nodes.find_cases_containing_node",
+            lambda db, nid, label: []
+        )
+
+        headers = {**api_key_header, **user_id_header}
+        response = await async_client.delete(
+            "/api/ai/shared-nodes/Party/p1",
+            headers=headers
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data.get("nodePreserved") is not True
+        assert "deleted successfully" in data["message"]
+
+        # Verify DETACH DELETE was executed
+        delete_queries = [q for q in neo4j_queries if "DETACH DELETE" in q["query"]]
+        assert len(delete_queries) == 1, "Orphaned shared node should be fully deleted"
     
     @pytest.mark.asyncio
     async def test_min_per_case_error_prevents_any_deletion(self, async_client, api_key_header, user_id_header, monkeypatch, sample_schema):

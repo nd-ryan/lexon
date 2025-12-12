@@ -74,10 +74,52 @@ def find_cases_containing_node(db: Session, node_id: str, node_label: str) -> Li
     """Find all cases that contain a reference to this node (from Postgres extracted data)."""
     from sqlalchemy import text
     
-    # Query cases where extracted.nodes contains this node_id
-    # Note: cases table has id, filename, extracted - NOT name or citation columns
-    # The case name and citation are stored in extracted.nodes where label="Case"
+    # Query cases where extracted references this node_id.
+    #
+    # Important: for *catalog nodes* (can_create_new=false) the case JSON may not include the
+    # catalog node in extracted.nodes; instead, the catalog node is referenced by extracted.edges
+    # and later enriched client-side (see `useCatalogEnrichment` in the frontend).
+    #
+    # Note: cases table has id, filename, extracted - NOT name or citation columns.
+    # The case name and citation are stored in extracted.nodes where label="Case".
     id_prop = get_id_property(node_label)
+
+    # Map of catalog node labels to how they are referenced from edges in extracted JSON.
+    # Each entry is a list of (edge_label, endpoint) where endpoint is "from" or "to".
+    # This mirrors the frontend enrichment logic.
+    catalog_edge_refs: Dict[str, List[Dict[str, str]]] = {
+        "Domain": [{"edge_label": "CONTAINS", "endpoint": "from"}],  # Domain -> Case
+        "Forum": [
+            {"edge_label": "HEARD_IN", "endpoint": "to"},  # Proceeding -> Forum
+            {"edge_label": "PART_OF", "endpoint": "from"},  # Forum -> Jurisdiction
+        ],
+        "Jurisdiction": [{"edge_label": "PART_OF", "endpoint": "to"}],  # Forum -> Jurisdiction
+        "ReliefType": [{"edge_label": "IS_TYPE", "endpoint": "to"}],  # Relief -> ReliefType
+    }
+
+    edge_refs = catalog_edge_refs.get(node_label, [])
+
+    # Build edge EXISTS clause for catalog nodes (empty for non-catalog nodes)
+    edge_exists_clause = ""
+    if edge_refs:
+        # (edge->>'label' = 'X' AND edge->>'from' = :node_id) OR ...
+        edge_conditions = []
+        for ref in edge_refs:
+            edge_label = ref["edge_label"]
+            endpoint = ref["endpoint"]
+            if endpoint not in ("from", "to"):
+                continue
+            edge_conditions.append(
+                f"(edge->>'label' = '{edge_label}' AND edge->>'{endpoint}' = :node_id)"
+            )
+        if edge_conditions:
+            edge_exists_clause = f"""
+              OR EXISTS (
+                SELECT 1 FROM jsonb_array_elements(extracted->'edges') AS edge
+                WHERE {" OR ".join(edge_conditions)}
+              )
+            """
+
     query = text("""
         SELECT id, filename, extracted
         FROM cases
@@ -87,14 +129,17 @@ def find_cases_containing_node(db: Session, node_id: str, node_label: str) -> Li
             WHERE node->>'label' = :label
               AND node->'properties'->>:id_prop = :node_id
           )
+          {edge_exists_clause}
     """)
     
+    query = text(query.text.format(edge_exists_clause=edge_exists_clause))
     result = db.execute(query, {"label": node_label, "id_prop": id_prop, "node_id": node_id})
     
     cases = []
     for row in result:
         extracted = row.extracted or {}
         nodes = extracted.get("nodes", [])
+        edges = extracted.get("edges", [])
         
         # Find the Case node to get case_name and citation
         case_node = next((n for n in nodes if n.get("label") == "Case"), None)
@@ -102,8 +147,28 @@ def find_cases_containing_node(db: Session, node_id: str, node_label: str) -> Li
         case_name = case_props.get("name") or row.filename
         citation = case_props.get("citation")
         
-        # Count how many nodes of this label are in this case
-        label_count = sum(1 for n in nodes if n.get("label") == node_label)
+        # Count how many nodes of this label are in this case.
+        #
+        # For catalog nodes, the node may be absent from extracted.nodes; count unique references
+        # from extracted.edges instead.
+        if edge_refs:
+            ref_ids: Set[str] = set()
+            for e in edges:
+                if not isinstance(e, dict):
+                    continue
+                e_label = e.get("label")
+                e_from = e.get("from")
+                e_to = e.get("to")
+                for ref in edge_refs:
+                    if e_label != ref["edge_label"]:
+                        continue
+                    endpoint = ref["endpoint"]
+                    val = e_from if endpoint == "from" else e_to
+                    if val:
+                        ref_ids.add(str(val))
+            label_count = len(ref_ids)
+        else:
+            label_count = sum(1 for n in nodes if n.get("label") == node_label)
         
         cases.append({
             "case_id": str(row.id),
@@ -129,12 +194,88 @@ def get_case_node_ids(nodes: List[Dict]) -> Set[str]:
     return ids
 
 
+def get_case_connection_counts_for_nodes(
+    db: Session, node_label: str, id_prop: str, node_ids: List[str]
+) -> Dict[str, int]:
+    """Return {node_id: distinct_case_count} for the given node ids, based on Postgres extracted JSON.
+
+    This matches the same 'case membership' concept used by `find_cases_containing_node`, but in
+    a batched form suitable for list views.
+    """
+    if not node_ids:
+        return {}
+
+    from sqlalchemy import text, bindparam
+
+    # Same catalog edge reference map used in `find_cases_containing_node`
+    catalog_edge_refs: Dict[str, List[Dict[str, str]]] = {
+        "Domain": [{"edge_label": "CONTAINS", "endpoint": "from"}],  # Domain -> Case
+        "Forum": [
+            {"edge_label": "HEARD_IN", "endpoint": "to"},  # Proceeding -> Forum
+            {"edge_label": "PART_OF", "endpoint": "from"},  # Forum -> Jurisdiction
+        ],
+        "Jurisdiction": [{"edge_label": "PART_OF", "endpoint": "to"}],  # Forum -> Jurisdiction
+        "ReliefType": [{"edge_label": "IS_TYPE", "endpoint": "to"}],  # Relief -> ReliefType
+    }
+    edge_refs = catalog_edge_refs.get(node_label, [])
+
+    # Build SELECTs (UNION ALL) from nodes and edges
+    selects: List[str] = [
+        """
+        SELECT
+          node->'properties'->>:id_prop AS node_id,
+          c.id AS case_id
+        FROM cases c
+        CROSS JOIN LATERAL jsonb_array_elements(c.extracted->'nodes') AS node
+        WHERE c.extracted IS NOT NULL
+          AND node->>'label' = :label
+          AND node->'properties'->>:id_prop IN :node_ids
+        """
+    ]
+
+    for ref in edge_refs:
+        edge_label = ref.get("edge_label")
+        endpoint = ref.get("endpoint")
+        if not edge_label or endpoint not in ("from", "to"):
+            continue
+        selects.append(
+            f"""
+            SELECT
+              edge->>'{endpoint}' AS node_id,
+              c.id AS case_id
+            FROM cases c
+            CROSS JOIN LATERAL jsonb_array_elements(c.extracted->'edges') AS edge
+            WHERE c.extracted IS NOT NULL
+              AND edge->>'label' = '{edge_label}'
+              AND edge->>'{endpoint}' IN :node_ids
+            """
+        )
+
+    sql = f"""
+      WITH matched AS (
+        {' UNION ALL '.join(selects)}
+      )
+      SELECT node_id, COUNT(DISTINCT case_id)::int AS case_count
+      FROM matched
+      GROUP BY node_id
+    """
+
+    stmt = (
+        text(sql)
+        .bindparams(bindparam("node_ids", expanding=True))
+    )
+    rows = db.execute(stmt, {"label": node_label, "id_prop": id_prop, "node_ids": node_ids}).fetchall()
+    return {str(r.node_id): int(r.case_count) for r in rows if r.node_id}
+
+
 @router.get("")
 def list_shared_nodes(
     label: Optional[str] = Query(None, description="Filter by node label"),
     orphaned_only: bool = Query(False, description="Only show nodes with no connections"),
+    include_case_counts: bool = Query(False, description="If true, compute Postgres-based case connection counts (slower)"),
     limit: int = Query(100, le=500),
     offset: int = Query(0),
+    db: Session = Depends(get_db),
 ):
     """List shared nodes from the Knowledge Graph."""
     schema = load_schema()
@@ -149,31 +290,61 @@ def list_shared_nodes(
     
     for lbl in labels_to_query:
         id_prop = get_id_property(lbl)
+
+        # Case-count computation is the expensive part; by default we only do it for single-label
+        # views (or when explicitly requested).
+        use_case_counts = bool(label) or include_case_counts
         
-        # Query nodes with connection count
+        # Query nodes with Neo4j relationship count (graph connections)
         query = f"""
             MATCH (n:{lbl})
             OPTIONAL MATCH (n)-[r]-()
             WITH n, count(r) as connectionCount
-            {"WHERE connectionCount = 0" if orphaned_only else ""}
+            {"WHERE connectionCount = 0" if (orphaned_only and not use_case_counts) else ""}
             RETURN n, connectionCount
             ORDER BY n.name, n.{id_prop}
             SKIP $offset LIMIT $limit
         """
         
         results = neo4j_client.execute_query(query, {"offset": offset, "limit": limit})
-        
+
+        case_counts: Dict[str, int] = {}
+        if use_case_counts:
+            # Compute Postgres case-connection counts in batch for this page of nodes
+            node_ids = []
+            for record in results:
+                node = record["n"]
+                node_id_val = node.get(id_prop, "")
+                if node_id_val:
+                    node_ids.append(str(node_id_val))
+            case_counts = get_case_connection_counts_for_nodes(db, lbl, id_prop, node_ids)
+
         for record in results:
             node = record["n"]
-            conn_count = record["connectionCount"]
+            graph_conn_count = record["connectionCount"]
+            node_id_val = str(node.get(id_prop, "") or "")
+            case_conn_count = int(case_counts.get(node_id_val, 0)) if use_case_counts else None
+
+            # Orphaned/connected status:
+            # - If using Postgres case counts, base orphaned status on case membership (matches delete modal behavior)
+            # - Otherwise, base it on Neo4j relationships (fast for "All Types" browsing)
+            is_orphaned = (case_conn_count == 0) if use_case_counts else (graph_conn_count == 0)
+            if orphaned_only and not is_orphaned:
+                continue
             
             node_data = {
                 "label": lbl,
-                "id": node.get(id_prop, ""),
+                "id": node_id_val,
                 "name": get_node_display_name({"label": lbl, "properties": node}),
                 "properties": node,
-                "connectionCount": conn_count,
-                "isOrphaned": conn_count == 0,
+                # For backwards compatibility:
+                # - When case counts are computed, `connectionCount` reflects case connections.
+                # - Otherwise it reflects Neo4j relationship count.
+                "connectionCount": (case_conn_count if use_case_counts else graph_conn_count),
+                "caseConnectionCount": case_conn_count,
+                # Expose Neo4j relationship count for debugging/visibility
+                "graphConnectionCount": graph_conn_count,
+                "isOrphaned": is_orphaned,
             }
             nodes.append(node_data)
     
@@ -444,7 +615,7 @@ def delete_shared_node(
                     deleted_from_cases.append({
                         "case_id": case["case_id"],
                         "case_name": case["case_name"],
-                        "status": "deleted",
+                        "status": "detached",
                         "relationshipsRemoved": deleted_count,
                     })
                     logger.info(f"Detached {label}:{node_id} from case {case['case_id']} ({deleted_count} relationships)")
@@ -458,7 +629,7 @@ def delete_shared_node(
                     })
             conn.commit()
         
-        logger.info(f"Partial delete of {label}:{node_id} by {user_id} ({events_logged} events logged)")
+        logger.info(f"Partial detachment of {label}:{node_id} by {user_id} ({events_logged} events logged)")
         
         return {
             "success": True,
@@ -473,11 +644,11 @@ def delete_shared_node(
     is_catalog_node = node_def.get("can_create_new") is False
     
     all_cases = blocked_cases + deletable_cases
-    
-    # If catalog node with connections, only allow detachment (not full deletion)
-    if is_catalog_node and len(all_cases) > 0:
-        # Catalog nodes can only be detached, not deleted
-        # Detach from all cases but keep the node in the KG
+
+    # New deletion policy (shared nodes):
+    # - If node is referenced by any cases, detach from all cases and PRESERVE the node in the KG.
+    # - Only fully delete the node when it is orphaned (no case references).
+    if len(all_cases) > 0:
         with db.connection() as conn:
             for case in all_cases:
                 try:
@@ -515,7 +686,7 @@ def delete_shared_node(
                         "status": "detached",
                         "relationshipsRemoved": deleted_count,
                     })
-                    logger.info(f"Detached catalog node {label}:{node_id} from case {case['case_id']} ({deleted_count} relationships)")
+                    logger.info(f"Detached {label}:{node_id} from case {case['case_id']} ({deleted_count} relationships)")
                 except Exception as e:
                     logger.error(f"Failed to detach {label}:{node_id} from case {case['case_id']}: {e}")
                     deleted_from_cases.append({
@@ -526,15 +697,19 @@ def delete_shared_node(
                     })
             conn.commit()
         
-        logger.info(f"Detached catalog node {label}:{node_id} from {len(all_cases)} case(s) by {user_id} (node preserved in KG, {events_logged} events logged)")
-        
-        return {
+        logger.info(f"Detached shared node {label}:{node_id} from {len(all_cases)} case(s) by {user_id} (node preserved in KG, {events_logged} events logged)")
+
+        resp = {
             "success": True,
             "partial": False,
-            "catalogNodePreserved": True,
-            "message": f"Catalog node detached from all cases but preserved in Knowledge Graph",
+            "nodePreserved": True,
+            "message": "Node detached from all cases but preserved in Knowledge Graph",
             "deletedFromCases": deleted_from_cases,
         }
+        # Back-compat: keep catalogNodePreserved for catalog node detachment
+        if is_catalog_node:
+            resp["catalogNodePreserved"] = True
+        return resp
     
     # Full deletion - delete the node and all its relationships
     # This is only for non-catalog nodes OR orphaned catalog nodes
@@ -565,8 +740,7 @@ def delete_shared_node(
             conn.commit()
     
     node_type = "catalog" if is_catalog_node else "shared"
-    status_msg = f"orphaned {node_type}" if len(all_cases) == 0 else node_type
-    logger.info(f"Deleted {status_msg} node {label}:{node_id} by {user_id} (was connected to {len(all_cases)} cases, {events_logged} events logged)")
+    logger.info(f"Deleted orphaned {node_type} node {label}:{node_id} by {user_id} ({events_logged} events logged)")
     
     return {
         "success": True,
