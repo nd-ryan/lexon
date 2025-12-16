@@ -1,7 +1,9 @@
 #!/bin/bash
 
 # Doctrine Search Test Runner
-# This script runs the comparison test between manual Cypher queries and AI Agent search
+# This script runs:
+# - a direct Doctrine Cypher query shape check
+# - (optionally) the full SearchFlow end-to-end test (LLM + Neo4j MCP)
 
 echo "🧪 Starting Doctrine Search Comparison Test..."
 echo "=============================================="
@@ -14,28 +16,40 @@ else
     echo "⚠️  No .env file found. Using system environment variables."
 fi
 
-# Check if virtual environment exists
-if [ -d "venv" ]; then
-    echo "✅ Activating virtual environment..."
-    source venv/bin/activate
+# Prefer Poetry if available (this repo is Poetry-first)
+if command -v poetry >/dev/null 2>&1; then
+    echo "✅ Using Poetry: $(poetry --version)"
+    RUNNER="poetry run"
 else
-    echo "⚠️  No virtual environment found. Running with system Python."
+    echo "⚠️  Poetry not found. Falling back to local venv/system python."
+    # Try common venv locations
+    if [ -f ".venv/bin/activate" ]; then
+        echo "✅ Activating .venv..."
+        source .venv/bin/activate
+    elif [ -f "venv/bin/activate" ]; then
+        echo "✅ Activating venv..."
+        source venv/bin/activate
+    else
+        echo "⚠️  No virtual environment found. Using system Python."
+    fi
+    RUNNER=""
 fi
 
-# Check if required dependencies are installed
+# Check if required dependencies are installed (best-effort)
 echo "📦 Checking dependencies..."
-python -c "import app.lib.neo4j_client, app.routes.ai" 2>/dev/null
-if [ $? -eq 0 ]; then
-    echo "✅ Dependencies available"
-else
-    echo "❌ Dependencies missing. Please ensure the app is properly set up."
+${RUNNER} python -c "import app.lib.neo4j_client, app.lib.mcp_integration" 2>/dev/null
+if [ $? -ne 0 ]; then
+    echo "❌ Dependencies missing. From ai-backend/, run: poetry install"
     exit 1
 fi
 
-# Run the test
-echo "🚀 Running doctrine search test..."
-python test_doctrine_search.py
+echo "🚀 Running direct Doctrine query shape check..."
+${RUNNER} pytest -m integration -v tests/test_doctrine_query_integration.py
+
+echo ""
+echo "ℹ️  Optional: full SearchFlow end-to-end (requires OPENAI_API_KEY and RUN_SEARCH_FLOW_INTEGRATION=1)"
+echo "   RUN_SEARCH_FLOW_INTEGRATION=1 ${RUNNER} pytest -m integration -v tests/test_search_flow_integration.py"
 
 echo ""
 echo "✅ Test completed!"
-echo "Check the output above for results and any generated JSON files." 
+echo "Check the output above for results."

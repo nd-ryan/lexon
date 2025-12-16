@@ -684,7 +684,7 @@ class TestDeleteSharedNodeEndpoint:
                 return [{"n": {"domain_id": "d1", "name": "Criminal Law"}}]
             # Second call: detach relationships
             elif "DELETE r" in query:
-                return [{"deleted": 3}]
+                return [{"deleted_count": 3}]
             return []
         
         monkeypatch.setattr("app.routes.shared_nodes.neo4j_client.execute_query", mock_execute)
@@ -771,7 +771,7 @@ class TestDeleteSharedNodeEndpoint:
             if "RETURN n" in query:
                 return [{"n": {"party_id": "p1", "name": "John Doe"}}]
             elif "DELETE r" in query:
-                return [{"deleted": 2}]
+                return [{"deleted_count": 2}]
             return []
         
         monkeypatch.setattr("app.routes.shared_nodes.neo4j_client.execute_query", mock_execute)
@@ -898,7 +898,7 @@ class TestDeleteSharedNodeEndpoint:
                 # Capture the case_node_ids parameter to verify filtering
                 if params and "case_node_ids" in params:
                     captured_case_node_ids.extend(params["case_node_ids"])
-                return [{"deleted": 2}]
+                return [{"deleted_count": 2}]
             return []
         
         monkeypatch.setattr("app.routes.shared_nodes.neo4j_client.execute_query", mock_execute)

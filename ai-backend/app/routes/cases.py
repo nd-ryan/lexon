@@ -472,10 +472,21 @@ def delete_case(case_id: str, request: Request, db: Session = Depends(get_db)):
                     except Exception as e:
                         logger.warning(f"Failed to detach pre-existing node {label}:{node_id}: {e}")
                 elif label in case_unique_labels:
-                    # Case-unique node created by this case: delete from KG
+                    # Case-unique node created by this case: delete from KG if it is isolated to this case.
+                    #
+                    # Defensive safety: if a "case-unique" node ever ends up with external connections
+                    # (bug, reuse edge-case, manual changes), avoid deleting it globally; detach it
+                    # from this case instead. This matches the behavior used during /kg/submit.
                     try:
-                        uploader.delete_node(label, node_id)
-                        logger.info(f"Deleted case-unique node {label}:{node_id} from KG")
+                        is_isolated = uploader.check_node_isolation(label, node_id, case_node_ids)
+                        if is_isolated:
+                            uploader.delete_node(label, node_id)
+                            logger.info(f"Deleted case-unique node {label}:{node_id} from KG")
+                        else:
+                            detached = uploader.detach_node_from_case(label, node_id, case_node_ids)
+                            logger.warning(
+                                f"Case-unique node {label}:{node_id} has external connections; detached only ({detached} relationships)"
+                            )
                     except Exception as e:
                         logger.warning(f"Failed to delete node {label}:{node_id} from KG: {e}")
                 else:

@@ -4,10 +4,10 @@
 
 This document provides a centralized reference for all frontend tests, organized by component and feature area.
 
-**Total Tests:** 38  
+**Total Tests:** 41  
 **Test Framework:** Vitest + React Testing Library + MSW  
 **Coverage Areas:** Admin UI, API routes, hooks, validation  
-**Pass Rate:** 79% (30/38 passing) ⚠️
+**Pass Rate:** 80% (33/41 passing) ⚠️
 
 ---
 
@@ -127,14 +127,17 @@ Tests Next.js API routes for individual node operations with admin auth.
 
 ---
 
-## 5. `src/lib/cases/validation.test.ts` - Validation Logic (2 tests)
+## 5. `src/lib/cases/validation.test.ts` - Validation Logic (5 tests)
 
 Tests case data validation helper functions.
 
-- **test_validation_function_1** - [Existing validation test]
-- **test_validation_function_2** - [Existing validation test]
+- **test_flags_required_node_and_relationship_properties** - Flags required node + relationship properties
+- **test_applies_pending_edits_before_validation** - Applies pending edits before validation
+- **test_enforces_min_per_case_on_connected_nodes** - Enforces `min_per_case` (connected-only rule)
+- **test_disconnected_nodes_do_not_satisfy_min_per_case** - Disconnected nodes don’t satisfy `min_per_case`
+- **test_passes_min_per_case_when_nodes_are_connected** - Passes when requirements are satisfied
 
-**Status:** ✅ 2/2 passing
+**Status:** ✅ 5/5 passing
 
 ---
 
@@ -165,7 +168,7 @@ Tests admin-only navigation component.
 
 ### ✅ Fully Passing (29 tests)
 - SharedNodesPage: 22 tests
-- Validation: 2 tests
+- Validation: 5 tests
 - useUIState hook: 3 tests
 - AdminLink: 2 tests
 

@@ -1,8 +1,15 @@
-# Catalog Node Deletion Policy
+# Catalog / Shared Node Deletion Policy
 
 ## Overview
 
-This document describes the deletion policy for **catalog nodes** vs **regular nodes** in the shared nodes management system.
+This document describes the deletion policy for **catalog nodes** vs **regular (user-created) shared nodes** in the shared nodes management system.
+
+**Important (current behavior):** The backend primarily decides between **detach vs delete** based on whether the node is referenced by any cases:
+
+- If a shared node is referenced by **one or more cases**, the delete action **detaches it from cases and preserves the node** in Neo4j.
+- A shared node is only **fully deleted** from Neo4j when it is **orphaned** (no case references).
+
+**Related:** For a full end-to-end view of *all* delete entry points (admin shared-nodes delete, delete case, editor delete + save/submit), see `docs/DELETE_WORKFLOWS.md`.
 
 ## Node Types
 
@@ -14,6 +21,7 @@ This document describes the deletion policy for **catalog nodes** vs **regular n
 - **Domain** - Legal domains (Criminal Law, Contract Law, etc.)
 - **Forum** - Courts (Supreme Court, District Court, etc.)  
 - **Jurisdiction** - Geographic jurisdictions (Federal, State, etc.)
+- **ReliefType** - Fixed relief type taxonomy (injunction, damages, etc.)
 
 **Characteristics:**
 - Cannot be created by users in the case editor
@@ -28,20 +36,22 @@ This document describes the deletion policy for **catalog nodes** vs **regular n
 - **Party** - Litigants, defendants, etc.
 - **Doctrine** - Legal doctrines
 - **Policy** - Policy considerations
-- **All case-specific nodes** (Case, Issue, Ruling, etc.)
+- **Other shared (non-case-unique) user-created nodes** (e.g., Law, FactPattern, etc.)
 
 **Characteristics:**
 - Can be created by users in case editor
 - May be shared across cases or case-unique
 - More ephemeral nature
 
+**Note:** The **admin shared nodes page** (and the `/api/ai/shared-nodes/...` endpoints) only manages labels where `case_unique=false`. Case-specific labels like `Case`, `Issue`, and `Ruling` (`case_unique=true`) are managed via the **case update / submit / delete** flows, not via the shared-nodes admin interface.
+
 ---
 
 ## Deletion Behavior
 
-### 1. Catalog Nodes WITH Connections
+### 1. Any Shared Node WITH Case References (Catalog OR Regular)
 
-**Scenario:** Admin deletes a catalog node (e.g., "Criminal Law" domain) that is used in one or more cases.
+**Scenario:** Admin deletes a shared node (e.g., Domain, Forum, Jurisdiction, ReliefType, Party, Doctrine, etc.) that is referenced by one or more cases.
 
 **Behavior:**
 ```
@@ -49,57 +59,28 @@ This document describes the deletion policy for **catalog nodes** vs **regular n
 ❌ DO NOT delete from Knowledge Graph
 ```
 
-**Rationale:** Catalog nodes represent permanent domain knowledge. Even if no current cases use them, they should remain available for future cases.
+**Rationale:** The shared-nodes delete action is primarily a **case cleanup** operation. When a node is in use, we remove it from cases but keep the node itself available for future reuse and to reduce accidental data loss across cases.
 
 **Implementation:**
-- Removes relationships between catalog node and all case nodes
+- Removes relationships between the shared node and nodes belonging to each connected case
 - Node remains in Neo4j with all its properties
-- Cases can still be saved (they just won't have that domain/forum/jurisdiction anymore)
+- Cases can still be saved (they just won’t reference that node anymore)
 
-**UI Message:**
-> ℹ️ **Catalog Node Detachment:** This is a catalog node (Domain, Forum, or Jurisdiction). It will be **detached from all connected cases** but **preserved in the Knowledge Graph** for future use.
+**UI Message (admin shared nodes page):**
+> ℹ️ **Detach from Cases:** This node will be **detached from all connected cases** but **preserved in the Knowledge Graph**.
 
-### 2. Catalog Nodes WITHOUT Connections (Orphaned)
+### 2. Any Shared Node WITHOUT Case References (Orphaned)
 
-**Scenario:** Admin deletes a catalog node that has no case connections.
-
-**Behavior:**
-```
-✅ Delete from Knowledge Graph
-```
-
-**Rationale:** If a catalog node is truly orphaned and the admin wants to remove it, allow deletion. This handles cleanup of unused/deprecated catalog entries.
-
-**UI Message:**
-> ⚠️ **Orphaned Catalog Node:** This catalog node has no case connections. It will be **permanently deleted** from the Knowledge Graph.
-
-### 3. Regular Nodes WITH Connections
-
-**Scenario:** Admin deletes a regular shared node (e.g., a Party) that is used in one or more cases.
+**Scenario:** Admin deletes a shared node that has no case references.
 
 **Behavior:**
 ```
-✅ Detach from all connected cases
-✅ Delete from Knowledge Graph
+✅ Delete from Knowledge Graph (DETACH DELETE)
 ```
 
-**Rationale:** Regular nodes are user-created and more disposable. Once detached from all cases, they serve no purpose in the KG.
+**Rationale:** Orphaned shared nodes serve no purpose and can be safely cleaned up.
 
-**UI Message:**
-> ⚠️ **Permanent Deletion:** This node will be **permanently deleted** from the Knowledge Graph and removed from all connected cases.
-
-### 4. Regular Nodes WITHOUT Connections (Orphaned)
-
-**Scenario:** Admin deletes a regular node that has no case connections.
-
-**Behavior:**
-```
-✅ Delete from Knowledge Graph
-```
-
-**Rationale:** Orphaned user-created nodes should be cleaned up.
-
-**UI Message:**
+**UI Message (admin shared nodes page):**
 > ⚠️ **Orphaned Node:** This orphaned node will be **permanently deleted** from the Knowledge Graph.
 
 ---
@@ -119,15 +100,22 @@ If deleting a node would leave a case with fewer than `min_per_case` instances o
 
 1. **Cancel the deletion entirely**
 2. **Partial deletion** (with `force_partial=true` flag):
-   - Delete from cases where constraint allows
-   - Leave connected to cases where it would violate constraint
+   - Detach from cases where the constraint allows
+   - Leave connected to cases where detaching would violate the constraint
 
 ### Behavior on Min_Per_Case Violation
+
+When `force_partial=false`:
 
 ```
 ❌ No deletion or detachment occurs
 ✅ Returns error with details of blocked/deletable cases
 ```
+
+When `force_partial=true`:
+- Detach only from **deletable** cases
+- Leave the node connected to **blocked** cases
+- The node is **not deleted** from Neo4j (because it remains referenced)
 
 **UI Message:**
 > ⚠️ **Warning:** Some cases require at least one {NodeType} node. Deleting this node would violate that constraint.
@@ -143,19 +131,23 @@ If deleting a node would leave a case with fewer than `min_per_case` instances o
 **Key Logic:**
 
 ```python
-# 1. Check if catalog node
+# Identify catalog nodes (used for back-compat flagging)
 node_def = next((n for n in schema if n.get("label") == label), {})
 is_catalog_node = node_def.get("can_create_new") is False
 
-# 2. If catalog node WITH connections → detach only
-if is_catalog_node and len(all_cases) > 0:
+# Current deletion policy:
+# - If referenced by any cases: detach from connected cases, preserve node in Neo4j
+# - Only fully delete when orphaned (no case references)
+if len(all_cases) > 0:
     # Delete relationships, preserve node
-    # Log "delete" events for cases (meaning detached)
-    return {"catalogNodePreserved": True}
+    resp = {"success": True, "nodePreserved": True}
+    if is_catalog_node:
+        resp["catalogNodePreserved"] = True  # back-compat
+    return resp
 
-# 3. Otherwise → full deletion
+# Orphaned: fully delete
 DETACH DELETE node
-return {"success": True}
+return {"success": True}  # plus message + deletedFromCases in the real response
 ```
 
 ### Frontend Indication
@@ -163,9 +155,9 @@ return {"success": True}
 **File:** `src/app/admin/shared-nodes/page.tsx`
 
 **Visual Cues:**
-- **Blue alert box** for catalog node detachment (preserved)
-- **Red alert box** for permanent deletion
-- **Different messages** based on node type and connection status
+- **Blue alert box** when the node has connected cases (detach + preserve)
+- **Red alert box** when the node is orphaned (permanent deletion)
+- **Min-per-case confirmation modal** when detaching from all cases is blocked; allows partial detachment
 
 ### Test Coverage
 
@@ -174,7 +166,7 @@ return {"success": True}
 **New Tests (5 additional):**
 1. ✅ `test_catalog_node_detached_not_deleted_when_connected`
 2. ✅ `test_orphaned_catalog_node_can_be_deleted`
-3. ✅ `test_non_catalog_node_deleted_after_detachment`
+3. ✅ `test_non_catalog_node_deleted_after_detachment` *(name is misleading; it asserts the node is preserved when referenced)*
 4. ✅ `test_min_per_case_error_prevents_any_deletion`
 5. ✅ `test_detachment_removes_only_case_relationships`
 
@@ -204,9 +196,9 @@ return {"success": True}
 
 **Result:**
 - ✅ Detached from both cases
-- ✅ Node fully deleted from KG
+- ✅ Node preserved in KG
 - 📝 2 "delete" events logged
-- 💬 Red warning: "Permanently deleted"
+- 💬 Blue info message: "Detached but preserved"
 
 ### Example 3: Deleting Last "Forum" in a Case
 
@@ -224,14 +216,15 @@ return {"success": True}
 
 ## API Response Format
 
-### Successful Catalog Node Detachment
+### Successful Detachment (Node Preserved; Catalog OR Regular)
 
 ```json
 {
   "success": true,
   "partial": false,
+  "nodePreserved": true,
   "catalogNodePreserved": true,
-  "message": "Catalog node detached from all cases but preserved in Knowledge Graph",
+  "message": "Node detached from all cases but preserved in Knowledge Graph",
   "deletedFromCases": [
     {
       "case_id": "uuid",
@@ -243,20 +236,18 @@ return {"success": True}
 }
 ```
 
-### Successful Regular Node Deletion
+**Notes:**
+- `catalogNodePreserved` is only present/true for catalog nodes (`can_create_new: false`) for backwards compatibility.
+- For non-catalog shared nodes, expect `nodePreserved: true` and `catalogNodePreserved` to be absent/falsey.
+
+### Successful Orphaned Node Deletion (Node Deleted)
 
 ```json
 {
   "success": true,
   "partial": false,
   "message": "Node deleted successfully from Knowledge Graph",
-  "deletedFromCases": [
-    {
-      "case_id": "uuid",
-      "case_name": "Smith v. Jones",
-      "status": "deleted"
-    }
-  ]
+  "deletedFromCases": []
 }
 ```
 
@@ -274,6 +265,27 @@ return {"success": True}
     {"case_id": "uuid2", "case_name": "Case 2", "currentCount": 2}
   ],
   "minPerCase": 1
+}
+```
+
+### Partial Detachment (`force_partial=true`)
+
+```json
+{
+  "success": true,
+  "partial": true,
+  "message": "Node remains connected to 1 case(s) due to min_per_case constraint",
+  "deletedFromCases": [
+    {
+      "case_id": "uuid2",
+      "case_name": "Case 2",
+      "status": "detached",
+      "relationshipsRemoved": 2
+    }
+  ],
+  "remainingCases": [
+    { "case_id": "uuid1", "case_name": "Case 1" }
+  ]
 }
 ```
 
@@ -314,4 +326,4 @@ Catalog nodes are identified by the `can_create_new` property in `ai-backend/sch
 }
 ```
 
-Last Updated: December 11, 2024
+Last Updated: December 15, 2025

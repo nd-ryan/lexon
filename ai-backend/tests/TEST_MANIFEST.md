@@ -4,7 +4,7 @@
 
 This document provides a centralized reference for all backend tests, organized by test file and category.
 
-**Total Tests:** 97  
+**Total Tests:** 104  
 **Test Framework:** pytest with async support  
 **Coverage Areas:** Case extraction flow (V3), shared nodes management, graph event logging, Neo4j uploader helpers, optional Neo4j/Search integration checks, API security  
 **Pass Rate:** 100% ✅
@@ -122,13 +122,35 @@ Tests `DELETE /api/ai/shared-nodes/{label}/{node_id}` for node deletion with cat
 - **test_returns_404_for_missing_node** - Returns 404 when node not found
 - **test_catalog_node_detached_not_deleted_when_connected** - Catalog nodes are detached but preserved in KG ✨
 - **test_orphaned_catalog_node_can_be_deleted** - Orphaned catalog nodes can be fully deleted ✨
-- **test_non_catalog_node_deleted_after_detachment** - Non-catalog nodes are fully deleted from KG ✨
+- **test_non_catalog_node_deleted_after_detachment** - Non-catalog shared nodes are detached from cases and preserved in KG ✨ *(test name is misleading)*
 - **test_min_per_case_error_prevents_any_deletion** - No deletion occurs when min_per_case violated ✨
 - **test_detachment_removes_only_case_relationships** - Detachment only removes relationships to specific case nodes ✨
 
 ---
 
-## 3. `test_graph_events_repo.py` - Event Logging (30 tests)
+## 3. `test_case_delete_kg_cleanup.py` - Case Deletion KG Cleanup (5 tests)
+
+**Purpose:** Validates Neo4j cleanup behavior when deleting a case (`DELETE /api/ai/cases/{case_id}`) for KG-submitted cases.
+
+**What it covers:**
+- Neo4j cleanup is skipped when `kg_submitted_at` is null (draft cases never wrote to KG)
+- Shared nodes and `is_existing` nodes are detached (preserved) during case deletion
+- 404 when deleting a missing case
+- **Case-unique nodes** (`case_unique: true`) are deleted from Neo4j only if **isolated** to the case; otherwise they are **detached** (defensive safety).
+
+---
+
+## 4. `test_kg_submit_deletion_policy.py` - KG Submit Deletion Policy (2 tests)
+
+**Purpose:** Validates deletion side-effects during KG submit (`POST /api/ai/kg/submit`) without running the full KG flow.
+
+**What it covers:**
+- Deleted shared nodes (`case_unique: false`) are detached from the case (preserved), not globally deleted
+- Deleted case-unique nodes (`case_unique: true`) are deleted only when isolated to the case
+
+---
+
+## 5. `test_graph_events_repo.py` - Event Logging (30 tests)
 
 ### Helper Function Tests (6 tests)
 
@@ -202,7 +224,7 @@ Tests mapping of temporary node IDs to permanent Neo4j UUIDs.
 
 ---
 
-## 4. `test_case_extract_flow_v3_*.py` - Case Extraction Flow V3 (10 tests)
+## 6. `test_case_extract_flow_v3_*.py` - Case Extraction Flow V3 (10 tests)
 
 **Purpose:** Validates orchestration of the crucial [`app/flow_cases/case_extract_flow_v3.py`](../app/flow_cases/case_extract_flow_v3.py) workflow using **light integration** (real schema/validation code, deterministic mocked CrewAI + Neo4j).
 
@@ -217,13 +239,13 @@ Tests mapping of temporary node IDs to permanent Neo4j UUIDs.
 
 ---
 
-## 5. `test_neo4j_uploader.py` - Neo4j Uploader Helpers (2 tests)
+## 7. `test_neo4j_uploader.py` - Neo4j Uploader Helpers (2 tests)
 
 **Purpose:** Validates helper utilities in `app/lib/neo4j_uploader.py` (e.g., snake_case conversion and ID property mapping).
 
 ---
 
-## 6. Integration Tests (optional / external dependencies)
+## 8. Integration Tests (optional / external dependencies)
 
 These are marked with `@pytest.mark.integration` and are **skipped** unless required environment variables are present.
 
@@ -253,6 +275,16 @@ poetry run pytest -v
 ```bash
 cd ai-backend
 poetry run pytest tests/test_shared_nodes.py -v
+```
+
+```bash
+cd ai-backend
+poetry run pytest tests/test_case_delete_kg_cleanup.py -v
+```
+
+```bash
+cd ai-backend
+poetry run pytest tests/test_kg_submit_deletion_policy.py -v
 ```
 
 ### Exclude Integration Tests
@@ -331,4 +363,4 @@ def test_inserts_event_record(self):
 - **Schema Changes:** Update `SAMPLE_SCHEMA` in `conftest.py`
 - **New Endpoints:** Add new test classes following existing patterns
 
-Last Updated: December 12, 2025
+Last Updated: December 16, 2025

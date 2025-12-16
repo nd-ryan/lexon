@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.lib.security import get_api_key
 from app.lib.neo4j_client import neo4j_client
+from app.lib.neo4j_uploader import Neo4jUploader
 from app.lib.logging_config import setup_logger
 from app.lib.db import get_db
 from app.lib.graph_events_repo import graph_events_repo, compute_content_hash
@@ -529,6 +530,9 @@ def delete_shared_node(
     if label not in shared_labels:
         raise HTTPException(400, f"Label '{label}' is not a shared node type")
     
+    # Use the same KG mutation primitives as KG submit / case delete flows
+    uploader = Neo4jUploader(schema, neo4j_client)
+
     id_prop = get_id_property(label)
     min_per_case = get_min_per_case(schema, label)
     user_id = get_user_id(request)
@@ -585,17 +589,10 @@ def delete_shared_node(
             for case in deletable_cases:
                 try:
                     # Get node IDs from Postgres extracted data (no graph traversal!)
-                    case_node_ids = list(get_case_node_ids(case["extracted"].get("nodes", [])))
-                    
-                    # Delete relationships between the shared node and case nodes
-                    detach_query = f"""
-                        MATCH (n:{label} {{{id_prop}: $node_id}})-[r]-(connected)
-                        WHERE any(key IN keys(connected) WHERE key ENDS WITH '_id' AND connected[key] IN $case_node_ids)
-                        DELETE r
-                        RETURN count(r) as deleted
-                    """
-                    results = neo4j_client.execute_query(detach_query, {"node_id": node_id, "case_node_ids": case_node_ids})
-                    deleted_count = results[0]["deleted"] if results else 0
+                    case_node_ids = get_case_node_ids(case["extracted"].get("nodes", []))
+
+                    # Detach relationships between the shared node and nodes that belong to this case
+                    deleted_count = uploader.detach_node_from_case(label, node_id, case_node_ids)
                     
                     # Log delete event for this case (node detached from case)
                     try:
@@ -653,17 +650,10 @@ def delete_shared_node(
             for case in all_cases:
                 try:
                     # Get node IDs from Postgres extracted data
-                    case_node_ids = list(get_case_node_ids(case["extracted"].get("nodes", [])))
-                    
-                    # Delete relationships between the shared node and case nodes
-                    detach_query = f"""
-                        MATCH (n:{label} {{{id_prop}: $node_id}})-[r]-(connected)
-                        WHERE any(key IN keys(connected) WHERE key ENDS WITH '_id' AND connected[key] IN $case_node_ids)
-                        DELETE r
-                        RETURN count(r) as deleted
-                    """
-                    results = neo4j_client.execute_query(detach_query, {"node_id": node_id, "case_node_ids": case_node_ids})
-                    deleted_count = results[0]["deleted"] if results else 0
+                    case_node_ids = get_case_node_ids(case["extracted"].get("nodes", []))
+
+                    # Detach relationships between the shared node and nodes that belong to this case
+                    deleted_count = uploader.detach_node_from_case(label, node_id, case_node_ids)
                     
                     # Log delete event for this case (node detached from case)
                     try:
@@ -713,12 +703,7 @@ def delete_shared_node(
     
     # Full deletion - delete the node and all its relationships
     # This is only for non-catalog nodes OR orphaned catalog nodes
-    delete_query = f"""
-        MATCH (n:{label} {{{id_prop}: $node_id}})
-        DETACH DELETE n
-        RETURN count(*) as deleted
-    """
-    neo4j_client.execute_query(delete_query, {"node_id": node_id})
+    uploader.delete_node(label, node_id)
     
     # Log delete events for all affected cases (if any)
     if len(all_cases) > 0:

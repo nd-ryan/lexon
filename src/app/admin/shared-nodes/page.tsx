@@ -3,6 +3,9 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
+import type { Schema } from '@/types/case-graph'
+import { ObjectFields } from '@/components/cases/editor/Field'
+import { validateRequiredFields } from '@/lib/cases/validation'
 
 interface SchemaNode {
   label: string
@@ -52,11 +55,13 @@ export default function SharedNodesPage() {
   const [showOrphanedOnly, setShowOrphanedOnly] = useState(false)
   const [sharedLabels, setSharedLabels] = useState<string[]>([])
   const [schemaByLabel, setSchemaByLabel] = useState<Record<string, SchemaNode>>({})
+  const [schema, setSchema] = useState<Schema | null>(null)
   const [searchQuery, setSearchQuery] = useState<string>('')
   const [modal, setModal] = useState<ModalState>({ type: 'none' })
   const [editForm, setEditForm] = useState<Record<string, any>>({})
   const [actionResult, setActionResult] = useState<{ success: boolean; message: string } | null>(null)
   const [deletedCases, setDeletedCases] = useState<Set<string>>(new Set())
+  const [validationMessages, setValidationMessages] = useState<string[] | null>(null)
   
   const adminEmail = process.env.NEXT_PUBLIC_ADMIN_EMAIL
   
@@ -75,6 +80,7 @@ export default function SharedNodesPage() {
         if (res.ok) {
           const data = await res.json()
           const schema: SchemaNode[] = data.schema || []
+          setSchema((data.schema || null) as any)
           const byLabel: Record<string, SchemaNode> = {}
           schema.forEach((n) => {
             if (n?.label) byLabel[n.label] = n
@@ -183,6 +189,7 @@ export default function SharedNodesPage() {
     setModal({ type: 'edit', node, detail: null, loading: true })
     setEditForm({ ...node.properties })
     setActionResult(null)
+    setValidationMessages(null)
     const detail = await fetchNodeDetail(node)
     setModal({ type: 'edit', node, detail, loading: false })
   }
@@ -202,6 +209,27 @@ export default function SharedNodesPage() {
     
     setModal({ ...modal, loading: true })
     setActionResult(null)
+    setValidationMessages(null)
+
+    // Schema-driven required-field validation (reuse case-editor validation)
+    if (schema) {
+      const fakeGraphState: any = {
+        nodes: [{
+          temp_id: modal.node.id,
+          label: modal.node.label,
+          status: 'active',
+          properties: editForm || {}
+        }],
+        edges: []
+      }
+      const pendingEditsRef: any = { current: {} }
+      const validation = validateRequiredFields(fakeGraphState, schema, pendingEditsRef)
+      if (!validation.isValid) {
+        setValidationMessages(validation.errors.map(e => e.message))
+        setModal({ ...modal, loading: false })
+        return
+      }
+    }
     
     try {
       const res = await fetch(`/api/admin/shared-nodes/${modal.node.label}/${modal.node.id}`, {
@@ -483,33 +511,78 @@ export default function SharedNodesPage() {
                     </div>
                   )}
                   
-                  {/* Edit Form */}
-                  <div className="space-y-4">
-                    {Object.entries(editForm)
-                      .filter(([key]) => !key.endsWith('_id') && !key.endsWith('_embedding') && !key.endsWith('_upload_code'))
-                      .map(([key, value]) => (
-                        <div key={key}>
-                          <label className="block text-sm font-medium text-gray-700 mb-1 capitalize">
-                            {key.replace(/_/g, ' ')}
-                          </label>
-                          {typeof value === 'string' && value.length > 100 ? (
-                            <textarea
-                              value={editForm[key] || ''}
-                              onChange={(e) => setEditForm({ ...editForm, [key]: e.target.value })}
-                              className="w-full border rounded px-3 py-2 text-sm"
-                              rows={3}
-                            />
-                          ) : (
-                            <input
-                              type="text"
-                              value={editForm[key] || ''}
-                              onChange={(e) => setEditForm({ ...editForm, [key]: e.target.value })}
-                              className="w-full border rounded px-3 py-2 text-sm"
-                            />
-                          )}
-                        </div>
-                      ))}
-                  </div>
+                  {/* Validation Messages */}
+                  {validationMessages && validationMessages.length > 0 && (
+                    <div className="mb-4 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                      <div className="font-semibold mb-1">Please fix the following:</div>
+                      <ul className="list-disc list-inside space-y-1">
+                        {validationMessages.map((m, idx) => (
+                          <li key={idx}>{m}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Edit Form (schema-driven, reuses case-editor field components) */}
+                  {(() => {
+                    // Build an ordered properties object using schema ui.order when available
+                    const schemaNode = schemaByLabel[modal.node.label]
+                    const propDefs = schemaNode?.properties || {}
+                    const orderedKeys = Object.entries(propDefs)
+                      .sort((a: any, b: any) => {
+                        const ao = a?.[1]?.ui?.order ?? 9999
+                        const bo = b?.[1]?.ui?.order ?? 9999
+                        return ao - bo
+                      })
+                      .map(([k]) => k)
+
+                    const orderedProps: Record<string, any> = {}
+                    if (orderedKeys.length > 0) {
+                      orderedKeys.forEach((k) => {
+                        if (k in editForm) orderedProps[k] = editForm[k]
+                      })
+                      // Also include any extra keys (if present) at the end
+                      Object.keys(editForm).forEach((k) => {
+                        if (!(k in orderedProps)) orderedProps[k] = editForm[k]
+                      })
+                    } else {
+                      Object.assign(orderedProps, editForm)
+                    }
+
+                    const fakeGraphState: any = {
+                      nodes: [{
+                        temp_id: modal.node.id,
+                        label: modal.node.label,
+                        status: 'active',
+                        properties: orderedProps
+                      }],
+                      edges: []
+                    }
+
+                    const setValueAtPath = (path: (string | number)[], value: any) => {
+                      // Expect: ['nodes', nodeId, 'properties', propKey]
+                      if (path[0] === 'nodes' && path[1] === modal.node.id && path[2] === 'properties' && typeof path[3] === 'string') {
+                        const key = path[3]
+                        setEditForm(prev => ({ ...prev, [key]: value }))
+                      }
+                    }
+
+                    const noop = () => {}
+                    const pendingEditsRef: any = { current: {} }
+
+                    return (
+                      <ObjectFields
+                        obj={orderedProps}
+                        path={['nodes', modal.node.id, 'properties']}
+                        isViewMode={false}
+                        graphState={fakeGraphState}
+                        schema={schema as any}
+                        setPendingEdit={noop as any}
+                        setValueAtPath={setValueAtPath as any}
+                        pendingEditsRef={pendingEditsRef}
+                      />
+                    )
+                  })()}
                   
                   {/* Result Message */}
                   {actionResult && (

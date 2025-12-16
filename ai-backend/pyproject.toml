@@ -223,6 +223,7 @@ psycopg2-binary = "^2.9.10"
 pytest = "^8.3.4"
 pytest-asyncio = "^0.24.0"
 pytest-cov = "^5.0.0"
+honcho = "^2.0.0"
 
 [build-system]
 requires = ["poetry-core"]

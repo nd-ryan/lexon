@@ -136,6 +136,11 @@ export function ReliefTypeSelector({
           value={optimisticValue}
           onChange={(e) => {
             const selectedId = e.target.value
+            if (!selectedId) {
+              // Disallow clearing the selection from this inline selector.
+              // (Required-by-schema and/or min_per_case are enforced elsewhere; this prevents accidental UI "unset".)
+              return
+            }
             // Update local state immediately for instant feedback
             setOptimisticValue(selectedId)
             

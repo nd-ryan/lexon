@@ -24,8 +24,8 @@ COPY poetry.lock pyproject.toml ./
 # Install project dependencies
 # --no-root: Don't install the project itself, only dependencies
 # --no-dev: Don't install development dependencies
-RUN poetry install --no-root
-
+# RUN poetry install --no-root
+RUN poetry install --no-root --only main
 
 # --- Final Stage ---
 FROM python:3.11-slim AS final

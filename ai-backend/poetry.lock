@@ -1779,6 +1779,25 @@ files = [
 tests = ["pytest"]
 
 [[package]]
+name = "honcho"
+version = "2.0.0"
+description = "Honcho: a Python clone of Foreman. For managing Procfile-based applications."
+optional = false
+python-versions = "*"
+groups = ["dev"]
+files = [
+    {file = "honcho-2.0.0-py3-none-any.whl", hash = "sha256:56dcd04fc72d362a4befb9303b1a1a812cba5da283526fbc6509be122918ddf3"},
+    {file = "honcho-2.0.0.tar.gz", hash = "sha256:af3815c03c634bf67d50f114253ea9fef72ecff26e4fd06b29234789ac5b8b2e"},
+]
+
+[package.dependencies]
+colorama = {version = "*", markers = "sys_platform == \"win32\""}
+
+[package.extras]
+docs = ["sphinx"]
+export = ["jinja2 (>=3.1.2,<4)"]
+
+[[package]]
 name = "hpack"
 version = "4.1.0"
 description = "Pure-Python HPACK header encoding"
@@ -6643,4 +6662,4 @@ cffi = ["cffi (>=1.11)"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11, <3.12"
-content-hash = "835bb1e778efc9dec4f802ee792c0750f03c6e77c48c43fc4fcdd531d6c5afc4"
+content-hash = "b77a174a43d4a7ecab48932f5c80d186339dbcadcc58109d00a5053f4fcccb97"

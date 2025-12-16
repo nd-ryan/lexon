@@ -31,7 +31,7 @@
       "type": { "type": "STRING", "ui": { "order": 3, "input": "select", "options": ["criminal", "civil", "arbitration", "administrative"], "label": "Type", "required": true } },
       "summary": { "type": "STRING", "ui": { "order": 4, "input": "textarea", "label": "Summary", "required": true } },
       "summary_embedding": { "type": "LIST", "ui": { "hidden": true } },
-      "status": { "type": "STRING", "ai_ignore": true, "ui": { "order": 5, "input": "select", "options": ["final", "reversed", "pending"], "label": "Status", "required": true } },
+      "status": { "type": "STRING", "ui": { "order": 5, "input": "select", "options": ["final", "reversed", "pending"], "label": "Status", "required": true } },
       "outcome": { "type": "STRING", "ui": { "order": 6, "input": "text", "label": "Outcome", "required": true, "notes": "e.g. conviction affirmed, injunction granted, regulation upheld, etc" } },
       "court_level": { "type": "STRING", "ui": { "order": 7, "input": "select", "options": ["district", "circuit", "supreme court", "other"], "label": "Court level", "required": true } }
     },

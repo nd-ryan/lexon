@@ -5,6 +5,7 @@
 import type { Schema, SchemaItem, SchemaPropertyDef } from '@/types/case-graph'
 import type { GraphState } from '@/hooks/cases/useGraphState'
 import { pickNodeName } from './formatting'
+import { getMinPerCaseViolationsConnected } from './graphHelpers'
 
 export interface ValidationError {
   nodeId?: string
@@ -221,6 +222,23 @@ export function validateRequiredFields(
           })
         }
       }
+    })
+  })
+
+  // Validate min_per_case constraints (connected-only)
+  //
+  // This is a backstop: the UI should prevent users from creating violations,
+  // but Save/Submit must still reject invalid graphs if UI is bypassed.
+  const minViolations = getMinPerCaseViolationsConnected(
+    { nodes: workingNodes, edges: graphState.edges },
+    schema
+  )
+  minViolations.forEach((v) => {
+    errors.push({
+      nodeLabel: v.label,
+      propertyName: 'min_per_case',
+      propertyLabel: 'Minimum per case',
+      message: `Case requires at least ${v.min} ${v.label} node(s) (found ${v.countAfter}).`
     })
   })
   

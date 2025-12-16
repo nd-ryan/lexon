@@ -1,6 +1,8 @@
 # Doctrine Search Comparison Test
 
-This test compares the results between a manual Cypher query and the AI Agent search flow to ensure the search functionality is working correctly.
+This doc describes how to validate Doctrine retrieval via:
+- a **direct Cypher query** (via our Neo4j client wrapper), and
+- the **AI SearchFlow** (LLM + Neo4j MCP tools).
 
 ## Test Overview
 
@@ -14,8 +16,9 @@ This test compares the results between a manual Cypher query and the AI Agent se
 
 ## Files
 
-- `test_doctrine_search.py` - Main test script
-- `run_doctrine_test.sh` - Shell script to run the test easily
+- `ai-backend/tests/test_doctrine_query_integration.py` - Direct Cypher Doctrine query (shape check)
+- `ai-backend/tests/test_search_flow_integration.py` - End-to-end SearchFlow (very heavyweight, opt-in)
+- `ai-backend/run_doctrine_test.sh` - Convenience runner for the above tests
 - `TEST_README.md` - This documentation file
 
 ## Prerequisites
@@ -37,28 +40,42 @@ NEO4J_USER=neo4j
 NEO4J_PASSWORD=your-password-here
 ```
 
-The test script will automatically load these variables using `python-dotenv`.
+`ai-backend/run_doctrine_test.sh` will load this `.env` file if present.
+
+### Python dependencies (current)
+The supported dependency workflow for `ai-backend` is **Poetry** (see `ai-backend/pyproject.toml` and `ai-backend/Dockerfile`).
+
+From `ai-backend/`:
+
+```bash
+poetry install
+```
+
+Note: this backend is Poetry-first (and deploys via Poetry in Docker).
 
 ## How to Run
 
 ### Option 1: Using the Shell Script (Recommended)
 ```bash
+cd ai-backend
 ./run_doctrine_test.sh
 ```
 
-### Option 2: Direct Python Execution
+### Option 2: Run the tests directly (pytest)
 ```bash
-# Activate virtual environment first
-source venv/bin/activate
+cd ai-backend
 
-# Run the test
-python test_doctrine_search.py
+# Direct Cypher doctrine query shape check (requires Neo4j env vars)
+poetry run pytest -m integration -v tests/test_doctrine_query_integration.py
+
+# Full SearchFlow end-to-end (requires Neo4j env vars + OPENAI_API_KEY; opt-in)
+RUN_SEARCH_FLOW_INTEGRATION=1 poetry run pytest -m integration -v tests/test_search_flow_integration.py
 ```
 
 ## What the Test Does
 
 ### 1. Manual Cypher Query Test
-Executes this direct Cypher query:
+Executes this direct Cypher query (via `tests/test_doctrine_query_integration.py`):
 ```cypher
 MATCH (d:Doctrine)
 RETURN d.name as doctrine_name, 
@@ -72,111 +89,30 @@ ORDER BY d.name
 ```
 
 ### 2. AI Agent Search Test
-Sends the natural language query `"Can you get all the doctrines from the database"` through the AI Agent search flow using:
-- CrewAI agents
-- Neo4j MCP tools (`read-neo4j-cypher` and `get-neo4j-schema`)
-- Structured output with Pydantic models
+Sends the natural language query `"Can you get all the doctrines from the database"` through `SearchFlow` (see `tests/test_search_flow_integration.py`) using:
+- an LLM (requires `OPENAI_API_KEY`)
+- Neo4j MCP tools (spawns the `mcp-neo4j-cypher` CLI; tools include `get-neo4j-schema` and `read-neo4j-cypher`)
+- a structured response model (`StructuredSearchResponse`)
 
 ### 3. Results Comparison
-Compares:
-- **Result counts**: Manual vs AI search
-- **Data quality**: Whether AI search captures actual doctrine data
-- **Search quality**: Methodology, MCP tool usage, formatted results
-- **Raw data availability**: Whether raw JSON results are provided
+At the moment, the automated checks are:
+- **Manual query**: query runs and returned rows have a consistent shape (it does not assert doctrines exist).
+- **SearchFlow**: returns a `StructuredSearchResponse` with non-empty explanation, plus `cypher_queries` and `raw_results` lists.
 
 ## Expected Output
 
-The test will show:
+These are pytest-based checks; successful runs look like standard pytest output. For example:
 
-```
-🧪 DOCTRINE SEARCH COMPARISON TEST
-===============================================================================
- MANUAL CYPHER QUERY TEST
-===============================================================================
-Query: MATCH (d:Doctrine) RETURN d.name as doctrine_name, ...
-
-✅ Manual query executed successfully
-Results found: 25
-
-📋 DOCTRINE RESULTS (25 total):
-   1. Abstention Doctrine
-      Category: Judicial
-      Description: A doctrine whereby federal courts refrain from...
-   
-   2. Clean Hands Doctrine
-      Category: Equity
-      Description: A legal principle that denies relief to...
-   
-   ... (more results)
-
-===============================================================================
- AI AGENT SEARCH TEST
-===============================================================================
-Query: 'Can you get all the doctrines from the database'
-
-🤖 Executing AI Agent search...
-✅ AI search completed
-Success: True
-Total results: 25
-Execution time: 4.32s
-MCP tools used: True
-
-📝 ANALYSIS SUMMARY:
-Query interpretation: The user wants to retrieve all legal doctrines...
-
-⚡ METHODOLOGY (4 steps):
-  1. Called get-neo4j-schema to understand database structure
-  2. Identified Doctrine nodes in the schema
-  3. Constructed Cypher query to retrieve all doctrines
-  4. Executed query and formatted results
-
-💡 KEY INSIGHTS (3):
-  • Found 25 legal doctrines in the database
-  • Doctrines span multiple categories including Judicial, Equity, Constitutional
-  • Most doctrines have comprehensive descriptions and source references
-
-📋 FORMATTED RESULTS (25):
-  • Abstention Doctrine - Federal courts refrain from exercising jurisdiction
-  • Clean Hands Doctrine - Denies relief to parties with unclean hands
-  • Commerce Clause Doctrine - Regulates interstate commerce
-  ... (more results)
-
-🔧 RAW QUERY RESULTS (25 items):
-  1. {
-      "doctrine_name": "Abstention Doctrine",
-      "description": "A doctrine whereby federal courts refrain from...",
-      "category": "Judicial",
-      "source": "Federal Courts",
-      "doctrine_id": 123
-     }
-  ... (more results)
-
-===============================================================================
- RESULTS COMPARISON
-===============================================================================
-📊 RESULT COUNTS:
-  Manual query: 25 doctrines
-  AI search: 25 items
-✅ Result counts match perfectly!
-
-🎯 AI SEARCH QUALITY:
-  ✅ MCP tools used
-  ✅ Methodology mentions doctrines
-  ✅ Formatted results contain doctrine info
-  ✅ Raw query results available (25 items)
-  ✅ Query interpretation mentions doctrines
-
-📈 Quality Score: 5/5 (100%)
-🏆 Excellent AI search performance!
-
-===============================================================================
- TEST COMPLETED SUCCESSFULLY! ✅
-===============================================================================
+```bash
+cd ai-backend
+poetry run pytest -m integration -v tests/test_doctrine_query_integration.py
 ```
 
 ## Quality Metrics
 
-The test evaluates AI search quality based on:
+If you want to add “comparison” scoring/metrics (counts match, formatted outputs, raw JSON dump), that logic is not currently implemented as a standalone script in this repo. The current automated checks focus on end-to-end viability and output shape.
+
+If you do implement metrics, the suggested dimensions are:
 
 1. **MCP Tools Usage** - Whether Neo4j MCP tools were used
 2. **Methodology Relevance** - Whether the methodology mentions doctrines
@@ -219,12 +155,8 @@ The test evaluates AI search quality based on:
    ```
    ❌ Dependencies missing
    ```
-   - Ensure virtual environment is activated
-   - Run `pip install -r requirements.txt`
+   - Ensure Poetry dependencies are installed: `poetry install`
 
 ## Test Results Storage
 
-The test can optionally save detailed results to JSON files with timestamps:
-- `doctrine_search_test_YYYYMMDD_HHMMSS.json`
-
-These files contain complete test data for further analysis and debugging. 
+The current pytest checks do not write result JSON files by default.

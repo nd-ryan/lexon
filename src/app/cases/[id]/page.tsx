@@ -17,7 +17,7 @@ import { useRelationshipProperties } from '@/hooks/cases/useRelationshipProperti
 
 // Utils
 import { formatLabel, pickNodeName } from '@/lib/cases/formatting'
-import { buildNodeOptions, buildGlobalNodeNumbering, detectReusedNodes } from '@/lib/cases/graphHelpers'
+import { buildNodeOptions, buildGlobalNodeNumbering, detectReusedNodes, getMinPerCaseViolationsAfterDeleteNode, getMinPerCaseViolationsAfterUnlinkEdge, getMinPerCaseViolationsConnected } from '@/lib/cases/graphHelpers'
 import { isExistingNode } from '@/lib/cases/nodeHelpers'
 import { validateRequiredFields } from '@/lib/cases/validation'
 import { useNodeLookups } from './_hooks/useNodeLookups'
@@ -82,9 +82,21 @@ export default function CaseEditorPage() {
   const validateCase = useCallback(() => {
     return validateRequiredFields(graphState, schema, pendingEditsRef)
   }, [graphState, schema, pendingEditsRef])
+
+  const formatMinPerCaseReason = useCallback((violations: Array<{ label: string; min: number; countAfter: number }>) => {
+    if (!violations || violations.length === 0) return null
+    const v = violations[0]
+    return `Case requires at least ${v.min} ${v.label} node(s) (would have ${v.countAfter}).`
+  }, [])
+
+  const wouldViolateMinPerCase = useCallback((nextGraphState: any): string | null => {
+    if (!schema) return null
+    const violations = getMinPerCaseViolationsConnected(nextGraphState, schema)
+    return formatMinPerCaseReason(violations)
+  }, [schema, formatMinPerCaseReason])
   
   // Save functionality
-  const { saving, submittingKg, error, onSave: saveCase, submitToKg } = useCaseSave(
+  const { saving, submittingKg, error, setError, onSave: saveCase, submitToKg } = useCaseSave(
     id,
     graphState,
     pendingEditsRef,
@@ -545,6 +557,17 @@ export default function CaseEditorPage() {
   const handleUnlink = (nodeId: string, parentId: string) => {
     const parentEdge = findParentEdge(parentId, nodeId)
     if (!parentEdge) return
+
+    // min_per_case guard (connected-only)
+    if (schema) {
+      const violations = getMinPerCaseViolationsAfterUnlinkEdge(graphState, schema, parentEdge as any)
+      if (violations.length > 0) {
+        const reason = formatMinPerCaseReason(violations)
+        if (reason) setError(reason)
+        return
+      }
+    }
+
     unlinkNode(nodeId, parentId, parentEdge.label)
     setHasUnsavedChanges(true)
     
@@ -589,7 +612,10 @@ export default function CaseEditorPage() {
   }
 
   const handleReliefTypeSelect = useCallback((reliefId: string, reliefTypeNode: any) => {
-    updateGraph((prev: any) => {
+    // Defensive: avoid any intermediate invalid state by checking the post-update graph for min_per_case violations.
+    // (In practice this should be safe, but we keep parity with other selector guards.)
+    const previewNext = (() => {
+      const prev = graphState
       const nodes = [...prev.nodes]
       const edges = [...prev.edges]
       
@@ -616,11 +642,20 @@ export default function CaseEditorPage() {
       })
       
       return { nodes, edges: filteredEdges }
-    })
-  }, [updateGraph])
+    })()
+
+    const reason = wouldViolateMinPerCase(previewNext)
+    if (reason) {
+      setError(reason)
+      return
+    }
+
+    updateGraph(() => previewNext)
+  }, [updateGraph, graphState, wouldViolateMinPerCase, setError])
   
   const handleForumSelect = useCallback((proceedingId: string, forumNode: any, jurisdictionNode: any | null) => {
-    updateGraph((prev: any) => {
+    const previewNext = (() => {
+      const prev = graphState
       const nodes = [...prev.nodes]
       const edges = [...prev.edges]
       
@@ -674,12 +709,29 @@ export default function CaseEditorPage() {
       }
       
       return { nodes, edges: filteredEdges }
-    })
-  }, [updateGraph])
+    })()
+
+    const reason = wouldViolateMinPerCase(previewNext)
+    if (reason) {
+      setError(reason)
+      return
+    }
+
+    updateGraph(() => previewNext)
+  }, [updateGraph, graphState, wouldViolateMinPerCase, setError])
 
   const handleDomainChange = (domainName: string) => {
     const caseNode = graphState.nodes.find((n: any) => n.label === 'Case' && n.status === 'active')
     if (!caseNode) return
+
+    // Disallow clearing domain entirely when min_per_case would be violated (even if UI is bypassed).
+    if (schema && !domainName) {
+      const domainMin = schema.find((s: any) => s?.label === 'Domain')?.min_per_case
+      if (typeof domainMin === 'number' && domainMin > 0) {
+        setError(`Case requires at least ${domainMin} Domain node(s).`)
+        return
+      }
+    }
     
     let domainProps: Record<string, any> = { name: domainName }
     if (catalogNodes && Array.isArray(catalogNodes)) {
@@ -691,7 +743,8 @@ export default function CaseEditorPage() {
       }
     }
     
-    setGraphState((prev: any) => {
+    const next = (() => {
+      const prev: any = graphState
       const filteredNodes = prev.nodes.filter((n: any) => n.label !== 'Domain')
       const filteredEdges = prev.edges.filter((e: any) => 
         !(e.label === 'CONTAINS' && e.to === caseNode.temp_id)
@@ -713,7 +766,15 @@ export default function CaseEditorPage() {
           status: 'active' as const
         }]
       }
-    })
+    })()
+
+    const reason = wouldViolateMinPerCase(next)
+    if (reason) {
+      setError(reason)
+      return
+    }
+
+    setGraphState(() => next)
     
     setHasUnsavedChanges(true)
   }
@@ -1059,11 +1120,28 @@ export default function CaseEditorPage() {
       </div>
 
       {/* Delete Node Confirmation */}
+      {(() => {
+        const nodeId = uiState.deletingNode.nodeId
+        const disabledReason = (nodeId && schema)
+          ? formatMinPerCaseReason(getMinPerCaseViolationsAfterDeleteNode(graphState, schema, nodeId))
+          : null
+        return (
       <DeleteNodeConfirmation
-        nodeId={uiState.deletingNode.nodeId}
+        nodeId={nodeId}
         graphState={graphState}
+        disabledReason={disabledReason}
         onCancel={uiActions.cancelDeleteNode}
         onConfirm={(nodeId) => {
+          // Backstop: prevent deletion even if UI is bypassed
+          if (schema) {
+            const violations = getMinPerCaseViolationsAfterDeleteNode(graphState, schema, nodeId)
+            if (violations.length > 0) {
+              const reason = formatMinPerCaseReason(violations)
+              if (reason) setError(reason)
+              return
+            }
+          }
+
           deleteNode(nodeId)
           setHasUnsavedChanges(true)
           
@@ -1102,6 +1180,8 @@ export default function CaseEditorPage() {
           uiActions.cancelDeleteNode()
         }}
       />
+        )
+      })()}
 
       {/* Edit relationship modal */}
       <EditRelationshipModal
@@ -1117,10 +1197,33 @@ export default function CaseEditorPage() {
       />
 
       {/* Delete relationship confirmation */}
+      {(() => {
+        const idx = uiState.confirmDelete.edgeIdx
+        const activeEdges = graphState.edges.filter((e: any) => e.status === 'active')
+        const edgeToDelete = (idx !== null && idx !== undefined) ? activeEdges[idx] : null
+        const disabledReason = (edgeToDelete && schema)
+          ? formatMinPerCaseReason(getMinPerCaseViolationsAfterUnlinkEdge(graphState, schema, { from: edgeToDelete.from, to: edgeToDelete.to, label: edgeToDelete.label }))
+          : null
+        return (
       <DeleteRelationshipConfirmation
-        edgeIndex={uiState.confirmDelete.edgeIdx}
+        edgeIndex={idx}
+        disabledReason={disabledReason}
         onCancel={uiActions.cancelConfirmDelete}
         onConfirm={(idx) => {
+          // Backstop: prevent relationship deletion if it would violate min_per_case
+          if (schema) {
+            const activeEdges = graphState.edges.filter((e: any) => e.status === 'active')
+            const edgeToDelete = activeEdges[idx!]
+            if (edgeToDelete) {
+              const violations = getMinPerCaseViolationsAfterUnlinkEdge(graphState, schema, { from: edgeToDelete.from, to: edgeToDelete.to, label: edgeToDelete.label })
+              if (violations.length > 0) {
+                const reason = formatMinPerCaseReason(violations)
+                if (reason) setError(reason)
+                return
+              }
+            }
+          }
+
           setGraphState((prev: any) => {
             const activeEdges = prev.edges.filter((e: any) => e.status === 'active')
             const edgeToDelete = activeEdges[idx!]
@@ -1141,6 +1244,8 @@ export default function CaseEditorPage() {
           uiActions.cancelConfirmDelete()
         }}
       />
+        )
+      })()}
       
       {/* Add node modal */}
       <AddNodeModal

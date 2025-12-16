@@ -4,10 +4,12 @@
 
 import { pickNodeName } from '@/lib/cases/formatting'
 import { findDescendants } from '@/lib/cases/graphHelpers'
+import { HoverTooltip } from '@/components/ui/HoverTooltip'
 
 interface DeleteNodeConfirmationProps {
   nodeId: string | null
   graphState: any
+  disabledReason?: string | null
   onCancel: () => void
   onConfirm: (nodeId: string) => void
 }
@@ -15,6 +17,7 @@ interface DeleteNodeConfirmationProps {
 export function DeleteNodeConfirmation({
   nodeId,
   graphState,
+  disabledReason,
   onCancel,
   onConfirm
 }: DeleteNodeConfirmationProps) {
@@ -70,6 +73,11 @@ export function DeleteNodeConfirmation({
         <div className="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded px-2 py-1.5 mb-4">
           <strong>Note:</strong> The deletion will be persisted when you save the case.
         </div>
+        {disabledReason ? (
+          <div className="text-xs bg-red-50 border border-red-200 rounded px-2 py-1.5 mb-4 text-red-800">
+            <strong>Cannot delete:</strong> {disabledReason}
+          </div>
+        ) : null}
         <div className="flex items-center justify-end gap-2">
           <button
             type="button"
@@ -78,13 +86,20 @@ export function DeleteNodeConfirmation({
           >
             Cancel
           </button>
-          <button
-            type="button"
-            className="rounded bg-red-600 text-white px-3 py-1.5 text-sm hover:bg-red-700 transition-colors cursor-pointer"
-            onClick={() => onConfirm(nodeId)}
-          >
-            Delete Node
-          </button>
+          <HoverTooltip text={disabledReason} side="top" className="inline-flex">
+            <button
+              type="button"
+              disabled={Boolean(disabledReason)}
+              className={`rounded px-3 py-1.5 text-sm transition-colors ${
+                disabledReason
+                  ? 'bg-gray-300 text-gray-700 cursor-not-allowed'
+                  : 'bg-red-600 text-white hover:bg-red-700 cursor-pointer'
+              }`}
+              onClick={() => onConfirm(nodeId)}
+            >
+              Delete Node
+            </button>
+          </HoverTooltip>
         </div>
       </div>
     </div>

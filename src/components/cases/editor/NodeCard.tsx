@@ -8,6 +8,7 @@ import { ObjectFields } from './Field'
 import { ExistingNodeBadge } from './ExistingNodeBadge'
 import { ExistingNodeWarning } from './ExistingNodeWarning'
 import type { Schema } from '@/types/case-graph'
+import { getMinPerCaseViolationsAfterDeleteNode, getMinPerCaseViolationsAfterUnlinkEdge } from '@/lib/cases/graphHelpers'
 
 interface NodeCardProps {
   node: any
@@ -77,6 +78,40 @@ export function NodeCard({
   
   // Create unique ID using context to support reused nodes
   const nodeId = contextId ? `node-${contextId}-${node.temp_id}` : `node-${node.temp_id}`
+
+  const formatViolationReason = (violations: Array<{ label: string; min: number; countAfter: number }>): string => {
+    if (!violations || violations.length === 0) return ''
+    const v = violations[0]
+    return `Case requires at least ${v.min} ${v.label} node(s) (would have ${v.countAfter}).`
+  }
+
+  const getDeleteDisabledReason = (): string | null => {
+    if (isViewMode) return null
+    if (!schema) return null
+    const violations = getMinPerCaseViolationsAfterDeleteNode(graphState, schema, node.temp_id)
+    return violations.length > 0 ? formatViolationReason(violations) : null
+  }
+
+  const getUnlinkDisabledReason = (): string | null => {
+    if (isViewMode) return null
+    if (!schema) return null
+    if (!parentId) return null
+
+    // Find the specific parent edge so we can simulate removing it.
+    const parentEdge = (graphState?.edges || []).find((e: any) =>
+      (e?.status === 'active' || e?.status === undefined) &&
+      e?.from === parentId &&
+      e?.to === node.temp_id
+    )
+    if (!parentEdge?.from || !parentEdge?.to || !parentEdge?.label) return null
+
+    const violations = getMinPerCaseViolationsAfterUnlinkEdge(graphState, schema, {
+      from: String(parentEdge.from),
+      to: String(parentEdge.to),
+      label: String(parentEdge.label)
+    })
+    return violations.length > 0 ? formatViolationReason(violations) : null
+  }
   
   return (
     <div id={nodeId} className={`${bgClass} rounded-lg border border-gray-300 p-4 shadow-sm ${indentClass}`}>
@@ -97,6 +132,8 @@ export function NodeCard({
               parentLabel={parentLabel}
               onDelete={onDelete}
               onUnlink={onUnlink}
+              deleteDisabledReason={getDeleteDisabledReason()}
+              unlinkDisabledReason={getUnlinkDisabledReason()}
             />
           )}
         </div>
