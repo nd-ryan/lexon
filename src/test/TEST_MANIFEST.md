@@ -4,10 +4,10 @@
 
 This document provides a centralized reference for all frontend tests, organized by component and feature area.
 
-**Total Tests:** 41  
+**Total Tests:** 63  
 **Test Framework:** Vitest + React Testing Library + MSW  
-**Coverage Areas:** Admin UI, API routes, hooks, validation  
-**Pass Rate:** 80% (33/41 passing) ⚠️
+**Coverage Areas:** Admin UI, API routes, hooks, validation, cascade delete  
+**Pass Rate:** 87% (55/63 passing) ⚠️
 
 ---
 
@@ -134,14 +134,62 @@ Tests case data validation helper functions.
 - **test_flags_required_node_and_relationship_properties** - Flags required node + relationship properties
 - **test_applies_pending_edits_before_validation** - Applies pending edits before validation
 - **test_enforces_min_per_case_on_connected_nodes** - Enforces `min_per_case` (connected-only rule)
-- **test_disconnected_nodes_do_not_satisfy_min_per_case** - Disconnected nodes don’t satisfy `min_per_case`
+- **test_disconnected_nodes_do_not_satisfy_min_per_case** - Disconnected nodes don't satisfy `min_per_case`
 - **test_passes_min_per_case_when_nodes_are_connected** - Passes when requirements are satisfied
 
 **Status:** ✅ 5/5 passing
 
 ---
 
-## 6. `src/app/cases/[id]/_hooks/useUIState.test.tsx` - UI State Hook (3 tests)
+## 6. `src/lib/cases/cascadeDelete.test.ts` - Cascade Delete Logic (22 tests)
+
+Tests the cascade delete system that determines which nodes cascade-delete vs detach when a node is deleted in the editor.
+
+### buildUIHierarchy Tests (3 tests)
+
+- **test_extracts_topLevel_relationships** - Parses Case → Proceeding, Proceeding → Party from views config
+- **test_extracts_nested_structure_relationships_with_correct_direction** - Parses Issue → Ruling → Argument hierarchy with incoming/outgoing directions
+- **test_returns_empty_array_for_null_undefined_config** - Handles null/undefined gracefully
+
+### buildCardinalityMap Tests (2 tests)
+
+- **test_maps_relationships_to_cardinality_info** - Maps schema relationships to cardinality entries
+- **test_returns_empty_map_for_null_schema** - Handles null schema gracefully
+
+### computeCascadePlan Tests (7 tests)
+
+- **test_cascades_delete_through_one_to_one_relationships** - Issue → Ruling cascades (one-to-one)
+- **test_cascades_delete_through_many_to_many_when_no_other_parents** - Argument cascades if it has only one Ruling
+- **test_only_detaches_when_many_to_many_child_has_other_parents** - Argument detaches if it has other Rulings
+- **test_detaches_shared_child_when_it_has_other_parents** - ReliefType detaches when used by other Reliefs (many-to-one)
+- **test_recursively_cascades_through_multiple_levels** - Full Issue → Ruling → Argument → Doctrine cascade
+- **test_sets_caseUnique_correctly_from_schema** - Marks nodes with correct case_unique flag
+- **test_collects_all_edges_to_remove** - Gathers all affected edges
+
+### checkCascadeMinPerCase Tests (3 tests)
+
+- **test_returns_valid_when_no_min_per_case_violations** - Passes when requirements met
+- **test_returns_invalid_when_min_per_case_would_be_violated** - Fails when cascade would violate min count
+- **test_ignores_already_deleted_nodes_in_count** - Only counts active nodes
+
+### applyCascadePlan Tests (6 tests)
+
+- **test_marks_primary_node_as_deleted** - Primary node status = deleted
+- **test_marks_cascaded_nodes_as_deleted** - Cascade children status = deleted
+- **test_marks_detach_only_nodes_as_deleted** - Detached nodes status = deleted (removed from case)
+- **test_marks_specified_edges_as_deleted** - Edge status = deleted
+- **test_marks_edges_connected_to_deleted_nodes_as_deleted** - All edges touching deleted nodes
+- **test_preserves_unaffected_nodes_and_edges** - Non-affected items remain active
+
+### Integration Tests (1 test)
+
+- **test_handles_deleting_an_Issue_with_full_nested_hierarchy** - Full end-to-end cascade with mixed cascade/detach decisions
+
+**Status:** ✅ 22/22 passing
+
+---
+
+## 7. `src/app/cases/[id]/_hooks/useUIState.test.tsx` - UI State Hook (3 tests)
 
 Tests custom hook for managing UI state in case editor.
 
@@ -153,7 +201,7 @@ Tests custom hook for managing UI state in case editor.
 
 ---
 
-## 7. `src/components/nav/AdminLink.client.test.tsx` - Admin Navigation (2 tests)
+## 8. `src/components/nav/AdminLink.client.test.tsx` - Admin Navigation (2 tests)
 
 Tests admin-only navigation component.
 
@@ -166,8 +214,9 @@ Tests admin-only navigation component.
 
 ## Test Summary by Status
 
-### ✅ Fully Passing (29 tests)
+### ✅ Fully Passing (51 tests)
 - SharedNodesPage: 22 tests
+- Cascade Delete: 22 tests
 - Validation: 5 tests
 - useUIState hook: 3 tests
 - AdminLink: 2 tests
@@ -295,4 +344,4 @@ beforeEach(() => {
 - **New API Endpoints:** Add new MSW handler to `handlers.ts`
 - **Component Changes:** Update selectors to match new UI structure
 
-Last Updated: December 11, 2024
+Last Updated: December 16, 2025

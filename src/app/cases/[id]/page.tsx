@@ -17,9 +17,10 @@ import { useRelationshipProperties } from '@/hooks/cases/useRelationshipProperti
 
 // Utils
 import { formatLabel, pickNodeName } from '@/lib/cases/formatting'
-import { buildNodeOptions, buildGlobalNodeNumbering, detectReusedNodes, getMinPerCaseViolationsAfterDeleteNode, getMinPerCaseViolationsAfterUnlinkEdge, getMinPerCaseViolationsConnected } from '@/lib/cases/graphHelpers'
+import { buildNodeOptions, buildGlobalNodeNumbering, detectReusedNodes, getMinPerCaseViolationsConnected, getMinPerCaseWorseningAfterUnlinkEdge } from '@/lib/cases/graphHelpers'
 import { isExistingNode } from '@/lib/cases/nodeHelpers'
 import { validateRequiredFields } from '@/lib/cases/validation'
+import { buildUIHierarchy, buildCardinalityMap, computeCascadePlan, checkCascadeMinPerCase } from '@/lib/cases/cascadeDelete'
 import { useNodeLookups } from './_hooks/useNodeLookups'
 import { useUIState } from './_hooks/useUIState'
 import { useCatalogEnrichment } from './_hooks/useCatalogEnrichment'
@@ -58,7 +59,7 @@ export default function CaseEditorPage() {
     deletedNodeIds,
     orphanedNodeIds,
     orphanedNodes,
-    deleteNode,
+    deleteNodeWithCascade,
     restoreOrphanedNode,
     unlinkNode
   } = useGraphState([], [])
@@ -91,9 +92,13 @@ export default function CaseEditorPage() {
 
   const wouldViolateMinPerCase = useCallback((nextGraphState: any): string | null => {
     if (!schema) return null
-    const violations = getMinPerCaseViolationsConnected(nextGraphState, schema)
-    return formatMinPerCaseReason(violations)
-  }, [schema, formatMinPerCaseReason])
+    // Only block changes that make min_per_case WORSE (deficit increases).
+    const violationsNow = getMinPerCaseViolationsConnected(graphState, schema)
+    const violationsNext = getMinPerCaseViolationsConnected(nextGraphState, schema)
+    const deficitsNow = new Map(violationsNow.map(v => [v.label, v.min - v.countAfter]))
+    const worsening = violationsNext.filter(v => (v.min - v.countAfter) > (deficitsNow.get(v.label) || 0))
+    return formatMinPerCaseReason(worsening)
+  }, [schema, formatMinPerCaseReason, graphState])
   
   // Save functionality
   const { saving, submittingKg, error, setError, onSave: saveCase, submitToKg } = useCaseSave(
@@ -135,6 +140,10 @@ export default function CaseEditorPage() {
   )
   
   const reusedNodes = useMemo(() => detectReusedNodes(graphState), [graphState])
+  
+  // Cascade delete configuration (derived from viewConfig and schema)
+  const uiHierarchy = useMemo(() => buildUIHierarchy(viewConfig), [viewConfig])
+  const cardinalityMap = useMemo(() => buildCardinalityMap(schema), [schema])
   
   // Node and edge lookups
   const {
@@ -560,7 +569,7 @@ export default function CaseEditorPage() {
 
     // min_per_case guard (connected-only)
     if (schema) {
-      const violations = getMinPerCaseViolationsAfterUnlinkEdge(graphState, schema, parentEdge as any)
+      const violations = getMinPerCaseWorseningAfterUnlinkEdge(graphState, schema, parentEdge as any)
       if (violations.length > 0) {
         const reason = formatMinPerCaseReason(violations)
         if (reason) setError(reason)
@@ -1122,64 +1131,79 @@ export default function CaseEditorPage() {
       {/* Delete Node Confirmation */}
       {(() => {
         const nodeId = uiState.deletingNode.nodeId
-        const disabledReason = (nodeId && schema)
-          ? formatMinPerCaseReason(getMinPerCaseViolationsAfterDeleteNode(graphState, schema, nodeId))
+        
+        // Compute cascade plan and validation
+        const cascadePlan = nodeId
+          ? computeCascadePlan(nodeId, graphState, uiHierarchy, cardinalityMap, schema)
           : null
+        const validation = cascadePlan
+          ? checkCascadeMinPerCase(graphState, cascadePlan, schema)
+          : { valid: true }
+        
         return (
-      <DeleteNodeConfirmation
-        nodeId={nodeId}
-        graphState={graphState}
-        disabledReason={disabledReason}
-        onCancel={uiActions.cancelDeleteNode}
-        onConfirm={(nodeId) => {
-          // Backstop: prevent deletion even if UI is bypassed
-          if (schema) {
-            const violations = getMinPerCaseViolationsAfterDeleteNode(graphState, schema, nodeId)
-            if (violations.length > 0) {
-              const reason = formatMinPerCaseReason(violations)
-              if (reason) setError(reason)
-              return
-            }
-          }
-
-          deleteNode(nodeId)
-          setHasUnsavedChanges(true)
-          
-          // Remove the node from displayData so it disappears immediately
-          if (displayData && nodeId) {
-            setDisplayData((prevDisplayData: any) => {
-              if (!prevDisplayData) return prevDisplayData
+          <DeleteNodeConfirmation
+            cascadePlan={cascadePlan}
+            validation={validation}
+            onCancel={uiActions.cancelDeleteNode}
+            onConfirm={() => {
+              if (!cascadePlan) return
               
-              // Helper to recursively remove node from display data
-              const removeNodeFromStructure = (obj: any): any => {
-                if (!obj || typeof obj !== 'object') return obj
-                
-                if (Array.isArray(obj)) {
-                  // Filter out the deleted node from arrays
-                  return obj
-                    .filter((item: any) => item?.temp_id !== nodeId)
-                    .map(removeNodeFromStructure)
-                } else {
-                  const updated: any = {}
-                  for (const [key, value] of Object.entries(obj)) {
-                    // Skip if this node is the one being deleted
-                    if (key === 'temp_id' && value === nodeId) {
-                      return null // Mark for removal
+              // Backstop: prevent deletion if validation fails
+              if (!validation.valid) {
+                if (validation.reason) setError(validation.reason)
+                return
+              }
+
+              // Apply the cascade plan to graph state
+              deleteNodeWithCascade(cascadePlan)
+              setHasUnsavedChanges(true)
+              
+              // Collect all node IDs being deleted (primary + cascaded)
+              const deletedIds = new Set([
+                cascadePlan.primaryNode.nodeId,
+                ...cascadePlan.toDelete.map(n => n.nodeId),
+                ...cascadePlan.toDetachOnly.map(n => n.nodeId)
+              ])
+              
+              // Remove deleted nodes from displayData so they disappear immediately
+              if (displayData && deletedIds.size > 0) {
+                setDisplayData((prevDisplayData: any) => {
+                  if (!prevDisplayData) return prevDisplayData
+                  
+                  // Helper to recursively remove deleted nodes from display data
+                  const removeDeletedNodes = (obj: any): any => {
+                    if (!obj || typeof obj !== 'object') return obj
+                    
+                    if (Array.isArray(obj)) {
+                      // Filter out deleted nodes from arrays
+                      return obj
+                        .filter((item: any) => !deletedIds.has(item?.temp_id))
+                        .map(removeDeletedNodes)
+                    } else {
+                      // Check if this object itself is a deleted node
+                      if (obj.temp_id && deletedIds.has(obj.temp_id)) {
+                        return null // Mark for removal
+                      }
+                      const updated: any = {}
+                      for (const [key, value] of Object.entries(obj)) {
+                        const processed = removeDeletedNodes(value)
+                        // Skip null values (removed nodes)
+                        if (processed !== null) {
+                          updated[key] = processed
+                        }
+                      }
+                      return updated
                     }
-                    updated[key] = removeNodeFromStructure(value)
                   }
-                  return updated
-                }
+                  
+                  const result = removeDeletedNodes(prevDisplayData)
+                  return result === null ? prevDisplayData : result
+                })
               }
               
-              const result = removeNodeFromStructure(prevDisplayData)
-              return result === null ? prevDisplayData : result
-            })
-          }
-          
-          uiActions.cancelDeleteNode()
-        }}
-      />
+              uiActions.cancelDeleteNode()
+            }}
+          />
         )
       })()}
 
@@ -1202,7 +1226,7 @@ export default function CaseEditorPage() {
         const activeEdges = graphState.edges.filter((e: any) => e.status === 'active')
         const edgeToDelete = (idx !== null && idx !== undefined) ? activeEdges[idx] : null
         const disabledReason = (edgeToDelete && schema)
-          ? formatMinPerCaseReason(getMinPerCaseViolationsAfterUnlinkEdge(graphState, schema, { from: edgeToDelete.from, to: edgeToDelete.to, label: edgeToDelete.label }))
+          ? formatMinPerCaseReason(getMinPerCaseWorseningAfterUnlinkEdge(graphState, schema, { from: edgeToDelete.from, to: edgeToDelete.to, label: edgeToDelete.label }))
           : null
         return (
       <DeleteRelationshipConfirmation
@@ -1215,7 +1239,7 @@ export default function CaseEditorPage() {
             const activeEdges = graphState.edges.filter((e: any) => e.status === 'active')
             const edgeToDelete = activeEdges[idx!]
             if (edgeToDelete) {
-              const violations = getMinPerCaseViolationsAfterUnlinkEdge(graphState, schema, { from: edgeToDelete.from, to: edgeToDelete.to, label: edgeToDelete.label })
+              const violations = getMinPerCaseWorseningAfterUnlinkEdge(graphState, schema, { from: edgeToDelete.from, to: edgeToDelete.to, label: edgeToDelete.label })
               if (violations.length > 0) {
                 const reason = formatMinPerCaseReason(violations)
                 if (reason) setError(reason)

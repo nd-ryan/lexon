@@ -95,15 +95,15 @@
     "relationships": {
       "RELATES_TO_DOCTRINE": {
         "target": "Doctrine",
-        "cardinality": "one-to-many"
+        "cardinality": "many-to-many"
       },
       "RELATES_TO_POLICY": {
         "target": "Policy",
-        "cardinality": "one-to-many"
+        "cardinality": "many-to-many"
       },
       "RELATES_TO_FACTPATTERN": {
         "target": "FactPattern",
-        "cardinality": "one-to-many"
+        "cardinality": "many-to-many"
       }
     }
   },
@@ -122,7 +122,7 @@
     "relationships": {
       "PART_OF": {
         "target": "Jurisdiction",
-        "cardinality": "one-to-one"
+        "cardinality": "many-to-one"
       }
     }
   },
@@ -185,7 +185,7 @@
       },
       "RELIES_ON_LAW":{
         "target": "Law",
-        "cardinality": "one-to-many"
+        "cardinality": "many-to-many"
       },
       "MODIFIES": {
         "target": "Ruling",
@@ -239,22 +239,22 @@
     "relationships": {
       "EVALUATED_IN": {
         "target": "Ruling",
-        "cardinality": "many-to-one",
+        "cardinality": "many-to-many",
         "properties": {
           "status": { "type": "STRING", "ui": { "order": 1, "input": "select", "options": ["Accepted", "Rejected"], "label": "Status", "required": true } }
         }
       },
       "RELATES_TO_DOCTRINE": {
         "target": "Doctrine",
-        "cardinality": "one-to-many"
+        "cardinality": "many-to-many"
       },
       "RELATES_TO_POLICY": {
         "target": "Policy",
-        "cardinality": "one-to-many"
+        "cardinality": "many-to-many"
       },
       "RELATES_TO_FACTPATTERN": {
         "target": "FactPattern",
-        "cardinality": "one-to-many"
+        "cardinality": "many-to-many"
       }
     }
   },
@@ -272,7 +272,7 @@
     "relationships": {
       "IS_TYPE": {
         "target": "ReliefType",
-        "cardinality": "one-to-one"
+        "cardinality": "many-to-one"
       }
     }
   },

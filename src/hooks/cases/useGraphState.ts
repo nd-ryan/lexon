@@ -4,7 +4,9 @@
 
 import { useCallback, useMemo, useState } from 'react'
 import type { GraphEdge, GraphNode } from '@/types/case-graph'
-import { findDescendants } from '@/lib/cases/graphHelpers'
+import { getOrphanedNodesAfterDelete } from '@/lib/cases/graphHelpers'
+import type { CascadePlan } from '@/lib/cases/cascadeDelete'
+import { applyCascadePlan } from '@/lib/cases/cascadeDelete'
 
 type NodeStatus = 'active' | 'deleted' | 'orphaned'
 
@@ -100,27 +102,8 @@ export function useGraphState(initialNodes: GraphNode[], initialEdges: GraphEdge
   // Delete a node and orphan its descendants (only if they have no other active parents)
   const deleteNode = useCallback((nodeId: string) => {
     setGraphState(prev => {
-      // Find all descendants using complete edge list
-      const activeEdges = prev.edges.filter(e => e.status === 'active')
-      const descendants = findDescendants(nodeId, activeEdges)
-      
-      // Helper: Check if a descendant should be orphaned
-      // A descendant should only be orphaned if it has NO other active parents
-      const shouldOrphan = (descId: string): boolean => {
-        // Get all incoming edges to this descendant (excluding edges from the deleted node)
-        const incomingEdges = activeEdges.filter(
-          e => e.to === descId && e.from !== nodeId
-        )
-        
-        // Check if any of these incoming edges come from nodes that will remain active
-        // (i.e., not the deleted node and not other descendants being orphaned)
-        const hasActiveParent = incomingEdges.some(e => {
-          const parent = prev.nodes.find(n => n.temp_id === e.from)
-          return parent && parent.status === 'active' && !descendants.includes(e.from)
-        })
-        
-        return !hasActiveParent
-      }
+      const orphanedNodes = getOrphanedNodesAfterDelete(nodeId, prev)
+      const orphanedSet = new Set(orphanedNodes)
       
       return {
         nodes: prev.nodes.map(n => {
@@ -128,11 +111,8 @@ export function useGraphState(initialNodes: GraphNode[], initialEdges: GraphEdge
             // Mark parent as deleted
             return { ...n, status: 'deleted' as const }
           }
-          if (descendants.includes(n.temp_id)) {
-            // Only mark as orphaned if this node has no other active parents
-            return shouldOrphan(n.temp_id)
-              ? { ...n, status: 'orphaned' as const }
-              : n  // Keep as active if it has other parents elsewhere
+          if (orphanedSet.has(n.temp_id)) {
+            return { ...n, status: 'orphaned' as const }
           }
           return n
         }),
@@ -171,6 +151,12 @@ export function useGraphState(initialNodes: GraphNode[], initialEdges: GraphEdge
     }))
   }, [])
 
+  // Delete a node using a pre-computed cascade plan
+  // This handles UI-hierarchy-aware deletion with proper cascade/detach logic
+  const deleteNodeWithCascade = useCallback((cascadePlan: CascadePlan) => {
+    setGraphState(prev => applyCascadePlan(prev, cascadePlan))
+  }, [])
+
   return {
     graphState,
     setGraphState,
@@ -181,6 +167,7 @@ export function useGraphState(initialNodes: GraphNode[], initialEdges: GraphEdge
     orphanedNodeIds,
     orphanedNodes,
     deleteNode,
+    deleteNodeWithCascade,
     restoreOrphanedNode,
     unlinkNode
   }

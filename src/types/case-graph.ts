@@ -15,6 +15,8 @@ export interface GraphEdge {
 export interface CaseGraph {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  file_key?: string;
+  kg_diverged?: boolean;
 }
 
 export type UiInputType =
@@ -41,6 +43,14 @@ export interface SchemaPropertyDef {
   ui?: PropertyUi;
 }
 
+export type RelationshipCardinality = 'one-to-one' | 'one-to-many' | 'many-to-one' | 'many-to-many';
+
+export interface SchemaRelationship {
+  target: string;
+  cardinality: RelationshipCardinality;
+  properties?: Record<string, SchemaPropertyDef>;
+}
+
 export interface SchemaItem {
   label: string;
   case_unique?: boolean;
@@ -48,7 +58,7 @@ export interface SchemaItem {
   min_per_case?: number;
   properties?: Record<string, SchemaPropertyDef>;
   attributes?: Record<string, string>;
-  relationships?: Record<string, string | { target: string }>;
+  relationships?: Record<string, SchemaRelationship>;
 }
 
 export type Schema = SchemaItem[];

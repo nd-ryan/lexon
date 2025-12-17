@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
+import Image from "next/image";
 
 export const metadata: Metadata = {
   title: "Lexon",
-  description: "A community-governed legal knowledge graph for transparent reasoning and trusted AI.",
+  description: "Aligning human insight with AI power.",
 };
 
 export default function Home() {
@@ -32,7 +33,7 @@ export default function Home() {
         }
         section {
           border: 2px dashed #dcd7cf;
-          padding: 40px 32px;
+          padding: 48px 40px;
           margin-bottom: 48px;
           border-radius: 12px;
           text-align: center;
@@ -44,6 +45,21 @@ export default function Home() {
           margin: 0 0 24px 0;
           line-height: 1.2;
           letter-spacing: -0.02em;
+        }
+        .brand-row {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 20px;
+          flex-wrap: wrap;
+          margin-bottom: 32px;
+        }
+        .brand-name {
+          margin: 0;
+          font-size: 46px;
+          font-weight: 750;
+          line-height: 1.05;
+          letter-spacing: -0.03em;
         }
         h2 {
           font-size: 32px;
@@ -59,7 +75,7 @@ export default function Home() {
           line-height: 1.4;
         }
         p {
-          margin: 16px 0;
+          margin: 20px 0;
           font-size: 18px;
           line-height: 1.7;
           max-width: 800px;
@@ -70,14 +86,14 @@ export default function Home() {
           color: #8b887f;
           font-size: 20px;
           font-weight: 500;
-          margin: 24px 0;
+          margin: 0 auto 32px auto;
           line-height: 1.6;
         }
         .cta-row {
           display: flex;
           gap: 16px;
           flex-wrap: wrap;
-          margin: 32px 0;
+          margin: 0 0 32px 0;
           justify-content: center;
         }
         .btn {
@@ -99,6 +115,15 @@ export default function Home() {
           background: #d6e0f0;
           border-color: #a8c0e0;
           transform: translateY(-2px);
+        }
+        .logo {
+          display: block;
+          margin: 0;
+          width: auto;
+          height: auto;
+          max-width: 320px;
+          max-height: 96px;
+          object-fit: contain;
         }
         .columns {
           display: flex;
@@ -155,6 +180,18 @@ export default function Home() {
           main {
             padding: 40px 20px 60px;
           }
+          .brand-row {
+            gap: 0px;
+            margin-bottom: 24px;
+          }
+          .brand-name {
+            font-size: 36px;
+          }
+          .logo {
+            max-width: 140px;
+            max-height: 46px;
+            width: auto;
+          }
           h1 {
             font-size: 32px;
           }
@@ -178,56 +215,62 @@ export default function Home() {
       <main>
         {/* HERO */}
         <section>
-          <h1>Lexon: Building the Cognitive Core of Law</h1>
+          <div className="brand-row">
+            <Image
+              src="/logo.png"
+              alt="Lexon logo"
+              width={96}
+              height={96}
+              className="logo"
+              priority
+              unoptimized
+            />
+            <h1 className="brand-name">Lexon</h1>
+          </div>
+          <p className="subheading">Aligning Human Insight with AI Power</p>
           <div className="cta-row">
             <a href="/white-paper" target="_blank" rel="noopener noreferrer" className="btn">📘 Read the White Paper</a>
           </div>
-          <p className="subheading">A community-governed legal knowledge graph for transparent reasoning and trusted AI.</p>
-          <p>Lexon transforms unstructured legal data into a shared, verifiable foundation for research and AI. Built by legal stewards. Owned by the community.</p>
+          <p>We are building the bridge between legal expertise and artificial intelligence.</p>
+          <p>Lexon transforms unstructured law into a verifiable foundation, ensuring AI amplifies lawyers rather than replacing them.</p>
         </section>
 
         {/* PROBLEM */}
         <section>
-          <h2>Law Runs on Reasoning—But Our Data Doesn&apos;t</h2>
-          <div className="columns">
-            <div className="column">Unstructured Logic</div>
-            <div className="column">Duplicated Work</div>
-            <div className="column">AI Hallucination</div>
-          </div>
-          <p>Legal research still depends on unstructured text, siloed insights, and duplicated work. When this data feeds into AI, it produces hallucinated citations, misread doctrines, and untrustworthy outputs.</p>
-          <p className="quote">&ldquo;Without structured knowledge, even the smartest model cannot reason.&rdquo;</p>
+          <h2>The Problem: AI Needs a Pilot.</h2>
+          <p>Current Legal AI is powerful, but it lacks the nuance of a jurist. Raw text feeds allow AI to hallucinate citations and miss subtle doctrines. This creates a dangerous &ldquo;alignment gap&rdquo; where tools generate risks instead of results.</p>
+          <ul>
+            <li><strong>The Risk:</strong> Without human logic, AI is a black box.</li>
+            <li><strong>The Reality:</strong> Technology should not replace the lawyer; it should scale the lawyer&apos;s ability to deliver better outcomes.</li>
+          </ul>
         </section>
 
         {/* SOLUTION */}
         <section>
-          <h2>A Shared, Evolving Legal Graph</h2>
-          <p>Lexon structures legal reasoning—linking facts, doctrines, and policies into an evolving map of how law actually works. Built collaboratively, each annotation and debate becomes part of a transparent and verifiable record.</p>
+          <h2>The Solution: Anchoring AI in Human Logic</h2>
+          <p>We are building the Cognitive Core for law—a system where human expertise validates machine output. Lexon uses a Human-in-the-Loop (HITL) architecture. Instead of scraping data, we empower legal experts to structure it. By linking facts to issues, doctrines, and policies, we create a transparent &ldquo;Legal Graph&rdquo; that forces AI to reason the way lawyers do.</p>
+          <ul>
+            <li><strong>Trusted:</strong> Every data point is verifiable.</li>
+            <li><strong>Transparent:</strong> No hidden logic.</li>
+            <li><strong>Aligned:</strong> AI that acts as a true extension of your mind.</li>
+          </ul>
         </section>
 
-        {/* LEGAL STEWARDS */}
+        {/* CALL TO ACTION */}
         <section>
-          <h2>Shape the Future of Legal Reasoning</h2>
-          <p>Lexon is built for legal professionals who see stewardship as legacy. As a Legal Steward, you contribute to the shared infrastructure of reasoning that powers both human and AI understanding.</p>
-        </section>
-
-        {/* INVESTORS */}
-        <section>
-          <h2>A Sustainable Model for Legal Intelligence</h2>
-          <p>Legal AI is booming—but it lacks one thing: trusted data. Lexon provides the cognitive core that every serious legal AI tool will need—a verifiable, expert-built foundation.</p>
+          <h2>Call to Action: Be the Architect, Not the Passenger</h2>
+          <p>At Lexon, we believe the future of law is human-centric. As a Legal Steward, you provide the expert oversight that AI desperately needs. Your contributions ensure that the next generation of legal tools are built on a foundation of verified truth, protecting the integrity of the profession.</p>
         </section>
 
         {/* IMPACT */}
         <section>
-          <h2>Building a Transparent and Sustainable Future</h2>
-          <p>🌱 Ethical AI Training: Transparent, peer-reviewed data ensures models learn from verified reasoning, not bias or noise.</p>
-          <p>⚡ Sustainability: Structured data reduces computational waste and energy use—making legal AI greener and faster.</p>
-          <p>🌍 Shared Ownership: By decentralizing legal knowledge, Lexon empowers communities, not corporations, to define the law&apos;s logic.</p>
-        </section>
-
-        {/* FINAL CTA */}
-        <section>
-          <h2>Help Build the Shared Infrastructure of Law</h2>
-          <p>The logic of law should be transparent, auditable, and community-driven. Join us in shaping the cognitive core for human and AI reasoning alike.</p>
+          <h2>Impact: Better Outcomes, Less Risk</h2>
+          <p>When AI is grounded in expert-curated logic, everyone wins.</p>
+          <ul>
+            <li><strong>For Lawyers:</strong> Move from drudgery to strategy with tools you can actually trust.</li>
+            <li><strong>For Clients:</strong> Receive faster, more accurate counsel based on verifiable data.</li>
+            <li><strong>For the System:</strong> A sustainable, transparent legal infrastructure owned and managed by the community.</li>
+          </ul>
         </section>
 
         <div className="footer">&ldquo;The law, like the traveler, must be ready for the morrow.&rdquo; — Benjamin Cardozo</div>

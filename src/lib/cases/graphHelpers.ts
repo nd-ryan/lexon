@@ -28,6 +28,96 @@ export function findDescendants(nodeId: string, edges: any[]): string[] {
   return descendants
 }
 
+/**
+ * Compute which descendants would become "truly orphaned" if `nodeId` were deleted:
+ * orphaned = descendants that would have NO incoming edges from any "supported" active parent after deletion.
+ *
+ * This matches the editor's semantics: nodes only become orphaned if they are no longer connected to
+ * the active graph through any remaining active parent chain.
+ */
+export function getOrphanedDescendantsAfterDelete(nodeId: string, graphState: any): string[] {
+  const nodes: any[] = Array.isArray(graphState?.nodes) ? graphState.nodes : []
+  const edges: any[] = Array.isArray(graphState?.edges) ? graphState.edges : []
+
+  const activeEdges = edges.filter((e: any) => e?.status === 'active' || e?.status === undefined)
+  const descendants = findDescendants(nodeId, activeEdges)
+  if (descendants.length === 0) return []
+
+  const descendantsSet = new Set(descendants)
+  const nodeById = new Map<string, any>()
+  nodes.forEach((n: any) => {
+    if (n?.temp_id) nodeById.set(n.temp_id, n)
+  })
+
+  // Edges remaining after deleting nodeId (we remove edges that touch the deleted node).
+  const remainingEdges = activeEdges.filter((e: any) => e?.from !== nodeId && e?.to !== nodeId)
+
+  const childrenByFrom = new Map<string, string[]>()
+  const parentsByTo = new Map<string, string[]>()
+  remainingEdges.forEach((e: any) => {
+    if (!e?.from || !e?.to) return
+    if (!childrenByFrom.has(e.from)) childrenByFrom.set(e.from, [])
+    childrenByFrom.get(e.from)!.push(e.to)
+    if (!parentsByTo.has(e.to)) parentsByTo.set(e.to, [])
+    parentsByTo.get(e.to)!.push(e.from)
+  })
+
+  // Seed "supported" descendants: any descendant with an incoming edge from an active parent OUTSIDE the deletion subtree.
+  const supported = new Set<string>()
+  const queue: string[] = []
+
+  descendants.forEach((descId) => {
+    const parents = parentsByTo.get(descId) || []
+    const hasOutsideActiveParent = parents.some((parentId) => {
+      if (parentId === nodeId) return false
+      if (descendantsSet.has(parentId)) return false
+      const parent = nodeById.get(parentId)
+      return parent && parent.status === 'active'
+    })
+    if (hasOutsideActiveParent) {
+      supported.add(descId)
+      queue.push(descId)
+    }
+  })
+
+  // Propagate support downward: if a node is supported, its children in the subtree become supported too.
+  while (queue.length > 0) {
+    const current = queue.shift()!
+    const children = childrenByFrom.get(current) || []
+    children.forEach((childId) => {
+      if (!descendantsSet.has(childId)) return
+      if (supported.has(childId)) return
+      supported.add(childId)
+      queue.push(childId)
+    })
+  }
+
+  return descendants.filter((id) => !supported.has(id))
+}
+
+/**
+ * Connectivity-based orphaning rule:
+ * when `nodeId` is deleted, any node that was previously reachable from the Case root(s)
+ * but becomes unreachable (treating edges as undirected) is considered "orphaned".
+ *
+ * This intentionally does NOT depend on edge direction, which may vary by relationship label.
+ */
+export function getOrphanedNodesAfterDelete(nodeId: string, graphState: any): string[] {
+  const before = computeReachableFromCaseRoots(graphState?.nodes || [], graphState?.edges || [])
+  if (before.size === 0) return []
+
+  const after = computeReachableFromCaseRoots(graphState?.nodes || [], graphState?.edges || [], {
+    excludeNodeId: nodeId
+  })
+
+  const orphaned: string[] = []
+  for (const id of before) {
+    if (id === String(nodeId)) continue
+    if (!after.has(id)) orphaned.push(id)
+  }
+  return orphaned
+}
+
 export function filterActiveNodes(nodes: any[], deletedNodeIds: Set<string>, orphanedNodeIds: Set<string>): any[] {
   if (!Array.isArray(nodes)) return []
   // Node types that shouldn't appear in general node lists (handled by special UI components)
@@ -331,6 +421,85 @@ export function getMinPerCaseViolationsConnected(
 
   const counts = countReachableByLabel(graphState?.nodes || [], reachable)
   return computeViolationsFromCounts(counts, mins)
+}
+
+function computeDeficitsFromCounts(counts: Map<string, number>, mins: Map<string, number>): Map<string, number> {
+  const deficits = new Map<string, number>()
+  for (const [label, min] of mins.entries()) {
+    const c = counts.get(label) || 0
+    const deficit = Math.max(0, min - c)
+    deficits.set(label, deficit)
+  }
+  return deficits
+}
+
+/**
+ * Returns only the `min_per_case` violations that would become WORSE (deficit increases)
+ * after deleting `nodeId`. This avoids disabling actions just because the current graph
+ * is temporarily invalid (e.g. catalog nodes not yet enriched on initial load).
+ */
+export function getMinPerCaseWorseningAfterDeleteNode(
+  graphState: any,
+  schema: Schema | null | undefined,
+  nodeId: string
+): MinPerCaseViolation[] {
+  const mins = getMinPerCaseByLabel(schema)
+  if (mins.size === 0) return []
+
+  const beforeReachable = computeReachableFromCaseRoots(graphState?.nodes || [], graphState?.edges || [])
+  if (beforeReachable.size === 0) return []
+  const beforeCounts = countReachableByLabel(graphState?.nodes || [], beforeReachable)
+  const beforeDeficits = computeDeficitsFromCounts(beforeCounts, mins)
+
+  const afterReachable = computeReachableFromCaseRoots(graphState?.nodes || [], graphState?.edges || [], {
+    excludeNodeId: nodeId
+  })
+  const afterCounts = afterReachable.size === 0 ? new Map<string, number>() : countReachableByLabel(graphState?.nodes || [], afterReachable)
+  const afterDeficits = computeDeficitsFromCounts(afterCounts, mins)
+
+  const worsening: MinPerCaseViolation[] = []
+  for (const [label, min] of mins.entries()) {
+    const before = beforeDeficits.get(label) || 0
+    const after = afterDeficits.get(label) || 0
+    if (after > before) {
+      worsening.push({ label, min, countAfter: afterCounts.get(label) || 0 })
+    }
+  }
+  return worsening
+}
+
+/**
+ * Returns only the `min_per_case` violations that would become WORSE (deficit increases)
+ * after removing the given edge once.
+ */
+export function getMinPerCaseWorseningAfterUnlinkEdge(
+  graphState: any,
+  schema: Schema | null | undefined,
+  edge: { from: string; to: string; label: string }
+): MinPerCaseViolation[] {
+  const mins = getMinPerCaseByLabel(schema)
+  if (mins.size === 0) return []
+
+  const beforeReachable = computeReachableFromCaseRoots(graphState?.nodes || [], graphState?.edges || [])
+  if (beforeReachable.size === 0) return []
+  const beforeCounts = countReachableByLabel(graphState?.nodes || [], beforeReachable)
+  const beforeDeficits = computeDeficitsFromCounts(beforeCounts, mins)
+
+  const afterReachable = computeReachableFromCaseRoots(graphState?.nodes || [], graphState?.edges || [], {
+    excludeEdgeOnce: { from: edge.from, to: edge.to, label: edge.label }
+  })
+  const afterCounts = afterReachable.size === 0 ? new Map<string, number>() : countReachableByLabel(graphState?.nodes || [], afterReachable)
+  const afterDeficits = computeDeficitsFromCounts(afterCounts, mins)
+
+  const worsening: MinPerCaseViolation[] = []
+  for (const [label, min] of mins.entries()) {
+    const before = beforeDeficits.get(label) || 0
+    const after = afterDeficits.get(label) || 0
+    if (after > before) {
+      worsening.push({ label, min, countAfter: afterCounts.get(label) || 0 })
+    }
+  }
+  return worsening
 }
 
 export function getMinPerCaseViolationsAfterDeleteNode(

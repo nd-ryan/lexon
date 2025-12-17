@@ -8,7 +8,7 @@ import { ObjectFields } from './Field'
 import { ExistingNodeBadge } from './ExistingNodeBadge'
 import { ExistingNodeWarning } from './ExistingNodeWarning'
 import type { Schema } from '@/types/case-graph'
-import { getMinPerCaseViolationsAfterDeleteNode, getMinPerCaseViolationsAfterUnlinkEdge } from '@/lib/cases/graphHelpers'
+import { getMinPerCaseWorseningAfterDeleteNode, getMinPerCaseWorseningAfterUnlinkEdge } from '@/lib/cases/graphHelpers'
 
 interface NodeCardProps {
   node: any
@@ -88,7 +88,7 @@ export function NodeCard({
   const getDeleteDisabledReason = (): string | null => {
     if (isViewMode) return null
     if (!schema) return null
-    const violations = getMinPerCaseViolationsAfterDeleteNode(graphState, schema, node.temp_id)
+    const violations = getMinPerCaseWorseningAfterDeleteNode(graphState, schema, node.temp_id)
     return violations.length > 0 ? formatViolationReason(violations) : null
   }
 
@@ -105,7 +105,7 @@ export function NodeCard({
     )
     if (!parentEdge?.from || !parentEdge?.to || !parentEdge?.label) return null
 
-    const violations = getMinPerCaseViolationsAfterUnlinkEdge(graphState, schema, {
+    const violations = getMinPerCaseWorseningAfterUnlinkEdge(graphState, schema, {
       from: String(parentEdge.from),
       to: String(parentEdge.to),
       label: String(parentEdge.label)

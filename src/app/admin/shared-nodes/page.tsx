@@ -143,7 +143,7 @@ export default function SharedNodesPage() {
         const data = await res.json()
         setError(data.error || 'Failed to fetch nodes')
       }
-    } catch (e) {
+    } catch {
       setError('Failed to fetch nodes')
     } finally {
       setLoading(false)
@@ -250,7 +250,7 @@ export default function SharedNodesPage() {
         setActionResult({ success: false, message: data.error || 'Failed to update node' })
         setModal({ ...modal, loading: false })
       }
-    } catch (e) {
+    } catch {
       setActionResult({ success: false, message: 'Failed to update node' })
       setModal({ ...modal, loading: false })
     }
@@ -306,7 +306,7 @@ export default function SharedNodesPage() {
         setActionResult({ success: false, message: data.message || data.error || 'Failed to delete node' })
         setModal({ ...modal, loading: false })
       }
-    } catch (e) {
+    } catch {
       setActionResult({ success: false, message: 'Failed to delete node' })
       setModal({ ...modal, loading: false })
     }

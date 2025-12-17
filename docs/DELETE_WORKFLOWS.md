@@ -74,13 +74,54 @@ Even “case-unique” nodes can theoretically end up with external connections 
 ### User action
 In edit mode, user deletes nodes, then either **Save** or **Submit to KG**.
 
-### Client-side semantics (“delete” in the editor)
+### Client-side semantics ("delete" in the editor)
 The editor uses a graph-state model with statuses:
 - `active`
 - `deleted` (explicitly deleted)
 - `orphaned` (descendant nodes that may be removed if they no longer have an active parent)
 
-Deleting a node marks it `deleted`, marks connected edges deleted, and may mark descendants `orphaned` if they have no other active parents.
+### Cascade Delete System
+
+When a user deletes a node in the editor, the system computes a **cascade plan** based on the UI hierarchy (`views_v3.json`) and relationship cardinalities (`schema_v3.json`).
+
+#### How it works
+
+1. **Build UI Hierarchy**: Parse `views_v3.json` to determine parent-child relationships as displayed in the editor (e.g., Issue → Ruling → Argument → Doctrine).
+
+2. **Compute Cascade Plan**: For each UI-child of the deleted node:
+   - Count how many **other parents** (of the same relationship type) the child has in the graph
+   - **If no other parents exist** → cascade delete the child
+   - **If other parents exist** → detach only (remove edge, child remains active)
+
+3. **Recurse**: Process cascaded children the same way, building a complete deletion plan.
+
+#### Example: Deleting an Issue
+
+| Node | Relationship | Other parents? | Result |
+|------|--------------|----------------|--------|
+| Issue | (primary delete) | - | Deleted |
+| Ruling | SETS → Issue | None (one-to-one) | Cascade delete |
+| Argument | EVALUATED_IN → Ruling | Has other Rulings? | Cascade if no, detach if yes |
+| Doctrine | RELATES_TO_DOCTRINE ← Argument | Has other Arguments? | Cascade if no, detach if yes |
+| ReliefType | IS_TYPE ← Relief | Has other Reliefs? | Cascade if no, detach if yes |
+
+#### Confirmation Modal
+
+The delete confirmation modal shows:
+- **"Will be removed"** (red): Nodes that cascade-delete because they have no other parents
+  - Items marked `(shared)` indicate `case_unique: false` nodes that will be preserved in the KG
+- **"Will be unlinked"** (blue): Nodes that have other parents in this case and will remain visible
+
+#### Key files
+
+- `src/lib/cases/cascadeDelete.ts` - Core cascade logic
+  - `buildUIHierarchy()` - Parses views config
+  - `buildCardinalityMap()` - Parses schema relationships
+  - `computeCascadePlan()` - Computes which nodes cascade vs detach
+  - `checkCascadeMinPerCase()` - Validates against min_per_case constraints
+  - `applyCascadePlan()` - Applies the plan to graph state
+- `src/components/cases/editor/modals/DeleteNodeConfirmation.tsx` - Confirmation UI
+- `src/hooks/cases/useGraphState.ts` - `deleteNodeWithCascade()` applies the plan
 
 ### `min_per_case` protection (editor)
 Some labels in the schema define a `min_per_case` constraint (minimum count required per case).
@@ -115,5 +156,3 @@ The backend compares the case graph previously stored in Postgres vs the newly p
 | Editor delete + Submit | Per-case | Detach (preserve) | Delete if isolated; else detach | Save is Postgres-only; Submit performs Neo4j sync |
 
 Last Updated: December 16, 2025
-
-
