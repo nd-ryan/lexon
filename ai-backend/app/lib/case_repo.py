@@ -17,8 +17,8 @@ cases = Table(
     Column("filename", Text, nullable=False),
     Column("status", String, nullable=False, default="pending"),
     Column("extracted", JSONB),
+    Column("kg_extracted", JSONB),
     Column("schema_version", String),
-    Column("revisions", JSONB, nullable=False, server_default='[]'),
     Column("meta", JSONB, nullable=False, server_default='{}'),
     Column("original_author_id", String, nullable=True),  # set on upload, immutable
     Column("file_key", String, nullable=True),  # Tigris object storage key for original file
@@ -106,17 +106,10 @@ class CaseRepo:
         return dict(row) if row else None
 
     def update_case(self, conn: Connection, case_id: str, payload: Dict[str, Any], user_id: str) -> Dict[str, Any]:
-        current = self.get_case(conn, case_id)
-        revisions = (current.get("revisions") or []) + [{
-            "timestamp": int(time.time()),
-            "userId": user_id,
-            "before": current.get("extracted") or {},
-            "after": payload
-        }]
         conn.execute(
             update(cases)
             .where(cases.c.id == uuid.UUID(case_id))
-            .values(extracted=payload, revisions=revisions, updated_at=func.now())
+            .values(extracted=payload, updated_at=func.now())
         )
         updated = self.get_case(conn, case_id)
         assert updated is not None
@@ -139,6 +132,18 @@ class CaseRepo:
             update(cases)
             .where(cases.c.id == uuid.UUID(case_id))
             .values(kg_submitted_by=user_id, kg_submitted_at=func.now())
+        )
+
+    def set_kg_extracted(self, conn: Connection, case_id: str, payload: Dict[str, Any]) -> None:
+        """Persist the last successfully published KG snapshot for this case.
+
+        This stores the exact graph payload that was written to Neo4j (after ID assignment),
+        so we can diff 'last published' vs 'new publish' during subsequent KG submits.
+        """
+        conn.execute(
+            update(cases)
+            .where(cases.c.id == uuid.UUID(case_id))
+            .values(kg_extracted=payload)
         )
 
     def set_file_key(self, conn: Connection, case_id: str, file_key: str) -> None:

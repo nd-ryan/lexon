@@ -10,8 +10,8 @@ def ensure_cases_table(engine: Engine) -> None:
           filename TEXT NOT NULL,
           status TEXT NOT NULL DEFAULT 'pending',
           extracted JSONB,
+          kg_extracted JSONB,
           schema_version TEXT,
-          revisions JSONB NOT NULL DEFAULT '[]'::jsonb,
           meta JSONB NOT NULL DEFAULT '{}'::jsonb,
           original_author_id TEXT,
           file_key TEXT,
@@ -38,6 +38,9 @@ def ensure_cases_table(engine: Engine) -> None:
             END IF;
             IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'cases' AND column_name = 'kg_submitted_at') THEN
                 ALTER TABLE cases ADD COLUMN kg_submitted_at TIMESTAMPTZ;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'cases' AND column_name = 'kg_extracted') THEN
+                ALTER TABLE cases ADD COLUMN kg_extracted JSONB;
             END IF;
         END $$;
         """

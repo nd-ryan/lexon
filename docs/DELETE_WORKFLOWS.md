@@ -74,6 +74,8 @@ Even “case-unique” nodes can theoretically end up with external connections 
 ### User action
 In edit mode, user deletes nodes, then either **Save** or **Submit to KG**.
 
+See also: `docs/CASE_EDITOR_DELETE_UNLINK_UI.md` (frontend-only UI copy + client-side state semantics).
+
 ### Client-side semantics ("delete" in the editor)
 The editor uses a graph-state model with statuses:
 - `active`

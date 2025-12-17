@@ -20,8 +20,13 @@ async def test_delete_case_not_kg_submitted_no_neo4j_calls(
 
     monkeypatch.setattr("app.routes.cases.case_repo.get_case", lambda conn, _id: case_data)
     monkeypatch.setattr("app.routes.cases.case_repo.delete_case", lambda conn, _id: True)
-    monkeypatch.setattr("app.routes.cases.graph_events_repo.log_node_event", lambda **kwargs: "event-id")
-    monkeypatch.setattr("app.routes.cases.graph_events_repo.log_edge_event", lambda **kwargs: "event-id")
+
+    # Draft-only cases should not emit graph_events delete logs (no KG mutation ever occurred)
+    def should_not_log(*args, **kwargs):
+        raise AssertionError("graph_events should not be written for draft-only case deletion")
+
+    monkeypatch.setattr("app.routes.cases.graph_events_repo.log_node_event", should_not_log)
+    monkeypatch.setattr("app.routes.cases.graph_events_repo.log_edge_event", should_not_log)
 
     from app.lib.neo4j_client import neo4j_client
 

@@ -11,6 +11,10 @@ Lexon uses a **two-phase storage model**:
 
 The event logging system tracks changes only after content is published to the KG, ensuring clean attribution to the user who verified and submitted the content.
 
+### What “version history” exists
+- **Draft phase**: Lexon stores the current draft in Postgres (`cases.extracted`). Draft saves overwrite that payload. Draft saves do **not** write `graph_events`.
+- **Published phase**: On KG submit, Lexon stores the last published snapshot in Postgres (`cases.kg_extracted`) and records an **append-only audit/version log** in Postgres (`graph_events`) for node/edge creates/updates/deletes attributable to a user.
+
 ## Storage Architecture
 
 ```
@@ -38,15 +42,16 @@ The event logging system tracks changes only after content is published to the K
 | Action | Events Logged? | Details |
 |--------|---------------|---------|
 | First KG Submit | ✅ Yes | `create` for all new nodes and edges |
-| Save (after first KG submit) | ✅ Yes | `create`/`update`/`delete` for changes |
-| Subsequent KG Submit | ➡️ Updates | Updates entity_ids to permanent UUIDs |
+| Save (draft) | ❌ No | Draft saves do not mutate Neo4j |
+| Subsequent KG Submit | ✅ Yes | `create`/`update`/`delete` for changes since last publish (`cases.kg_extracted` → new publish) |
+| Delete Case (KG-submitted cases only) | ✅ Yes | `delete` events for nodes/edges removed as part of KG cleanup |
 
 ### When Events Are NOT Logged
 
 | Action | Events Logged? | Reason |
 |--------|---------------|--------|
 | AI Extraction | ❌ No | Just a draft - user hasn't verified |
-| Save (before first KG submit) | ❌ No | Still editing draft |
+| Save (any time) | ❌ No | Still editing draft; no KG mutation |
 | Pre-existing nodes | ❌ No | Already tracked by their original case |
 
 ## The `graph_events` Table
@@ -169,90 +174,17 @@ In addition to per-entity tracking, the `cases` table tracks:
 | `kg_submitted_by` | User who first submitted to KG |
 | `kg_submitted_at` | Timestamp of first KG submission |
 
-## Node Deletion Handling
+## Deletion events (high-level)
 
-When a user deletes a node and submits to KG:
+This document focuses on **how Lexon logs versions / audit events**, not the business rules for what happens in Neo4j when something is “deleted.”
 
-### Case-Unique Nodes
-Nodes that only exist within one case (e.g., Proceeding, Ruling, Issue, Argument, Relief):
-1. Check if node is isolated (no external connections in KG)
-2. If isolated → delete from Neo4j immediately
-3. If has external connections → detach from this case (unexpected, logged as warning)
+At a high level:
+- When KG content is removed as part of a case edit or case deletion, Lexon logs `delete` events for affected nodes/edges in `graph_events` (after first KG submit).
+- Admin operations that remove KG content can also generate `delete` events in `graph_events` (depending on the operation and which cases are affected).
 
-### Non-Case-Unique (Shared) Nodes
-Nodes that can be shared across cases (e.g., Party, Doctrine, Policy, Law, FactPattern):
-- **Detach relationships** from this case's nodes only
-- Node remains in KG - managed via Admin Shared Nodes page
-
-### Deletion Flow Diagram
-
-```
-User deletes node in Case Editor
-              │
-              ▼
-      ┌───────────────┐
-      │ Is node       │
-      │ case_unique?  │
-      └───────┬───────┘
-              │
-     ┌────────┴────────┐
-     │                 │
-     ▼                 ▼
-   YES            NO (shared)
-     │                 │
-     ▼                 ▼
-┌─────────────┐   ┌─────────────────────┐
-│ Check if    │   │ Detach from this    │
-│ isolated    │   │ case's nodes in KG  │
-└──────┬──────┘   └──────────┬──────────┘
-       │                     │
-  ┌────┴────┐                ▼
-  │         │            ┌──────┐
-  ▼         ▼            │ DONE │
- YES       NO            └──────┘
-  │         │
-  ▼         ▼
-┌─────┐ ┌──────────┐
-│DELETE│ │ Detach   │
-│ NOW │ │ from case│
-└─────┘ └──────────┘
-```
-
-**Key point**: Users can only detach shared nodes from their case. 
-KG-wide deletion of shared nodes is done via the Admin Shared Nodes page.
-
-## Case Deletion
-
-When a user deletes an entire case from the case list:
-
-### Draft Cases (never submitted to KG)
-- Simply deleted from Postgres
-- No KG cleanup needed
-- File deleted from storage
-
-### KG-Submitted Cases
-Full cleanup is performed:
-
-1. **KG Cleanup**:
-   - **Case-unique nodes** (created by this case): Deleted from Neo4j
-   - **Non-case-unique nodes** (created by this case): Detached from this case's nodes (stay in KG)
-   - **Pre-existing nodes** (referenced from other cases): Detached from this case's nodes (stay in KG)
-
-2. **Event Logging**:
-   - `delete` events logged for all nodes and edges
-   - Events are kept for audit trail
-
-3. **File Storage**:
-   - Original uploaded file deleted from Tigris
-
-4. **Database**:
-   - Case record deleted from Postgres
-
-### Important Notes
-- Deleting a case does **NOT** delete shared/pre-existing nodes from the KG
-- All relationships from this case to other nodes are removed (detached)
-- Shared and pre-existing nodes remain in the KG for other cases
-- Only case-unique nodes created by this case are fully deleted from the KG
+For the actual **detach vs delete** rules across entry points, see:
+- `docs/DELETE_WORKFLOWS.md`
+- `docs/ADMIN_SHARED_NODE_DELETION_POLICY.md`
 
 ## Admin Interfaces
 
@@ -260,47 +192,6 @@ Full cleanup is performed:
 - View all graph events with filters
 - Filter by action, entity type, user, case
 - See event statistics
-
-### Shared Nodes (`/admin/shared-nodes`)
-- View all non-case-unique nodes in the KG
-- Filter by label (Party, Doctrine, Policy, etc.)
-- Orphaned nodes are flagged (not connected to any case)
-- Admin can edit or delete shared nodes directly
-- Shows connected cases before edit/delete confirmation
-- Respects `min_per_case` constraint when deleting
-
-#### min_per_case Schema Property
-Some node types require at least one instance per case:
-
-| Node Type | min_per_case | Notes |
-|-----------|--------------|-------|
-| Domain | 1 | Every case needs a domain |
-| Forum | 1 | Every case needs a forum |
-| Jurisdiction | 1 | Every case needs a jurisdiction |
-| Party | 1 | Every case needs at least one party |
-| ReliefType | 1 | Every case needs a relief type |
-| Case | 1 | - |
-| Proceeding | 1 | - |
-| Issue | 1 | - |
-| Ruling | 1 | - |
-| Argument | 1 | - |
-| Relief | 1 | - |
-
-When admin deletes a shared node:
-1. System checks if deletion would violate `min_per_case` for any connected case
-2. If violated, admin can choose to delete from cases where allowed, or cancel
-3. If not violated, node is deleted from all cases and removed from KG
-
-#### Admin Operations Event Logging
-All admin operations on shared nodes are logged to `graph_events`:
-
-| Operation | Action | Events Logged |
-|-----------|--------|---------------|
-| Edit node properties | `update` | One event per connected case |
-| Delete node (full) | `delete` | One event per affected case |
-| Delete node (partial) | `delete` | One event per case where node was detached |
-
-This ensures complete audit trail even for admin KG-wide operations.
 
 ## API Endpoints
 
@@ -326,7 +217,7 @@ Timeline for Case "Smith v. Jones"
 10:30 AM - User clicks "Submit to KG"
            → 14 node create events (user_id = "user123")
            → 28 edge create events (user_id = "user123")
-           → 1 node deletion processed
+           → (if applicable) delete events for KG-removed entities
 
 11:00 AM - User edits a Ruling's summary
            → 1 update event (user_id = "user123")
@@ -342,20 +233,8 @@ Timeline for Case "Smith v. Jones"
 --- Later, user decides to delete the case ---
 
 2:00 PM  - User clicks "Delete" on case in case list
-           → Case-unique nodes deleted from KG
-           → Non-case-unique nodes detached (stay in KG)
            → 15 node delete events (user_id = "user123")
            → 30 edge delete events (user_id = "user123")
-           → Original file deleted from storage
-           → Case record deleted from Postgres
-
---- Admin manages shared nodes ---
-
-3:00 PM  - Admin edits a Party node's name (shared across 5 cases)
-           → 5 update events (user_id = "admin@example.com")
-
-3:15 PM  - Admin deletes an orphaned Doctrine node
-           → 0 events (node had no case connections)
 ```
 
 ## Implementation Files

@@ -1,4 +1,5 @@
 import pytest
+import uuid
 
 
 class _FakeFlow:
@@ -25,7 +26,7 @@ async def test_kg_submit_deleted_shared_node_detached_not_deleted(
     # Ensure bearer auth passes
     monkeypatch.setenv("FASTAPI_API_KEY", "test-api-key")
 
-    case_id = "case-kg-submit-1"
+    case_id = str(uuid.uuid4())
     old_extracted = {
         "nodes": [
             {"label": "Case", "temp_id": "uuid-case", "properties": {"case_id": "c1", "name": "X"}},
@@ -33,7 +34,7 @@ async def test_kg_submit_deleted_shared_node_detached_not_deleted(
         ],
         "edges": [],
     }
-    rec = {"id": case_id, "extracted": old_extracted, "kg_submitted_at": "2025-01-01T00:00:00Z"}
+    rec = {"id": case_id, "extracted": old_extracted, "kg_extracted": old_extracted, "kg_submitted_at": "2025-01-01T00:00:00Z"}
 
     # New graph deletes Party (shared node)
     new_nodes = [
@@ -91,7 +92,7 @@ async def test_kg_submit_deleted_case_unique_isolated_deleted(
     """
     monkeypatch.setenv("FASTAPI_API_KEY", "test-api-key")
 
-    case_id = "case-kg-submit-2"
+    case_id = str(uuid.uuid4())
     old_extracted = {
         "nodes": [
             {"label": "Case", "temp_id": "uuid-case", "properties": {"case_id": "c2", "name": "Y"}},
@@ -99,7 +100,7 @@ async def test_kg_submit_deleted_case_unique_isolated_deleted(
         ],
         "edges": [],
     }
-    rec = {"id": case_id, "extracted": old_extracted, "kg_submitted_at": "2025-01-01T00:00:00Z"}
+    rec = {"id": case_id, "extracted": old_extracted, "kg_extracted": old_extracted, "kg_submitted_at": "2025-01-01T00:00:00Z"}
 
     # New graph deletes Issue (case_unique)
     new_nodes = [

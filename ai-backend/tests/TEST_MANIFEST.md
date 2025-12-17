@@ -150,7 +150,23 @@ Tests `DELETE /api/ai/shared-nodes/{label}/{node_id}` for node deletion with cat
 
 ---
 
-## 5. `test_graph_events_repo.py` - Event Logging (30 tests)
+## 5. `test_kg_submit_event_logging.py` - KG Submit Event Logging (2 tests)
+
+**Purpose:** Validates that `graph_events` are emitted on KG submit based on the last published snapshot (`cases.kg_extracted`), not on draft saves.
+
+**What it covers:**
+- On subsequent KG submit, removals from the published graph produce `delete` events
+- On first publish, `is_existing` nodes do not emit node-level `create` events (edge events still log)
+
+---
+
+## 6. `test_cases_get_case_does_not_expose_kg_extracted.py` - Cases API Response Shape (1 test)
+
+**Purpose:** Ensures internal published snapshot fields (e.g. `cases.kg_extracted`) are not returned to clients via `GET /api/ai/cases/{case_id}`.
+
+---
+
+## 7. `test_graph_events_repo.py` - Event Logging (30 tests)
 
 ### Helper Function Tests (6 tests)
 
@@ -224,7 +240,7 @@ Tests mapping of temporary node IDs to permanent Neo4j UUIDs.
 
 ---
 
-## 6. `test_case_extract_flow_v3_*.py` - Case Extraction Flow V3 (10 tests)
+## 8. `test_case_extract_flow_v3_*.py` - Case Extraction Flow V3 (10 tests)
 
 **Purpose:** Validates orchestration of the crucial [`app/flow_cases/case_extract_flow_v3.py`](../app/flow_cases/case_extract_flow_v3.py) workflow using **light integration** (real schema/validation code, deterministic mocked CrewAI + Neo4j).
 
@@ -239,13 +255,13 @@ Tests mapping of temporary node IDs to permanent Neo4j UUIDs.
 
 ---
 
-## 7. `test_neo4j_uploader.py` - Neo4j Uploader Helpers (2 tests)
+## 9. `test_neo4j_uploader.py` - Neo4j Uploader Helpers (2 tests)
 
 **Purpose:** Validates helper utilities in `app/lib/neo4j_uploader.py` (e.g., snake_case conversion and ID property mapping).
 
 ---
 
-## 8. Integration Tests (optional / external dependencies)
+## 10. Integration Tests (optional / external dependencies)
 
 These are marked with `@pytest.mark.integration` and are **skipped** unless required environment variables are present.
 

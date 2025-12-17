@@ -4,12 +4,12 @@ from app.lib.security import get_api_key
 from app.lib.db import get_db
 from app.lib.case_repo import case_repo
 from app.lib.property_filter import filter_case_data, filter_display_data
-from app.lib.graph_events_repo import graph_events_repo, compute_content_hash, make_edge_id
+from app.lib.graph_events_repo import graph_events_repo
 import tempfile
 import os
 import logging
 import uuid
-from typing import Dict, Any, List, Set, Tuple
+from typing import Dict, Any, List, Set
 
 
 logger = logging.getLogger(__name__)
@@ -19,149 +19,6 @@ router = APIRouter(prefix="/cases", dependencies=[Depends(get_api_key)])
 def get_user_id_from_header(request: Request) -> str:
     """Extract user ID from X-User-Id header (set by Next.js API routes)."""
     return request.headers.get("X-User-Id", "unknown")
-
-
-def diff_graph_data(
-    old_data: Dict[str, Any], 
-    new_data: Dict[str, Any]
-) -> Tuple[List[Dict], List[Dict], List[Dict], List[Dict], List[Dict], List[Dict]]:
-    """
-    Compare old and new graph data to find created, updated, and deleted nodes/edges.
-    
-    Returns:
-        Tuple of (created_nodes, updated_nodes, deleted_nodes, created_edges, updated_edges, deleted_edges)
-    """
-    old_nodes = {n.get("temp_id"): n for n in old_data.get("nodes", []) if isinstance(n, dict) and n.get("temp_id")}
-    new_nodes = {n.get("temp_id"): n for n in new_data.get("nodes", []) if isinstance(n, dict) and n.get("temp_id")}
-    
-    old_node_ids = set(old_nodes.keys())
-    new_node_ids = set(new_nodes.keys())
-    
-    created_nodes = [new_nodes[nid] for nid in (new_node_ids - old_node_ids)]
-    deleted_nodes = [old_nodes[nid] for nid in (old_node_ids - new_node_ids)]
-    
-    # Check for updated nodes (same temp_id but different content)
-    updated_nodes = []
-    for nid in (old_node_ids & new_node_ids):
-        old_hash = compute_content_hash(old_nodes[nid].get("properties", {}))
-        new_hash = compute_content_hash(new_nodes[nid].get("properties", {}))
-        if old_hash != new_hash:
-            updated_nodes.append(new_nodes[nid])
-    
-    # Compare edges
-    def edge_key(e: Dict) -> str:
-        return make_edge_id(e.get("from", ""), e.get("to", ""), e.get("label", ""))
-    
-    old_edges = {edge_key(e): e for e in old_data.get("edges", []) if isinstance(e, dict)}
-    new_edges = {edge_key(e): e for e in new_data.get("edges", []) if isinstance(e, dict)}
-    
-    old_edge_ids = set(old_edges.keys())
-    new_edge_ids = set(new_edges.keys())
-    
-    created_edges = [new_edges[eid] for eid in (new_edge_ids - old_edge_ids)]
-    deleted_edges = [old_edges[eid] for eid in (old_edge_ids - new_edge_ids)]
-    
-    # Check for updated edges
-    updated_edges = []
-    for eid in (old_edge_ids & new_edge_ids):
-        old_hash = compute_content_hash(old_edges[eid].get("properties", {}))
-        new_hash = compute_content_hash(new_edges[eid].get("properties", {}))
-        if old_hash != new_hash:
-            updated_edges.append(new_edges[eid])
-    
-    return created_nodes, updated_nodes, deleted_nodes, created_edges, updated_edges, deleted_edges
-
-
-def log_graph_events(
-    conn,
-    case_id: str,
-    user_id: str,
-    created_nodes: List[Dict],
-    updated_nodes: List[Dict],
-    deleted_nodes: List[Dict],
-    created_edges: List[Dict],
-    updated_edges: List[Dict],
-    deleted_edges: List[Dict],
-) -> int:
-    """Log graph events for all changes and return total count."""
-    count = 0
-    
-    for node in created_nodes:
-        graph_events_repo.log_node_event(
-            conn=conn,
-            case_id=case_id,
-            node_temp_id=node.get("temp_id", ""),
-            node_label=node.get("label", ""),
-            action="create",
-            user_id=user_id,
-            properties=node.get("properties", {}),
-        )
-        count += 1
-    
-    for node in updated_nodes:
-        graph_events_repo.log_node_event(
-            conn=conn,
-            case_id=case_id,
-            node_temp_id=node.get("temp_id", ""),
-            node_label=node.get("label", ""),
-            action="update",
-            user_id=user_id,
-            properties=node.get("properties", {}),
-        )
-        count += 1
-    
-    for node in deleted_nodes:
-        graph_events_repo.log_node_event(
-            conn=conn,
-            case_id=case_id,
-            node_temp_id=node.get("temp_id", ""),
-            node_label=node.get("label", ""),
-            action="delete",
-            user_id=user_id,
-            properties=node.get("properties", {}),
-        )
-        count += 1
-    
-    for edge in created_edges:
-        graph_events_repo.log_edge_event(
-            conn=conn,
-            case_id=case_id,
-            from_id=edge.get("from", ""),
-            to_id=edge.get("to", ""),
-            edge_label=edge.get("label", ""),
-            action="create",
-            user_id=user_id,
-            properties=edge.get("properties", {}),
-        )
-        count += 1
-    
-    for edge in updated_edges:
-        graph_events_repo.log_edge_event(
-            conn=conn,
-            case_id=case_id,
-            from_id=edge.get("from", ""),
-            to_id=edge.get("to", ""),
-            edge_label=edge.get("label", ""),
-            action="update",
-            user_id=user_id,
-            properties=edge.get("properties", {}),
-        )
-        count += 1
-    
-    for edge in deleted_edges:
-        graph_events_repo.log_edge_event(
-            conn=conn,
-            case_id=case_id,
-            from_id=edge.get("from", ""),
-            to_id=edge.get("to", ""),
-            edge_label=edge.get("label", ""),
-            action="delete",
-            user_id=user_id,
-            properties=edge.get("properties", {}),
-        )
-        count += 1
-    
-    return count
 
 
 @router.post("/upload")
@@ -291,6 +148,9 @@ def get_case(case_id: str, db: Session = Depends(get_db)):
     data = case_repo.get_case(db.connection(), case_id)
     if not data:
         raise HTTPException(404, "Not found")
+
+    # Do not expose the last-published KG snapshot to clients; it's used only for backend diffing/logging.
+    data.pop("kg_extracted", None)
     
     # Filter hidden properties from extracted data before returning
     extracted = data.get("extracted")
@@ -369,42 +229,12 @@ def update_case(case_id: str, payload: dict, request: Request, db: Session = Dep
         
         user_id = get_user_id_from_header(request)
         
-        # Get current case data for diff
-        current = case_repo.get_case(db.connection(), case_id)
-        old_data = current.get("extracted", {}) if current else {}
-        
-        # Check if case has been submitted to KG before
-        # Only log events for edits after first KG submission
-        has_been_submitted = current.get("kg_submitted_at") is not None if current else False
-        
         cleaned_payload = prepare_for_postgres_save(payload)
-        
-        event_count = 0
-        if has_been_submitted:
-            # Case was previously submitted to KG - log changes
-            created_nodes, updated_nodes, deleted_nodes, created_edges, updated_edges, deleted_edges = diff_graph_data(
-                old_data, cleaned_payload
-            )
-            
-            event_count = log_graph_events(
-                conn=db.connection(),
-                case_id=case_id,
-                user_id=user_id,
-                created_nodes=created_nodes,
-                updated_nodes=updated_nodes,
-                deleted_nodes=deleted_nodes,
-                created_edges=created_edges,
-                updated_edges=updated_edges,
-                deleted_edges=deleted_edges,
-            )
-        
+
         updated = case_repo.update_case(db.connection(), case_id, cleaned_payload, user_id)
         db.commit()
-        
-        if has_been_submitted:
-            logger.info(f"Case {case_id} saved by {user_id} ({event_count} events logged)")
-        else:
-            logger.info(f"Case {case_id} saved by {user_id} (draft - no events logged)")
+
+        logger.info(f"Case {case_id} saved by {user_id} (draft save - no graph_events logged)")
         return {"success": True, "case": updated}
     except HTTPException:
         # Re-raise HTTPExceptions (like validation errors) without wrapping
@@ -502,33 +332,34 @@ def delete_case(case_id: str, request: Request, db: Session = Depends(get_db)):
             logger.error(f"Failed to clean up KG for case {case_id}: {e}")
             # Continue with deletion even if KG cleanup fails
     
-    # Log delete events for all nodes and edges
-    for node in nodes:
-        if isinstance(node, dict) and not node.get("is_existing"):
-            node_id = node.get("temp_id", "")
-            if node_id:
-                graph_events_repo.log_node_event(
+    # Log delete events only for KG-submitted cases (audit trail reflects KG mutations)
+    if kg_submitted_at is not None:
+        for node in nodes:
+            if isinstance(node, dict) and not node.get("is_existing"):
+                node_id = node.get("temp_id", "")
+                if node_id:
+                    graph_events_repo.log_node_event(
+                        conn=db.connection(),
+                        case_id=case_id,
+                        node_temp_id=node_id,
+                        node_label=node.get("label", ""),
+                        action="delete",
+                        user_id=user_id,
+                        properties=node.get("properties", {}),
+                    )
+
+        for edge in edges:
+            if isinstance(edge, dict):
+                graph_events_repo.log_edge_event(
                     conn=db.connection(),
                     case_id=case_id,
-                    node_temp_id=node_id,
-                    node_label=node.get("label", ""),
+                    from_id=edge.get("from", ""),
+                    to_id=edge.get("to", ""),
+                    edge_label=edge.get("label", ""),
                     action="delete",
                     user_id=user_id,
-                    properties=node.get("properties", {}),
+                    properties=edge.get("properties", {}),
                 )
-    
-    for edge in edges:
-        if isinstance(edge, dict):
-            graph_events_repo.log_edge_event(
-                conn=db.connection(),
-                case_id=case_id,
-                from_id=edge.get("from", ""),
-                to_id=edge.get("to", ""),
-                edge_label=edge.get("label", ""),
-                action="delete",
-                user_id=user_id,
-                properties=edge.get("properties", {}),
-            )
     
     # Delete file from Tigris storage
     if file_key:
