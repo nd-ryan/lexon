@@ -9,7 +9,8 @@ import tempfile
 import os
 import logging
 import uuid
-from typing import Dict, Any, List, Set
+import re
+from typing import Dict, Any, List, Set, Optional
 
 
 logger = logging.getLogger(__name__)
@@ -20,6 +21,55 @@ def get_user_id_from_header(request: Request) -> str:
     """Extract user ID from X-User-Id header (set by Next.js API routes)."""
     return request.headers.get("X-User-Id", "unknown")
 
+
+_UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
+def _looks_like_uuid(value: Any) -> bool:
+    return isinstance(value, str) and bool(_UUID_RE.match(value))
+
+
+def _get_case_node_ids_for_kg_cleanup(nodes: List[Dict[str, Any]]) -> Set[str]:
+    """Return a set of node IDs usable by Neo4j cleanup routines.
+
+    Prefer schema-driven *_id properties when present; fall back to UUID temp_ids
+    (published graphs use UUID temp_ids).
+    """
+    ids: Set[str] = set()
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        props = node.get("properties") or {}
+        if isinstance(props, dict):
+            for key, val in props.items():
+                if isinstance(key, str) and key.endswith("_id") and val:
+                    ids.add(str(val))
+        temp_id = node.get("temp_id")
+        if _looks_like_uuid(temp_id):
+            ids.add(temp_id)
+    return ids
+
+
+def _get_node_id_for_label(label: str, node: Dict[str, Any], schema: List[Dict[str, Any]]) -> Optional[str]:
+    """Extract the node's primary *_id value (or a UUID temp_id fallback) for a given label."""
+    from app.lib.neo4j_uploader import get_id_prop_for_label
+
+    props = node.get("properties") or {}
+    if isinstance(props, dict):
+        id_prop = get_id_prop_for_label(label, schema)
+        val = props.get(id_prop)
+        if val:
+            return str(val)
+        # Fallback: any *_id property present
+        for key, v in props.items():
+            if isinstance(key, str) and key.endswith("_id") and v:
+                return str(v)
+
+    # Last resort: published graphs often use UUID temp_ids that match Neo4j *_id
+    temp_id = node.get("temp_id")
+    if _looks_like_uuid(temp_id):
+        return temp_id
+    return None
 
 @router.post("/upload")
 async def upload_case(request: Request, file: UploadFile = File(...), db: Session = Depends(get_db)):
@@ -254,11 +304,14 @@ def delete_case(case_id: str, request: Request, db: Session = Depends(get_db)):
     if not case_data:
         raise HTTPException(status_code=404, detail="Not found")
     
-    extracted = case_data.get("extracted", {})
-    nodes = extracted.get("nodes", [])
-    edges = extracted.get("edges", [])
+    # Prefer the last published snapshot for KG cleanup/audit since it reliably contains KG IDs.
+    extracted = case_data.get("kg_extracted") or case_data.get("extracted") or {}
+    nodes = extracted.get("nodes", []) or []
+    edges = extracted.get("edges", []) or []
     file_key = case_data.get("file_key")
     kg_submitted_at = case_data.get("kg_submitted_at")
+    kg_cleanup_ok = True
+    kg_cleanup_notes: List[str] = []
     
     # If case was submitted to KG, clean up Neo4j
     if kg_submitted_at is not None:
@@ -271,8 +324,13 @@ def delete_case(case_id: str, request: Request, db: Session = Depends(get_db)):
             case_unique_labels = get_case_unique_labels(schema)
             uploader = Neo4jUploader(schema, neo4j_client)
             
-            # Get all node IDs in this case for detachment
-            case_node_ids = get_case_node_ids(nodes)
+            # Get all node IDs in this case for detachment/isolation checks.
+            # Use a robust method that can fall back to UUID temp_ids when *_id props are missing.
+            case_node_ids = _get_case_node_ids_for_kg_cleanup(nodes)
+            if not case_node_ids:
+                kg_cleanup_ok = False
+                kg_cleanup_notes.append("No node IDs found in case payload; KG cleanup may be a no-op.")
+                logger.warning(f"Case {case_id} KG cleanup: case_node_ids is empty; payload may be missing *_id fields")
             
             # Process each node
             for node in nodes:
@@ -280,14 +338,7 @@ def delete_case(case_id: str, request: Request, db: Session = Depends(get_db)):
                     continue
                 
                 label = node.get("label")
-                props = node.get("properties", {})
-                node_id = None
-                
-                # Find the *_id property
-                for key, val in props.items():
-                    if key.endswith("_id") and val:
-                        node_id = str(val)
-                        break
+                node_id = _get_node_id_for_label(label, node, schema) if label else None
                 
                 if not label or not node_id:
                     continue
@@ -300,6 +351,8 @@ def delete_case(case_id: str, request: Request, db: Session = Depends(get_db)):
                         detached = uploader.detach_node_from_case(label, node_id, case_node_ids)
                         logger.info(f"Detached pre-existing node {label}:{node_id} ({detached} relationships)")
                     except Exception as e:
+                        kg_cleanup_ok = False
+                        kg_cleanup_notes.append(f"Failed to detach pre-existing node {label}:{node_id}: {e}")
                         logger.warning(f"Failed to detach pre-existing node {label}:{node_id}: {e}")
                 elif label in case_unique_labels:
                     # Case-unique node created by this case: delete from KG if it is isolated to this case.
@@ -318,6 +371,8 @@ def delete_case(case_id: str, request: Request, db: Session = Depends(get_db)):
                                 f"Case-unique node {label}:{node_id} has external connections; detached only ({detached} relationships)"
                             )
                     except Exception as e:
+                        kg_cleanup_ok = False
+                        kg_cleanup_notes.append(f"Failed to delete/detach case-unique node {label}:{node_id}: {e}")
                         logger.warning(f"Failed to delete node {label}:{node_id} from KG: {e}")
                 else:
                     # Non-case-unique node created by this case: detach from this case's nodes
@@ -325,10 +380,14 @@ def delete_case(case_id: str, request: Request, db: Session = Depends(get_db)):
                         detached = uploader.detach_node_from_case(label, node_id, case_node_ids)
                         logger.info(f"Detached non-case-unique node {label}:{node_id} ({detached} relationships)")
                     except Exception as e:
+                        kg_cleanup_ok = False
+                        kg_cleanup_notes.append(f"Failed to detach node {label}:{node_id}: {e}")
                         logger.warning(f"Failed to detach node {label}:{node_id}: {e}")
             
             logger.info(f"Cleaned up KG for case {case_id}")
         except Exception as e:
+            kg_cleanup_ok = False
+            kg_cleanup_notes.append(f"Top-level KG cleanup error: {e}")
             logger.error(f"Failed to clean up KG for case {case_id}: {e}")
             # Continue with deletion even if KG cleanup fails
     
@@ -380,7 +439,12 @@ def delete_case(case_id: str, request: Request, db: Session = Depends(get_db)):
     
     db.commit()
     logger.info(f"Case {case_id} deleted by {user_id}")
-    return {"success": True}
+    return {
+        "success": True,
+        "kgCleanupAttempted": kg_submitted_at is not None,
+        "kgCleanupOk": kg_cleanup_ok,
+        "kgCleanupNotes": kg_cleanup_notes,
+    }
 
 
 @router.get("/{case_id}/download")
