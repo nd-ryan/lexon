@@ -15,6 +15,10 @@ export default withAuth(
         if (req.nextUrl.pathname.endsWith('.pdf')) {
           return true
         }
+        // Allow image files without authentication
+        if (req.nextUrl.pathname.match(/\.(png|jpg|jpeg|gif|svg|webp|ico)$/i)) {
+          return true
+        }
         // Require authentication for all other routes
         return !!token
       },
