@@ -8,6 +8,7 @@ import { ReusedNodeIcon } from './ReusedNodeIcon'
 interface CaseSidebarProps {
   isViewMode: boolean
   setIsViewMode: (mode: boolean) => void
+  hideModeToggle?: boolean
   caseNode: any
   proceedingNodes: any[]
   forumNodes: any[]
@@ -35,6 +36,7 @@ interface CaseSidebarProps {
 export function CaseSidebar({
   isViewMode,
   setIsViewMode,
+  hideModeToggle = false,
   caseNode,
   proceedingNodes,
   forumNodes,
@@ -161,34 +163,35 @@ export function CaseSidebar({
 
   return (
     <div className="w-64 border-r bg-gray-50 flex-shrink-0 sticky top-0 max-h-screen overflow-y-auto">
-      {/* View/Edit Mode Toggle */}
-      <div className="p-4 border-b bg-white">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-medium text-gray-700">Mode:</span>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setIsViewMode(true)}
-              className={`px-3 py-1 text-xs rounded ${
-                isViewMode 
-                  ? 'bg-blue-600 text-white' 
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-            >
-              View
-            </button>
-            <button
-              onClick={() => setIsViewMode(false)}
-              className={`px-3 py-1 text-xs rounded ${
-                !isViewMode 
-                  ? 'bg-blue-600 text-white' 
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-            >
-              Edit
-            </button>
+      {!hideModeToggle && (
+        <div className="p-4 border-b bg-white">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-gray-700">Mode:</span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setIsViewMode(true)}
+                className={`px-3 py-1 text-xs rounded ${
+                  isViewMode 
+                    ? 'bg-blue-600 text-white' 
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                View
+              </button>
+              <button
+                onClick={() => setIsViewMode(false)}
+                className={`px-3 py-1 text-xs rounded ${
+                  !isViewMode 
+                    ? 'bg-blue-600 text-white' 
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                Edit
+              </button>
+            </div>
           </div>
         </div>
-      </div>
+      )}
       
       <div className="p-4 space-y-4">
         <div>

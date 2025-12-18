@@ -13,7 +13,17 @@ This document provides a centralized reference for all backend tests, organized 
 
 ## Test Files
 
-### 1. `conftest.py` - Shared Test Fixtures
+### 1. `test_neo4j_uploader_transaction_atomicity.py` - Neo4j Upload Atomicity (2 tests)
+
+**Purpose:** Ensures KG submit/upload cannot partially commit to Neo4j: all node + edge writes are wrapped in a single Neo4j transaction and rolled back on any failure.
+
+**What it covers:**
+- Edge write failure triggers rollback (no commit)
+- Successful run commits
+
+---
+
+### 2. `conftest.py` - Shared Test Fixtures
 
 **Purpose:** Provides reusable fixtures and mock objects for all test files.
 

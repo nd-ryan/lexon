@@ -127,7 +127,26 @@ Tests Next.js API routes for individual node operations with admin auth.
 
 ---
 
-## 5. `src/lib/cases/validation.test.ts` - Validation Logic (5 tests)
+## 5. `src/app/api/admin/neo4j-cases/__tests__/route.test.ts` - Neo4j Case List API Route (3 tests)
+
+Tests Next.js admin proxy route for listing cases directly from Neo4j (via FastAPI backend).
+
+- **test_returns_401_for_unauthenticated_users** - Returns 401 when session is null
+- **test_returns_401_for_non_admin_users** - Returns 401 when user email ≠ admin email
+- **test_proxies_request_to_backend_for_admin_users** - Forwards request and query params to backend
+
+---
+
+## 6. `src/app/api/admin/neo4j-cases/[caseId]/graph/__tests__/route.test.ts` - Neo4j Case Graph API Route (2 tests)
+
+Tests Next.js admin proxy route for fetching the Neo4j subgraph (nodes + relationships) for a case.
+
+- **test_returns_401_for_unauthenticated_users** - Returns 401 when session is null
+- **test_proxies_request_to_backend_for_admin_users** - Forwards request to backend including depth param
+
+---
+
+## 7. `src/lib/cases/validation.test.ts` - Validation Logic (5 tests)
 
 Tests case data validation helper functions.
 

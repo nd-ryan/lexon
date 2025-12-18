@@ -1,12 +1,15 @@
 "use client";
 import React, { useMemo, useState, useCallback } from 'react'
 import { useParams } from 'next/navigation'
+import Link from 'next/link'
+import { useSession } from 'next-auth/react'
 import type { Schema } from '@/types/case-graph'
 import { useAppStore } from '@/lib/store/appStore'
 import AddNodeModal from '@/components/cases/AddNodeModal.client'
 import SelectNodeModal from '@/components/cases/SelectNodeModal.client'
 import RelationshipAction from '@/components/cases/RelationshipAction.client'
 import { analyzeRelationship } from '@/lib/relationshipHelpers'
+import { isAdminEmail } from '@/lib/admin'
 
 // Hooks
 import { useCaseData } from '@/hooks/cases/useCaseData'
@@ -43,6 +46,7 @@ import { DocumentDownloadButton } from '@/components/cases/DocumentDownloadButto
 export default function CaseEditorPage() {
   const params = useParams()
   const id = params?.id as string
+  const { data: session } = useSession()
   const schema = useAppStore(s => s.schema as Schema | null)
   const catalogNodes = useAppStore(s => s.catalogNodes)
   
@@ -902,6 +906,14 @@ export default function CaseEditorPage() {
                 caseId={id} 
                 hasFile={Boolean(data?.file_key)} 
               />
+              {isAdminEmail(session?.user?.email) && Boolean((data as any)?.kg_submitted_at) && (
+                <Link
+                  href={`/cases/${id}/neo4j`}
+                  className="ml-2 rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
+                >
+                  Neo4j view (admin)
+                </Link>
+              )}
             </div>
             {isViewMode ? (
               <span className="px-3 py-1 bg-blue-500 text-white rounded-full text-sm font-medium">

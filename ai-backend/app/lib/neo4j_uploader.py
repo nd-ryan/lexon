@@ -234,6 +234,12 @@ class Neo4jUploader:
             
             # Convert value based on type
             converted_value = self._convert_property_value(value, prop_type)
+
+            # If conversion failed (e.g., invalid DATE like '1942-00-00'), skip setting it.
+            # This avoids generating Cypher that either errors (date()) or unintentionally
+            # overwrites/removes existing properties on MERGE.
+            if converted_value is None:
+                continue
             
             # Build SET clause
             if prop_type == "DATE" and converted_value is not None:
@@ -336,15 +342,32 @@ class Neo4jUploader:
             return None
         
         if prop_type == "DATE":
-            # Validate date format YYYY-MM-DD
-            if isinstance(value, str):
-                import re
-                if re.match(r'^\d{4}-\d{2}-\d{2}$', value):
-                    return value
-                else:
-                    logger.warning(f"Invalid date format: {value}")
-                    return None
-            return None
+            # Validate *real* date values.
+            # We see upstream sources emit placeholders like '1942-00-00' to represent unknown
+            # month/day. Neo4j's date() rejects these, so treat them as missing.
+            if not isinstance(value, str):
+                return None
+
+            import re
+            from datetime import date
+
+            if not re.match(r"^\d{4}-\d{2}-\d{2}$", value):
+                logger.warning(f"Invalid date format: {value}")
+                return None
+
+            year_s, month_s, day_s = value.split("-")
+
+            # Reject placeholder values like 00 month/day
+            if month_s == "00" or day_s == "00":
+                return None
+
+            # Validate calendar correctness (catches 13th month, Feb 30, etc.)
+            try:
+                date.fromisoformat(value)
+            except ValueError:
+                return None
+
+            return value
         
         elif prop_type == "FLOAT":
             # Convert to float
@@ -385,34 +408,37 @@ class Neo4jUploader:
         updated_nodes = copy.deepcopy(original_nodes)
         
         try:
-            # Execute node queries and capture generated UUIDs
-            for query, params, idx, label, id_prop in node_queries:
-                try:
-                    result = self.neo4j_client.execute_query(query, params)
-                    if result and len(result) > 0:
-                        generated_id = result[0].get("id")
-                        if generated_id and idx < len(updated_nodes):
-                            # Update node with generated UUID
-                            if "properties" not in updated_nodes[idx]:
-                                updated_nodes[idx]["properties"] = {}
-                            updated_nodes[idx]["properties"][id_prop] = str(generated_id)
-                            logger.debug(f"Node {label}[{idx}] assigned {id_prop}={generated_id}")
-                except Exception as e:
-                    logger.error(f"Failed to execute node query: {e}")
-                    logger.error(f"Query: {query}")
-                    logger.error(f"Params: {params}")
-                    raise
-            
-            # Execute edge queries
-            for query, params in edge_queries:
-                try:
-                    self.neo4j_client.execute_query(query, params)
-                except Exception as e:
-                    logger.error(f"Failed to execute edge query: {e}")
-                    logger.error(f"Query: {query}")
-                    logger.error(f"Params: {params}")
-                    raise
-            
+            # Execute node and edge writes inside a REAL Neo4j transaction.
+            # This guarantees atomicity: if any node/edge write fails, nothing is committed.
+            with self.neo4j_client.transaction() as tx:
+                # Execute node queries and capture generated UUIDs
+                for query, params, idx, label, id_prop in node_queries:
+                    try:
+                        result = self.neo4j_client.execute_query_in_tx(tx, query, params)
+                        if result and len(result) > 0:
+                            generated_id = result[0].get("id")
+                            if generated_id and idx < len(updated_nodes):
+                                # Update node with generated UUID
+                                if "properties" not in updated_nodes[idx]:
+                                    updated_nodes[idx]["properties"] = {}
+                                updated_nodes[idx]["properties"][id_prop] = str(generated_id)
+                                logger.debug(f"Node {label}[{idx}] assigned {id_prop}={generated_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to execute node query: {e}")
+                        logger.error(f"Query: {query}")
+                        logger.error(f"Params: {params}")
+                        raise
+
+                # Execute edge queries
+                for query, params in edge_queries:
+                    try:
+                        self.neo4j_client.execute_query_in_tx(tx, query, params)
+                    except Exception as e:
+                        logger.error(f"Failed to execute edge query: {e}")
+                        logger.error(f"Query: {query}")
+                        logger.error(f"Params: {params}")
+                        raise
+
             logger.info("Transaction completed successfully")
             return updated_nodes, original_edges
             

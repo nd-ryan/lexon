@@ -5,6 +5,7 @@ from app.routes.cases import router as cases_router
 from app.routes.kg import router as kg_router
 from app.routes.graph_events import router as graph_events_router
 from app.routes.shared_nodes import router as shared_nodes_router
+from app.routes.neo4j_cases import router as neo4j_cases_router
 from app.routes.query import router as query_router
 from app.routes.chat import router as chat_router
 from app.routes.eval import router as eval_router
@@ -67,6 +68,7 @@ app.include_router(cases_router, prefix="/api/ai", tags=["Cases"])
 app.include_router(kg_router, prefix="/api/ai", tags=["KG"])
 app.include_router(graph_events_router, prefix="/api/ai", tags=["Graph Events"])
 app.include_router(shared_nodes_router, prefix="/api/ai", tags=["Shared Nodes"])
+app.include_router(neo4j_cases_router, prefix="/api/ai", tags=["Neo4j Cases"])
 app.include_router(query_router, prefix="/api/v1", tags=["Query"])
 app.include_router(chat_router, prefix="/api/v1", tags=["Chat"])
 app.include_router(eval_router, prefix="/api/v1", tags=["Evaluation"])
