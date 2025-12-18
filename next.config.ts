@@ -17,6 +17,16 @@ const nextConfig: NextConfig = {
         destination: '/whitepaper.pdf',
         permanent: true,
       },
+      {
+        source: "/favicon.ico",
+        destination: "/dark-favicon.svg",
+        permanent: true,
+      },
+      {
+        source: "/favicon.svg",
+        destination: "/dark-favicon.svg",
+        permanent: true,
+      },
     ];
   },
 };

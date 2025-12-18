@@ -217,7 +217,7 @@ export default function Home() {
         <section>
           <div className="brand-row">
             <Image
-              src="/logo.png"
+              src="/logo.svg"
               alt="Lexon logo"
               width={96}
               height={96}

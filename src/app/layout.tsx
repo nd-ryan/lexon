@@ -18,8 +18,11 @@ export const metadata: Metadata = {
   title: "Lexon",
   description: "Lexon is a platform for legal research and analysis.",
   icons: {
-    icon: "/logo.png",
-    apple: "/logo.png",
+    icon: [
+      { url: "/dark-favicon.svg", media: "(prefers-color-scheme: light)" },
+      { url: "/dark-favicon.svg", media: "(prefers-color-scheme: dark)" },
+    ],
+    apple: "/logo.svg",
   },
 };
 
