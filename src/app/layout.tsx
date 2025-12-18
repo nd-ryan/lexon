@@ -19,10 +19,10 @@ export const metadata: Metadata = {
   description: "Lexon is a platform for legal research and analysis.",
   icons: {
     icon: [
-      { url: "/dark-favicon.svg", media: "(prefers-color-scheme: light)" },
-      { url: "/dark-favicon.svg", media: "(prefers-color-scheme: dark)" },
+      { url: "/favicon.ico", sizes: "48x48" },
+      { url: "/dark-favicon.svg", type: "image/svg+xml" },
     ],
-    apple: "/logo.svg",
+    apple: "/apple-touch-icon.png",
   },
 };
 
