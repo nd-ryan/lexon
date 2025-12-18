@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import Button from '@/components/ui/button'
+import { isAdminEmail } from '@/lib/admin'
 
 interface GraphEvent {
   id: string
@@ -37,15 +38,15 @@ export default function EventLogsPage() {
   const [userFilter, setUserFilter] = useState<string>('')
   const [limit, setLimit] = useState(100)
 
-  const adminEmail = process.env.NEXT_PUBLIC_ADMIN_EMAIL
+  const isAdmin = isAdminEmail(session?.user?.email)
 
   // Protect the page
   useEffect(() => {
     if (sessionStatus === 'loading') return
-    if (!session || !adminEmail || session.user?.email !== adminEmail) {
+    if (!session || !isAdmin) {
       router.replace('/cases')
     }
-  }, [session, sessionStatus, router, adminEmail])
+  }, [session, sessionStatus, router, isAdmin])
 
   const fetchStats = useCallback(async () => {
     try {

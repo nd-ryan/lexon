@@ -342,7 +342,7 @@
 - label: Doctrine
   instructions: |
     A legal doctrine is an established principle, test, or rule of law that a court applies to decide an issue (e.g., 'Business Judgment Rule,' 'Daubert Standard,' 'Respondeat Superior'). This is the legal tool the court uses for its analysis.
-    Use the doctrine name and give a short, jurisdiction-neutral description.
+    Use the doctrine name and give a short, jurisdiction-neutral description. Do NOT create generic “standards” doctrines (e.g., “legal sufficiency of the evidence,” “burden of proof,” “credibility,” “elements of a claim”) unless the opinion explicitly names and applies a specific test/standard (e.g., “Daubert,” “Business Judgment Rule,” “summary judgment standard,” “Rule 50/JMOL standard”).
   examples:
     - name: Acquiring-Acquired Mergers
       description: >

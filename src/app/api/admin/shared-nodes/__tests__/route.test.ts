@@ -1,9 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextRequest } from 'next/server'
-
-// Mock fetch
-const mockFetch = vi.fn()
-global.fetch = mockFetch
+import { http, HttpResponse } from 'msw'
+import { server } from '@/test/server'
 
 // Mock next-auth
 vi.mock('next-auth/next', () => ({
@@ -25,6 +23,7 @@ describe('GET /api/admin/shared-nodes', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     process.env.NEXT_PUBLIC_ADMIN_EMAIL = 'admin@example.com'
+    delete process.env.NEXT_PUBLIC_ADMIN_EMAILS
     process.env.AI_BACKEND_URL = 'http://localhost:8000'
     process.env.FASTAPI_API_KEY = 'test-api-key'
   })
@@ -56,24 +55,41 @@ describe('GET /api/admin/shared-nodes', () => {
       user: { email: 'admin@example.com' },
     } as any)
 
-    mockFetch.mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: () => Promise.resolve({ success: true, nodes: [] }),
-    } as any)
+    const backendSpy = vi.fn()
+    server.use(
+      http.get('http://localhost:8000/api/ai/shared-nodes', ({ request }) => {
+        backendSpy(request)
+        return HttpResponse.json({ success: true, nodes: [] }, { status: 200 })
+      })
+    )
 
     const request = new NextRequest('http://localhost:3000/api/admin/shared-nodes?label=Party')
     const response = await GET(request)
 
     expect(response.status).toBe(200)
-    expect(mockFetch).toHaveBeenCalledWith(
-      expect.stringContaining('/api/ai/shared-nodes'),
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          'X-API-Key': 'test-api-key',
-        }),
+    expect(backendSpy).toHaveBeenCalledTimes(1)
+    const intercepted = backendSpy.mock.calls[0][0] as Request
+    expect(intercepted.headers.get('X-API-Key')).toBe('test-api-key')
+  })
+
+  it('allows any email included in NEXT_PUBLIC_ADMIN_EMAILS', async () => {
+    delete process.env.NEXT_PUBLIC_ADMIN_EMAIL
+    process.env.NEXT_PUBLIC_ADMIN_EMAILS = 'admin@example.com,other@example.com'
+
+    mockedGetServerSession.mockResolvedValue({
+      user: { email: 'other@example.com' },
+    } as any)
+
+    server.use(
+      http.get('http://localhost:8000/api/ai/shared-nodes', () => {
+        return HttpResponse.json({ success: true, nodes: [] }, { status: 200 })
       })
     )
+
+    const request = new NextRequest('http://localhost:3000/api/admin/shared-nodes?label=Party')
+    const response = await GET(request)
+
+    expect(response.status).toBe(200)
   })
 
   it('forwards query parameters to backend', async () => {
@@ -81,25 +97,25 @@ describe('GET /api/admin/shared-nodes', () => {
       user: { email: 'admin@example.com' },
     } as any)
 
-    mockFetch.mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: () => Promise.resolve({ success: true, nodes: [] }),
-    } as any)
+    const backendSpy = vi.fn()
+    server.use(
+      http.get('http://localhost:8000/api/ai/shared-nodes', ({ request }) => {
+        backendSpy(request)
+        return HttpResponse.json({ success: true, nodes: [] }, { status: 200 })
+      })
+    )
 
     const request = new NextRequest(
       'http://localhost:3000/api/admin/shared-nodes?label=Party&orphaned_only=true&limit=50'
     )
     await GET(request)
 
-    expect(mockFetch).toHaveBeenCalledWith(
-      expect.stringContaining('label=Party'),
-      expect.any(Object)
-    )
-    expect(mockFetch).toHaveBeenCalledWith(
-      expect.stringContaining('orphaned_only=true'),
-      expect.any(Object)
-    )
+    expect(backendSpy).toHaveBeenCalledTimes(1)
+    const intercepted = backendSpy.mock.calls[0][0] as Request
+    const url = new URL(intercepted.url)
+    expect(url.searchParams.get('label')).toBe('Party')
+    expect(url.searchParams.get('orphaned_only')).toBe('true')
+    expect(url.searchParams.get('limit')).toBe('50')
   })
 
   it('returns 500 on fetch error', async () => {
@@ -107,7 +123,11 @@ describe('GET /api/admin/shared-nodes', () => {
       user: { email: 'admin@example.com' },
     } as any)
 
-    mockFetch.mockRejectedValue(new Error('Network error'))
+    server.use(
+      http.get('http://localhost:8000/api/ai/shared-nodes', () => {
+        return HttpResponse.json({ error: 'Network error' }, { status: 500 })
+      })
+    )
 
     const request = new NextRequest('http://localhost:3000/api/admin/shared-nodes')
     const response = await GET(request)

@@ -1,15 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '@/lib/auth'
-
-const ADMIN_EMAIL = process.env.NEXT_PUBLIC_ADMIN_EMAIL
+import { isAdminEmail } from '@/lib/admin'
 
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ label: string; nodeId: string }> }
 ) {
   const session = await getServerSession(authOptions)
-  if (!session?.user?.email || session.user.email !== ADMIN_EMAIL) {
+  if (!isAdminEmail(session?.user?.email)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
@@ -34,7 +33,7 @@ export async function PUT(
   { params }: { params: Promise<{ label: string; nodeId: string }> }
 ) {
   const session = await getServerSession(authOptions)
-  if (!session?.user?.email || session.user.email !== ADMIN_EMAIL) {
+  if (!isAdminEmail(session?.user?.email)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
@@ -66,7 +65,7 @@ export async function DELETE(
   { params }: { params: Promise<{ label: string; nodeId: string }> }
 ) {
   const session = await getServerSession(authOptions)
-  if (!session?.user?.email || session.user.email !== ADMIN_EMAIL) {
+  if (!isAdminEmail(session?.user?.email)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 

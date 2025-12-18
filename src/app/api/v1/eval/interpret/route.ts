@@ -1,13 +1,12 @@
 import { getServerSession } from 'next-auth/next'
 import { NextRequest, NextResponse } from "next/server";
 import { authOptions } from "@/lib/auth";
+import { isAdminEmail } from '@/lib/admin';
 
 export async function POST(request: NextRequest) {
   // Check authentication - only admin users can access
   const session = await getServerSession(authOptions);
-  const adminEmail = process.env.NEXT_PUBLIC_ADMIN_EMAIL;
-  
-  if (!session || !session.user || !adminEmail || session.user.email !== adminEmail) {
+  if (!isAdminEmail(session?.user?.email)) {
     return NextResponse.json(
       { detail: "Unauthorized. Admin access required." },
       { status: 401 }

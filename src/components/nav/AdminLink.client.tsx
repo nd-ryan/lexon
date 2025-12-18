@@ -3,13 +3,12 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { useSession } from 'next-auth/react'
 import Link from 'next/link'
+import { isAdminEmail } from '@/lib/admin'
 
 export default function AdminLink() {
   const { data: session } = useSession()
   const [isOpen, setIsOpen] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
-  
-  const adminEmail = process.env.NEXT_PUBLIC_ADMIN_EMAIL
   
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -21,7 +20,7 @@ export default function AdminLink() {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
   
-  if (!session || !adminEmail || session.user?.email !== adminEmail) {
+  if (!session || !isAdminEmail(session.user?.email)) {
     return null
   }
   

@@ -32,6 +32,18 @@ The backend first computes which cases reference this shared node (from Postgres
 - **If referenced by 0 cases (orphaned)**: **delete** the node from Neo4j.
 - **`min_per_case` constraint**: can block detaching from some cases; supports `force_partial=true` to detach only where safe.
 
+### Postgres behavior (current)
+When the node is detached from a case, the backend also updates the case’s Postgres JSON to remove:
+
+- the matching node in `cases.extracted.nodes` (when present), and
+- any incident edges in `cases.extracted.edges` that reference the node (by `temp_id` for normal nodes, or by UUID for catalog references).
+
+If the case has a last-published snapshot (`cases.kg_extracted`), the backend applies the same removal there as well to keep the published baseline consistent with admin KG mutations.
+
+When `kg_extracted` is updated by an admin detachment, the backend also updates `kg_submitted_at/by` for that case so the timestamp-based `kg_diverged` flag stays aligned.
+
+This makes the detachment “real” in the **authoritative case membership** model (which is derived from `cases.extracted`).
+
 ### Implementation notes
 - Detachment/deletion uses the same Neo4j primitives as KG flows via `Neo4jUploader`:
   - `detach_node_from_case(...)`
@@ -157,4 +169,4 @@ The backend compares the case graph previously stored in Postgres vs the newly p
 | Delete case | Per-case | Detach (preserve) when KG-submitted | Delete if isolated; else detach | Neo4j cleanup runs only when `kg_submitted_at` is set |
 | Editor delete + Submit | Per-case | Detach (preserve) | Delete if isolated; else detach | Save is Postgres-only; Submit performs Neo4j sync |
 
-Last Updated: December 16, 2025
+Last Updated: December 17, 2025

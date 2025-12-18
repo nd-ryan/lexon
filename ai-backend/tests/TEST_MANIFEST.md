@@ -125,6 +125,7 @@ Tests `DELETE /api/ai/shared-nodes/{label}/{node_id}` for node deletion with cat
 - **test_non_catalog_node_deleted_after_detachment** - Non-catalog shared nodes are detached from cases and preserved in KG ✨ *(test name is misleading)*
 - **test_min_per_case_error_prevents_any_deletion** - No deletion occurs when min_per_case violated ✨
 - **test_detachment_removes_only_case_relationships** - Detachment only removes relationships to specific case nodes ✨
+- **(behavior note)** - Detachment also removes the node reference from Postgres `cases.extracted` (authoritative case membership) ✨
 
 ---
 

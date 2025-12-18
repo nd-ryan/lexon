@@ -2,7 +2,7 @@
 
 import json
 import logging
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 from fastapi import APIRouter, HTTPException, Depends, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -13,6 +13,7 @@ from app.lib.neo4j_uploader import Neo4jUploader
 from app.lib.logging_config import setup_logger
 from app.lib.db import get_db
 from app.lib.graph_events_repo import graph_events_repo, compute_content_hash
+from app.lib.case_repo import case_repo
 
 
 logger = setup_logger("shared-nodes")
@@ -122,7 +123,7 @@ def find_cases_containing_node(db: Session, node_id: str, node_label: str) -> Li
             """
 
     query = text("""
-        SELECT id, filename, extracted
+        SELECT id, filename, extracted, kg_extracted
         FROM cases
         WHERE extracted IS NOT NULL
           AND EXISTS (
@@ -177,6 +178,7 @@ def find_cases_containing_node(db: Session, node_id: str, node_label: str) -> Li
             "citation": citation,
             "labelCount": label_count,
             "extracted": extracted,  # Keep for later use in detachment
+            "kg_extracted": row.kg_extracted,  # Keep for published snapshot consistency updates
         })
     
     return cases
@@ -193,6 +195,80 @@ def get_case_node_ids(nodes: List[Dict]) -> Set[str]:
             if key.endswith("_id") and val:
                 ids.add(str(val))
     return ids
+
+
+def remove_node_from_extracted(
+    extracted: Dict[str, Any],
+    node_label: str,
+    node_id: str,
+) -> Tuple[Dict[str, Any], int, int]:
+    """Remove a shared node reference from a case's extracted payload.
+
+    This mutates *Postgres case data* (cases.extracted) semantics:
+    - Remove the node from extracted.nodes if present (match by label + *_id property)
+    - Remove any incident edges from extracted.edges that reference:
+      - the node's temp_id(s) (typical for non-catalog nodes), or
+      - the node_id directly (typical for catalog node references)
+
+    Returns:
+      (new_extracted, removed_nodes_count, removed_edges_count)
+    """
+    if not isinstance(extracted, dict):
+        return extracted, 0, 0
+
+    nodes = extracted.get("nodes") or []
+    edges = extracted.get("edges") or []
+    if not isinstance(nodes, list):
+        nodes = []
+    if not isinstance(edges, list):
+        edges = []
+
+    id_prop = get_id_property(node_label)
+    target_edge_ids: Set[str] = {str(node_id)}
+
+    removed_nodes = 0
+    new_nodes: List[Any] = []
+    for n in nodes:
+        if not isinstance(n, dict):
+            new_nodes.append(n)
+            continue
+        if n.get("label") != node_label:
+            new_nodes.append(n)
+            continue
+        props = n.get("properties") or {}
+        if not isinstance(props, dict):
+            new_nodes.append(n)
+            continue
+        if str(props.get(id_prop, "")) != str(node_id):
+            new_nodes.append(n)
+            continue
+
+        removed_nodes += 1
+        tid = n.get("temp_id")
+        if isinstance(tid, str) and tid:
+            target_edge_ids.add(tid)
+        continue
+
+    removed_edges = 0
+    new_edges: List[Any] = []
+    for e in edges:
+        if not isinstance(e, dict):
+            new_edges.append(e)
+            continue
+        frm = e.get("from") or e.get("from_")
+        to = e.get("to")
+        if (isinstance(frm, str) and frm in target_edge_ids) or (isinstance(to, str) and to in target_edge_ids):
+            removed_edges += 1
+            continue
+        new_edges.append(e)
+
+    if removed_nodes == 0 and removed_edges == 0:
+        return extracted, 0, 0
+
+    new_extracted = dict(extracted)
+    new_extracted["nodes"] = new_nodes
+    new_extracted["edges"] = new_edges
+    return new_extracted, removed_nodes, removed_edges
 
 
 def get_case_connection_counts_for_nodes(
@@ -560,6 +636,7 @@ def delete_shared_node(
             "case_name": case["case_name"],
             "currentCount": case["labelCount"],
             "extracted": case["extracted"],  # Keep for detachment
+            "kg_extracted": case.get("kg_extracted"),  # Keep published snapshot in sync when present
         }
         
         # If deleting this node would leave fewer than min_per_case
@@ -593,6 +670,29 @@ def delete_shared_node(
 
                     # Detach relationships between the shared node and nodes that belong to this case
                     deleted_count = uploader.detach_node_from_case(label, node_id, case_node_ids)
+                    # Remove the node reference from Postgres extracted data (authoritative case membership)
+                    updated_extracted, removed_nodes, removed_edges = remove_node_from_extracted(
+                        case.get("extracted") or {},
+                        label,
+                        node_id,
+                    )
+                    if removed_nodes > 0 or removed_edges > 0:
+                        # Persist updated extracted back to Postgres
+                        case_repo.update_case(conn, case["case_id"], updated_extracted, user_id=user_id)
+
+                        # Keep the last-published snapshot consistent (used for diffing / KG cleanup elsewhere).
+                        # Only update if it exists; legacy/unpublished cases may have NULL kg_extracted.
+                        current_kg_extracted = case.get("kg_extracted")
+                        updated_kg_extracted, kg_removed_nodes, kg_removed_edges = remove_node_from_extracted(
+                            current_kg_extracted or {},
+                            label,
+                            node_id,
+                        )
+                        if current_kg_extracted is not None and (kg_removed_nodes > 0 or kg_removed_edges > 0):
+                            case_repo.set_kg_extracted(conn, case["case_id"], updated_kg_extracted)
+                            # This admin action mutates the published graph; keep KG submission metadata aligned
+                            # so `kg_diverged` (timestamp-based) doesn't incorrectly flag divergence.
+                            case_repo.set_kg_submitted(conn, case["case_id"], user_id)
                     
                     # Log delete event for this case (node detached from case)
                     try:
@@ -614,6 +714,8 @@ def delete_shared_node(
                         "case_name": case["case_name"],
                         "status": "detached",
                         "relationshipsRemoved": deleted_count,
+                        "postgresNodesRemoved": removed_nodes,
+                        "postgresEdgesRemoved": removed_edges,
                     })
                     logger.info(f"Detached {label}:{node_id} from case {case['case_id']} ({deleted_count} relationships)")
                 except Exception as e:
@@ -654,6 +756,25 @@ def delete_shared_node(
 
                     # Detach relationships between the shared node and nodes that belong to this case
                     deleted_count = uploader.detach_node_from_case(label, node_id, case_node_ids)
+                    # Remove the node reference from Postgres extracted data (authoritative case membership)
+                    updated_extracted, removed_nodes, removed_edges = remove_node_from_extracted(
+                        case.get("extracted") or {},
+                        label,
+                        node_id,
+                    )
+                    if removed_nodes > 0 or removed_edges > 0:
+                        case_repo.update_case(conn, case["case_id"], updated_extracted, user_id=user_id)
+
+                        # Keep last-published snapshot consistent with out-of-band admin graph mutations.
+                        current_kg_extracted = case.get("kg_extracted")
+                        updated_kg_extracted, kg_removed_nodes, kg_removed_edges = remove_node_from_extracted(
+                            current_kg_extracted or {},
+                            label,
+                            node_id,
+                        )
+                        if current_kg_extracted is not None and (kg_removed_nodes > 0 or kg_removed_edges > 0):
+                            case_repo.set_kg_extracted(conn, case["case_id"], updated_kg_extracted)
+                            case_repo.set_kg_submitted(conn, case["case_id"], user_id)
                     
                     # Log delete event for this case (node detached from case)
                     try:
@@ -675,6 +796,8 @@ def delete_shared_node(
                         "case_name": case["case_name"],
                         "status": "detached",
                         "relationshipsRemoved": deleted_count,
+                        "postgresNodesRemoved": removed_nodes,
+                        "postgresEdgesRemoved": removed_edges,
                     })
                     logger.info(f"Detached {label}:{node_id} from case {case['case_id']} ({deleted_count} relationships)")
                 except Exception as e:

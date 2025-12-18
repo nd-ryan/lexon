@@ -1,9 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextRequest } from 'next/server'
-
-// Mock fetch
-const mockFetch = vi.fn()
-global.fetch = mockFetch
+import { http, HttpResponse } from 'msw'
+import { server } from '@/test/server'
 
 // Mock next-auth
 vi.mock('next-auth/next', () => ({
@@ -57,20 +55,21 @@ describe('GET /api/admin/shared-nodes/[label]/[nodeId]', () => {
       user: { email: 'admin@example.com' },
     } as any)
 
-    mockFetch.mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: () => Promise.resolve({ success: true, node: {} }),
-    } as any)
+    const backendSpy = vi.fn()
+    server.use(
+      http.get('http://localhost:8000/api/ai/shared-nodes/:label/:nodeId', ({ request }) => {
+        backendSpy(request)
+        return HttpResponse.json({ success: true, node: {} }, { status: 200 })
+      })
+    )
 
     const request = new NextRequest('http://localhost:3000/api/admin/shared-nodes/Party/p1')
     const response = await GET(request, { params: createParams('Party', 'p1') })
 
     expect(response.status).toBe(200)
-    expect(mockFetch).toHaveBeenCalledWith(
-      expect.stringContaining('/api/ai/shared-nodes/Party/p1'),
-      expect.any(Object)
-    )
+    expect(backendSpy).toHaveBeenCalledTimes(1)
+    const intercepted = backendSpy.mock.calls[0][0] as Request
+    expect(intercepted.headers.get('X-API-Key')).toBe('test-api-key')
   })
 })
 
@@ -99,11 +98,13 @@ describe('PUT /api/admin/shared-nodes/[label]/[nodeId]', () => {
       user: { email: 'admin@example.com', id: 'admin-user-id' },
     } as any)
 
-    mockFetch.mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: () => Promise.resolve({ success: true }),
-    } as any)
+    const backendSpy = vi.fn()
+    server.use(
+      http.put('http://localhost:8000/api/ai/shared-nodes/:label/:nodeId', async ({ request }) => {
+        backendSpy(request)
+        return HttpResponse.json({ success: true }, { status: 200 })
+      })
+    )
 
     const request = new NextRequest('http://localhost:3000/api/admin/shared-nodes/Party/p1', {
       method: 'PUT',
@@ -111,14 +112,9 @@ describe('PUT /api/admin/shared-nodes/[label]/[nodeId]', () => {
     })
     await PUT(request, { params: createParams('Party', 'p1') })
 
-    expect(mockFetch).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          'X-User-Id': expect.stringMatching(/admin/),
-        }),
-      })
-    )
+    expect(backendSpy).toHaveBeenCalledTimes(1)
+    const intercepted = backendSpy.mock.calls[0][0] as Request
+    expect(intercepted.headers.get('X-User-Id')).toMatch(/admin/)
   })
 
   it('forwards request body to backend', async () => {
@@ -126,11 +122,13 @@ describe('PUT /api/admin/shared-nodes/[label]/[nodeId]', () => {
       user: { email: 'admin@example.com', id: 'admin-id' },
     } as any)
 
-    mockFetch.mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: () => Promise.resolve({ success: true }),
-    } as any)
+    const backendSpy = vi.fn()
+    server.use(
+      http.put('http://localhost:8000/api/ai/shared-nodes/:label/:nodeId', async ({ request }) => {
+        backendSpy(request)
+        return HttpResponse.json({ success: true }, { status: 200 })
+      })
+    )
 
     const body = { properties: { name: 'Updated Name' } }
     const request = new NextRequest('http://localhost:3000/api/admin/shared-nodes/Party/p1', {
@@ -139,13 +137,9 @@ describe('PUT /api/admin/shared-nodes/[label]/[nodeId]', () => {
     })
     await PUT(request, { params: createParams('Party', 'p1') })
 
-    expect(mockFetch).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        method: 'PUT',
-        body: JSON.stringify(body),
-      })
-    )
+    expect(backendSpy).toHaveBeenCalledTimes(1)
+    const intercepted = backendSpy.mock.calls[0][0] as Request
+    await expect(intercepted.json()).resolves.toEqual(body)
   })
 })
 
@@ -173,25 +167,22 @@ describe('DELETE /api/admin/shared-nodes/[label]/[nodeId]', () => {
       user: { email: 'admin@example.com', id: 'admin-user-id' },
     } as any)
 
-    mockFetch.mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: () => Promise.resolve({ success: true }),
-    } as any)
+    const backendSpy = vi.fn()
+    server.use(
+      http.delete('http://localhost:8000/api/ai/shared-nodes/:label/:nodeId', ({ request }) => {
+        backendSpy(request)
+        return HttpResponse.json({ success: true }, { status: 200 })
+      })
+    )
 
     const request = new NextRequest('http://localhost:3000/api/admin/shared-nodes/Party/p1', {
       method: 'DELETE',
     })
     await DELETE(request, { params: createParams('Party', 'p1') })
 
-    expect(mockFetch).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          'X-User-Id': expect.stringMatching(/admin/),
-        }),
-      })
-    )
+    expect(backendSpy).toHaveBeenCalledTimes(1)
+    const intercepted = backendSpy.mock.calls[0][0] as Request
+    expect(intercepted.headers.get('X-User-Id')).toMatch(/admin/)
   })
 
   it('forwards force_partial query parameter', async () => {
@@ -199,11 +190,13 @@ describe('DELETE /api/admin/shared-nodes/[label]/[nodeId]', () => {
       user: { email: 'admin@example.com', id: 'admin-id' },
     } as any)
 
-    mockFetch.mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: () => Promise.resolve({ success: true }),
-    } as any)
+    const backendSpy = vi.fn()
+    server.use(
+      http.delete('http://localhost:8000/api/ai/shared-nodes/:label/:nodeId', ({ request }) => {
+        backendSpy(request)
+        return HttpResponse.json({ success: true }, { status: 200 })
+      })
+    )
 
     const request = new NextRequest(
       'http://localhost:3000/api/admin/shared-nodes/Party/p1?force_partial=true',
@@ -211,10 +204,9 @@ describe('DELETE /api/admin/shared-nodes/[label]/[nodeId]', () => {
     )
     await DELETE(request, { params: createParams('Party', 'p1') })
 
-    expect(mockFetch).toHaveBeenCalledWith(
-      expect.stringContaining('force_partial=true'),
-      expect.any(Object)
-    )
+    expect(backendSpy).toHaveBeenCalledTimes(1)
+    const intercepted = backendSpy.mock.calls[0][0] as Request
+    expect(new URL(intercepted.url).searchParams.get('force_partial')).toBe('true')
   })
 
   it('returns backend response status', async () => {
@@ -222,11 +214,11 @@ describe('DELETE /api/admin/shared-nodes/[label]/[nodeId]', () => {
       user: { email: 'admin@example.com', id: 'admin-id' },
     } as any)
 
-    mockFetch.mockResolvedValue({
-      ok: false,
-      status: 404,
-      json: () => Promise.resolve({ error: 'Node not found' }),
-    } as any)
+    server.use(
+      http.delete('http://localhost:8000/api/ai/shared-nodes/:label/:nodeId', () => {
+        return HttpResponse.json({ error: 'Node not found' }, { status: 404 })
+      })
+    )
 
     const request = new NextRequest('http://localhost:3000/api/admin/shared-nodes/Party/p1', {
       method: 'DELETE',
@@ -241,7 +233,11 @@ describe('DELETE /api/admin/shared-nodes/[label]/[nodeId]', () => {
       user: { email: 'admin@example.com', id: 'admin-id' },
     } as any)
 
-    mockFetch.mockRejectedValue(new Error('Network error'))
+    server.use(
+      http.delete('http://localhost:8000/api/ai/shared-nodes/:label/:nodeId', () => {
+        return HttpResponse.json({ error: 'Network error' }, { status: 500 })
+      })
+    )
 
     const request = new NextRequest('http://localhost:3000/api/admin/shared-nodes/Party/p1', {
       method: 'DELETE',

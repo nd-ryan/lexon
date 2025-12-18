@@ -165,6 +165,7 @@ class TestFindCasesContainingNode:
             MagicMock(
                 id="case-uuid-1",
                 filename="test.pdf",
+                kg_extracted=None,
                 extracted={
                     "nodes": [
                         {"label": "Case", "properties": {"name": "Smith v. Jones", "citation": "123 F.3d"}},
@@ -190,6 +191,7 @@ class TestFindCasesContainingNode:
             MagicMock(
                 id="case-uuid-1",
                 filename="important_case.pdf",
+                kg_extracted=None,
                 extracted={
                     "nodes": [
                         {"label": "Party", "properties": {"party_id": "p1", "name": "Smith"}},
@@ -213,6 +215,7 @@ class TestFindCasesContainingNode:
             MagicMock(
                 id="case-uuid-1",
                 filename="test.pdf",
+                kg_extracted=None,
                 extracted={
                     "nodes": [
                         {"label": "Party", "properties": {"party_id": "p1"}},
@@ -273,6 +276,50 @@ class TestGetCaseNodeIds:
         
         ids = get_case_node_ids(nodes)
         assert ids == {"p1"}
+
+
+class TestRemoveNodeFromExtracted:
+    """Tests for remove_node_from_extracted() helper function."""
+
+    def test_removes_node_by_label_and_id_prop_and_incident_edges_by_temp_id(self):
+        from app.routes.shared_nodes import remove_node_from_extracted
+
+        extracted = {
+            "nodes": [
+                {"label": "Case", "temp_id": "n0", "properties": {"case_id": "c1"}},
+                {"label": "Party", "temp_id": "n1", "properties": {"party_id": "p1", "name": "A"}},
+                {"label": "Party", "temp_id": "n2", "properties": {"party_id": "p2", "name": "B"}},
+            ],
+            "edges": [
+                {"from": "n0", "to": "n1", "label": "HAS_PARTY", "properties": {}},
+                {"from": "n2", "to": "n0", "label": "HAS_PARTY", "properties": {}},
+            ],
+        }
+
+        updated, removed_nodes, removed_edges = remove_node_from_extracted(extracted, "Party", "p1")
+        assert removed_nodes == 1
+        assert removed_edges == 1
+        assert all(n.get("properties", {}).get("party_id") != "p1" for n in updated.get("nodes", []))
+        assert all(e.get("to") != "n1" and e.get("from") != "n1" for e in updated.get("edges", []))
+
+    def test_removes_catalog_reference_edges_by_node_id_when_node_absent(self):
+        from app.routes.shared_nodes import remove_node_from_extracted
+
+        # Catalog nodes (e.g. Domain) are stripped from extracted.nodes, but edges can reference their UUID directly.
+        domain_id = "11111111-1111-1111-1111-111111111111"
+        extracted = {
+            "nodes": [
+                {"label": "Case", "temp_id": "n0", "properties": {"case_id": "c1"}},
+            ],
+            "edges": [
+                {"from": domain_id, "to": "n0", "label": "CONTAINS", "properties": {}},
+            ],
+        }
+
+        updated, removed_nodes, removed_edges = remove_node_from_extracted(extracted, "Domain", domain_id)
+        assert removed_nodes == 0
+        assert removed_edges == 1
+        assert updated["edges"] == []
 
 
 # ============================================================================
@@ -592,11 +639,42 @@ class TestDeleteSharedNodeEndpoint:
         )
         
         # One case can delete (2 parties), one cannot (1 party)
+        updated_cases = []
+        def mock_update_case(conn, case_id, payload, user_id):
+            updated_cases.append({"case_id": case_id, "payload": payload, "user_id": user_id})
+            return {"id": case_id}
+        monkeypatch.setattr("app.routes.shared_nodes.case_repo.update_case", mock_update_case)
+
         monkeypatch.setattr(
             "app.routes.shared_nodes.find_cases_containing_node",
             lambda db, nid, label: [
-                {"case_id": "case-1", "case_name": "Case 1", "labelCount": 1, "extracted": {"nodes": []}},
-                {"case_id": "case-2", "case_name": "Case 2", "labelCount": 2, "extracted": {"nodes": []}},
+                {
+                    "case_id": "11111111-1111-1111-1111-111111111111",
+                    "case_name": "Case 1",
+                    "labelCount": 1,
+                    "extracted": {
+                        "nodes": [
+                            {"label": "Party", "temp_id": "n1", "properties": {"party_id": "p1"}},
+                        ],
+                        "edges": [],
+                    },
+                },
+                {
+                    "case_id": "22222222-2222-2222-2222-222222222222",
+                    "case_name": "Case 2",
+                    "labelCount": 2,
+                    "extracted": {
+                        "nodes": [
+                            {"label": "Case", "temp_id": "n0", "properties": {"case_id": "c1"}},
+                            {"label": "Party", "temp_id": "n1", "properties": {"party_id": "p1"}},
+                            {"label": "Party", "temp_id": "n2", "properties": {"party_id": "p2"}},
+                        ],
+                        "edges": [
+                            {"from": "n0", "to": "n1", "label": "HAS_PARTY", "properties": {}},
+                            {"from": "n2", "to": "n0", "label": "HAS_PARTY", "properties": {}},
+                        ],
+                    },
+                },
             ]
         )
         
@@ -616,6 +694,12 @@ class TestDeleteSharedNodeEndpoint:
         assert data["success"] is True
         assert data["partial"] is True
         assert "remainingCases" in data
+        # Should persist extracted update only for the deletable case (Case 2)
+        assert len(updated_cases) == 1
+        assert updated_cases[0]["case_id"] == "22222222-2222-2222-2222-222222222222"
+        updated_payload = updated_cases[0]["payload"]
+        assert all(n.get("properties", {}).get("party_id") != "p1" for n in updated_payload.get("nodes", []))
+        assert all(e.get("to") != "n1" and e.get("from") != "n1" for e in updated_payload.get("edges", []))
     
     @pytest.mark.asyncio
     async def test_logs_delete_events(self, async_client, api_key_header, user_id_header, monkeypatch, sample_schema):
@@ -627,10 +711,27 @@ class TestDeleteSharedNodeEndpoint:
             lambda q, p=None: [{"n": {"doctrine_id": "d1"}, "deleted": 1}]
         )
         
+        updated_cases = []
+        monkeypatch.setattr(
+            "app.routes.shared_nodes.case_repo.update_case",
+            lambda conn, case_id, payload, user_id: updated_cases.append({"case_id": case_id, "payload": payload}) or {"id": case_id},
+        )
+
         monkeypatch.setattr(
             "app.routes.shared_nodes.find_cases_containing_node",
             lambda db, nid, label: [
-                {"case_id": "case-1", "case_name": "Case 1", "labelCount": 2, "extracted": {}},
+                {
+                    "case_id": "33333333-3333-3333-3333-333333333333",
+                    "case_name": "Case 1",
+                    "labelCount": 2,
+                    "extracted": {
+                        "nodes": [
+                            {"label": "Case", "temp_id": "n0", "properties": {"case_id": "c1"}},
+                            {"label": "Doctrine", "temp_id": "n1", "properties": {"doctrine_id": "d1"}},
+                        ],
+                        "edges": [{"from": "n0", "to": "n1", "label": "HAS_DOCTRINE", "properties": {}}],
+                    },
+                },
             ]
         )
         
@@ -652,6 +753,10 @@ class TestDeleteSharedNodeEndpoint:
         
         assert len(logged_events) == 1
         assert logged_events[0]["action"] == "delete"
+        # Should also update Postgres extracted to remove the node reference
+        assert len(updated_cases) == 1
+        updated_payload = updated_cases[0]["payload"]
+        assert all(n.get("properties", {}).get("doctrine_id") != "d1" for n in updated_payload.get("nodes", []))
     
     @pytest.mark.asyncio
     async def test_returns_404_for_missing_node(self, async_client, api_key_header, user_id_header, monkeypatch, sample_schema):
@@ -689,11 +794,25 @@ class TestDeleteSharedNodeEndpoint:
         
         monkeypatch.setattr("app.routes.shared_nodes.neo4j_client.execute_query", mock_execute)
         
+        updated_cases = []
+        monkeypatch.setattr(
+            "app.routes.shared_nodes.case_repo.update_case",
+            lambda conn, case_id, payload, user_id: updated_cases.append({"case_id": case_id, "payload": payload}) or {"id": case_id},
+        )
+        
         # Mock case with the domain node
         monkeypatch.setattr(
             "app.routes.shared_nodes.find_cases_containing_node",
             lambda db, nid, label: [
-                {"case_id": "case-1", "case_name": "Case 1", "labelCount": 2, "extracted": {"nodes": [{"properties": {"case_id": "c1"}}]}},
+                {
+                    "case_id": "44444444-4444-4444-4444-444444444444",
+                    "case_name": "Case 1",
+                    "labelCount": 2,
+                    "extracted": {
+                        "nodes": [{"label": "Case", "temp_id": "n0", "properties": {"case_id": "c1"}}],
+                        "edges": [{"from": "d1", "to": "n0", "label": "CONTAINS", "properties": {}}],
+                    },
+                },
             ]
         )
         
@@ -721,6 +840,11 @@ class TestDeleteSharedNodeEndpoint:
         # Verify relationship detachment was executed
         detach_queries = [q for q in neo4j_queries if "DELETE r" in q["query"]]
         assert len(detach_queries) == 1, "Should detach relationships"
+        
+        # Verify Postgres extracted was updated to remove catalog edge reference
+        assert len(updated_cases) == 1
+        assert updated_cases[0]["case_id"] == "44444444-4444-4444-4444-444444444444"
+        assert updated_cases[0]["payload"]["edges"] == []
     
     @pytest.mark.asyncio
     async def test_orphaned_catalog_node_can_be_deleted(self, async_client, api_key_header, user_id_header, monkeypatch, sample_schema):
@@ -775,12 +899,30 @@ class TestDeleteSharedNodeEndpoint:
             return []
         
         monkeypatch.setattr("app.routes.shared_nodes.neo4j_client.execute_query", mock_execute)
+
+        updated_cases = []
+        monkeypatch.setattr(
+            "app.routes.shared_nodes.case_repo.update_case",
+            lambda conn, case_id, payload, user_id: updated_cases.append({"case_id": case_id, "payload": payload}) or {"id": case_id},
+        )
         
         # Mock cases (Party is non-catalog, can_create_new=true)
         monkeypatch.setattr(
             "app.routes.shared_nodes.find_cases_containing_node",
             lambda db, nid, label: [
-                {"case_id": "case-1", "case_name": "Case 1", "labelCount": 2, "extracted": {"nodes": [{"properties": {"case_id": "c1"}}]}},
+                {
+                    "case_id": "55555555-5555-5555-5555-555555555555",
+                    "case_name": "Case 1",
+                    "labelCount": 2,
+                    "extracted": {
+                        "nodes": [
+                            {"label": "Case", "temp_id": "n0", "properties": {"case_id": "c1"}},
+                            {"label": "Party", "temp_id": "n1", "properties": {"party_id": "p1"}},
+                            {"label": "Party", "temp_id": "n2", "properties": {"party_id": "p2"}},
+                        ],
+                        "edges": [{"from": "n0", "to": "n1", "label": "HAS_PARTY", "properties": {}}],
+                    },
+                },
             ]
         )
         
@@ -809,6 +951,11 @@ class TestDeleteSharedNodeEndpoint:
         # Verify relationship detachment was executed
         detach_queries = [q for q in neo4j_queries if "DELETE r" in q["query"]]
         assert len(detach_queries) == 1, "Should detach relationships"
+
+        # Verify Postgres extracted was updated to remove Party(p1) from the case
+        assert len(updated_cases) == 1
+        updated_payload = updated_cases[0]["payload"]
+        assert all(n.get("properties", {}).get("party_id") != "p1" for n in updated_payload.get("nodes", []))
 
     @pytest.mark.asyncio
     async def test_orphaned_non_catalog_node_can_be_deleted(self, async_client, api_key_header, user_id_header, monkeypatch, sample_schema):

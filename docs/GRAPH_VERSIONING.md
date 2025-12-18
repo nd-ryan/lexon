@@ -45,6 +45,7 @@ The event logging system tracks changes only after content is published to the K
 | Save (draft) | ❌ No | Draft saves do not mutate Neo4j |
 | Subsequent KG Submit | ✅ Yes | `create`/`update`/`delete` for changes since last publish (`cases.kg_extracted` → new publish) |
 | Delete Case (KG-submitted cases only) | ✅ Yes | `delete` events for nodes/edges removed as part of KG cleanup |
+| Admin Shared Nodes (detach/delete) | ✅ Yes (when cases are affected) | Logs per-case `delete`/`update` node events when an admin detaches/edits a shared node that is referenced by one or more cases |
 
 ### When Events Are NOT Logged
 
@@ -53,6 +54,7 @@ The event logging system tracks changes only after content is published to the K
 | AI Extraction | ❌ No | Just a draft - user hasn't verified |
 | Save (any time) | ❌ No | Still editing draft; no KG mutation |
 | Pre-existing nodes | ❌ No | Already tracked by their original case |
+| Admin deletes an orphaned shared node | ❌ No | `graph_events` is case-scoped; if a node has 0 referencing cases, there is no case to attach an event to |
 
 ## The `graph_events` Table
 
@@ -180,7 +182,7 @@ This document focuses on **how Lexon logs versions / audit events**, not the bus
 
 At a high level:
 - When KG content is removed as part of a case edit or case deletion, Lexon logs `delete` events for affected nodes/edges in `graph_events` (after first KG submit).
-- Admin operations that remove KG content can also generate `delete` events in `graph_events` (depending on the operation and which cases are affected).
+- Admin operations that remove KG content can also generate events in `graph_events` (case-scoped), and keep `cases.kg_extracted` consistent for affected cases.
 
 For the actual **detach vs delete** rules across entry points, see:
 - `docs/DELETE_WORKFLOWS.md`

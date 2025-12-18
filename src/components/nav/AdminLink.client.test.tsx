@@ -21,7 +21,8 @@ const mockedUseSession = vi.mocked(useSession)
 
 describe('AdminLink', () => {
   beforeEach(() => {
-    process.env.NEXT_PUBLIC_ADMIN_EMAIL = 'admin@example.com'
+    delete process.env.NEXT_PUBLIC_ADMIN_EMAIL
+    process.env.NEXT_PUBLIC_ADMIN_EMAILS = 'admin@example.com, other@example.com'
     mockedUseSession.mockReset()
   })
 
@@ -46,5 +47,13 @@ describe('AdminLink', () => {
 
     fireEvent.mouseDown(document.body)
     expect(screen.queryByText(/Bulk Case Upload/i)).not.toBeInTheDocument()
+  })
+
+  it('treats any email in NEXT_PUBLIC_ADMIN_EMAILS as admin', () => {
+    mockedUseSession.mockReturnValue({ data: { user: { email: 'other@example.com' } } } as any)
+
+    render(<AdminLink />)
+    const button = screen.getByRole('button', { name: /admin/i })
+    expect(button).toBeInTheDocument()
   })
 })

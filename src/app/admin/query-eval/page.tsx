@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import Button from '@/components/ui/button';
+import { isAdminEmail } from '@/lib/admin';
 
 type StepName = 'reason' | 'interpret' | 'searches' | 'traversal' | 'answer';
 type StepMode = 'full_chain' | 'isolated';
@@ -55,18 +56,18 @@ export default function QueryEvalPage() {
   const [seedJson, setSeedJson] = useState<string>('');
   const [seedError, setSeedError] = useState<string | null>(null);
 
-  const adminEmail = process.env.NEXT_PUBLIC_ADMIN_EMAIL;
+  const isAdmin = isAdminEmail(session?.user?.email);
 
   // Protect the page - only allow admin email
   useEffect(() => {
     if (sessionStatus === 'loading') return;
-    if (!session || !adminEmail || session.user?.email !== adminEmail) {
+    if (!session || !isAdmin) {
       router.replace('/cases');
     }
-  }, [session, sessionStatus, router, adminEmail]);
+  }, [session, sessionStatus, router, isAdmin]);
 
   // Show loading while checking auth
-  if (sessionStatus === 'loading' || !session || !adminEmail || session.user?.email !== adminEmail) {
+  if (sessionStatus === 'loading' || !session || !isAdmin) {
     return <div className="p-8">Loading...</div>;
   }
 

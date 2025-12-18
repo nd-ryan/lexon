@@ -170,8 +170,7 @@ CREATE (:Doctrine {
   name:                   row.name,
   name_embedding:         [],
   description:            row.description,
-  description_embedding:  [],
-  category:               'antitrust'
+  description_embedding:  []
 });
 
 

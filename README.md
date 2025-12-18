@@ -27,6 +27,10 @@ JWT_SECRET="your-secure-jwt-secret"
 AI_BACKEND_URL="https://your-backend.fly.dev"
 NEXTAUTH_SECRET="your-nextauth-secret"
 FASTAPI_API_KEY="your-api-key"
+# Comma/semicolon/newline-separated list of emails that can access admin pages/routes
+NEXT_PUBLIC_ADMIN_EMAILS="admin1@example.com,admin2@example.com"
+# Legacy single-admin setting (still supported, but prefer NEXT_PUBLIC_ADMIN_EMAILS)
+# NEXT_PUBLIC_ADMIN_EMAIL="admin1@example.com"
 ```
 
 **Backend (.env):**

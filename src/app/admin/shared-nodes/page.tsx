@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation'
 import type { Schema } from '@/types/case-graph'
 import { ObjectFields } from '@/components/cases/editor/Field'
 import { validateRequiredFields } from '@/lib/cases/validation'
+import { isAdminEmail } from '@/lib/admin'
 
 interface SchemaNode {
   label: string
@@ -63,14 +64,14 @@ export default function SharedNodesPage() {
   const [deletedCases, setDeletedCases] = useState<Set<string>>(new Set())
   const [validationMessages, setValidationMessages] = useState<string[] | null>(null)
   
-  const adminEmail = process.env.NEXT_PUBLIC_ADMIN_EMAIL
+  const isAdmin = isAdminEmail(session?.user?.email)
   
   useEffect(() => {
     if (status === 'loading') return
-    if (!session || session.user?.email !== adminEmail) {
+    if (!session || !isAdmin) {
       router.push('/')
     }
-  }, [session, status, adminEmail, router])
+  }, [session, status, isAdmin, router])
   
   // Fetch schema to get shared node labels
   useEffect(() => {
@@ -320,7 +321,7 @@ export default function SharedNodesPage() {
     )
   }
   
-  if (!session || session.user?.email !== adminEmail) {
+  if (!session || !isAdmin) {
     return null
   }
   

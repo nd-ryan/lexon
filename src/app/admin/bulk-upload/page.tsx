@@ -3,6 +3,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import Button from '@/components/ui/button'
+import { isAdminEmail } from '@/lib/admin'
 
 interface CaseStatus {
   filename: string
@@ -23,15 +24,15 @@ export default function BulkUploadPage() {
   const [currentIndex, setCurrentIndex] = useState<number>(-1)
   const eventSourceRef = useRef<EventSource | null>(null)
 
-  const adminEmail = process.env.NEXT_PUBLIC_ADMIN_EMAIL
+  const isAdmin = isAdminEmail(session?.user?.email)
 
   // Protect the page - only allow admin email
   useEffect(() => {
     if (sessionStatus === 'loading') return
-    if (!session || !adminEmail || session.user?.email !== adminEmail) {
+    if (!session || !isAdmin) {
       router.replace('/cases')
     }
-  }, [session, sessionStatus, router, adminEmail])
+  }, [session, sessionStatus, router, isAdmin])
 
   const handleFilesChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = Array.from(e.target.files || [])
@@ -216,7 +217,7 @@ export default function BulkUploadPage() {
   }
 
   // Show loading while checking auth
-  if (sessionStatus === 'loading' || !session || !adminEmail || session.user?.email !== adminEmail) {
+  if (sessionStatus === 'loading' || !session || !isAdmin) {
     return <div className="p-8">Loading...</div>
   }
 

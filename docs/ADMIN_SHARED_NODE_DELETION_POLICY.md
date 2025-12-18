@@ -65,6 +65,10 @@ This document describes the deletion policy for **catalog nodes** vs **regular (
 - Removes relationships between the shared node and nodes belonging to each connected case
 - Node remains in Neo4j with all its properties
 - Cases can still be saved (they just won’t reference that node anymore)
+- For each affected case, Postgres is updated to keep case membership and “last published” baselines consistent:
+  - Updates `cases.extracted` (authoritative case membership)
+  - Updates `cases.kg_extracted` when present (published baseline used by KG diff/cleanup)
+  - Updates `kg_submitted_at/by` when `kg_extracted` is updated (keeps `kg_diverged` aligned)
 
 **UI Message (admin shared nodes page):**
 > ℹ️ **Detach from Cases:** This node will be **detached from all connected cases** but **preserved in the Knowledge Graph**.
@@ -79,6 +83,8 @@ This document describes the deletion policy for **catalog nodes** vs **regular (
 ```
 
 **Rationale:** Orphaned shared nodes serve no purpose and can be safely cleaned up.
+
+**Event logging note:** Orphaned node deletion does not log to `graph_events` because the audit log is case-scoped and there are no referencing cases to attach an event to.
 
 **UI Message (admin shared nodes page):**
 > ⚠️ **Orphaned Node:** This orphaned node will be **permanently deleted** from the Knowledge Graph.
@@ -326,4 +332,4 @@ Catalog nodes are identified by the `can_create_new` property in `ai-backend/sch
 }
 ```
 
-Last Updated: December 15, 2025
+Last Updated: December 17, 2025
