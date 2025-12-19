@@ -746,14 +746,15 @@ export default function CaseEditorPage() {
       }
     }
     
-    let domainProps: Record<string, any> = { name: domainName }
-    if (catalogNodes && Array.isArray(catalogNodes)) {
-      const catalogDomain = catalogNodes.find((n: any) => 
-        n.label === 'Domain' && n.properties?.name === domainName
-      )
-      if (catalogDomain) {
-        domainProps = catalogDomain.properties
-      }
+    // Find the catalog domain node - we need to use its temp_id (which matches domain_id)
+    const domainCatalog = catalogNodes['Domain'] || []
+    const catalogDomain = domainCatalog.find((n: any) => 
+      n.properties?.name === domainName
+    )
+    
+    if (!catalogDomain) {
+      setError(`Domain "${domainName}" not found in catalog`)
+      return
     }
     
     const next = (() => {
@@ -763,17 +764,15 @@ export default function CaseEditorPage() {
         !(e.label === 'CONTAINS' && e.to === caseNode.temp_id)
       )
       
-      const domainTempId = `n${Date.now()}`
+      // Use the catalog domain's temp_id (which matches its domain_id in Neo4j)
       return {
         nodes: [...filteredNodes, {
-          temp_id: domainTempId,
-          label: 'Domain',
-          properties: domainProps,
+          ...catalogDomain,
           status: 'active' as const,
           source: 'user-created' as const
         }],
         edges: [...filteredEdges, {
-          from: domainTempId,
+          from: catalogDomain.temp_id,
           to: caseNode.temp_id,
           label: 'CONTAINS',
           status: 'active' as const

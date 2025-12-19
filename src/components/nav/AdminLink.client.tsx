@@ -20,13 +20,6 @@ export default function AdminLink() {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
   
-  // DEBUG: Remove after fixing
-  console.log('AdminLink debug:', {
-    sessionEmail: session?.user?.email,
-    adminEnv: process.env.NEXT_PUBLIC_ADMIN_EMAIL,
-    isAdmin: isAdminEmail(session?.user?.email),
-  })
-  
   if (!session || !isAdminEmail(session.user?.email)) {
     return null
   }
