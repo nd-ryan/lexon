@@ -97,6 +97,8 @@ class CaseRepo:
                 },
                 "domain_id": domain_id,  # Send domain_id instead of domain_name
                 "has_file": bool(case_dict.get("file_key")),  # Whether original file is available
+                "updated_at": case_dict.get("updated_at"),
+                "kg_submitted_at": case_dict.get("kg_submitted_at"),
             })
         
         return result

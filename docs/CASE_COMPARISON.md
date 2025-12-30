@@ -273,25 +273,118 @@ curl -H "X-API-Key: $API_KEY" \
 
 ## Integration points
 
-### Current: Admin Neo4j View
+### 1. Admin Neo4j View (Single Case)
 
 The comparison is triggered on-demand from the admin Neo4j case view page:
 - See [ADMIN_NEO4J_CASE_VIEW.md](./ADMIN_NEO4J_CASE_VIEW.md)
 
-### Future: KG Upload Validation
+### 2. Batch Comparison (Case List Page)
 
-The `compare_case_data()` function can be called after KG upload to validate:
+Admins can run comparisons across all cases from the case list page:
+
+**UI Features:**
+- "Run Comparisons" button (admin-only, top right of case list)
+- Live progress modal with SSE updates
+- Filter cases by comparison status (Issues, Synced, Pending, etc.)
+- Comparison status badges on each case row
+- Clickable amber warnings link to the Neo4j comparison page
+
+**Comparison Status Values:**
+
+| Status | Meaning | Display |
+|--------|---------|---------|
+| `not_in_kg` | Never submitted to KG | Gray "Not in KG" |
+| `pending` | Postgres updated after last KG submit | Blue "Pending sync" |
+| `not_checked` | In KG but comparison never run | Gray "Not checked" |
+| `synced` | Comparison passed (`all_match=true`) | Green "✓ Synced" |
+| `issues` | Comparison found differences | Amber "⚠ X fields, Y embeddings" |
+
+**Smart Staleness Detection:**
+
+Comparisons are cached in Postgres (`case_comparisons` table). A comparison is considered stale and will re-run if:
+- Postgres `updated_at` > comparison `compared_at`
+- KG `kg_submitted_at` > comparison `compared_at`
+
+Use "Force Re-run All" to bypass staleness checks.
+
+### 3. Auto-Comparison After KG Submit
+
+When a case is successfully submitted to the Knowledge Graph, a comparison job is automatically queued:
 
 ```python
 # In kg.py after successful upload
-from app.lib.case_comparison import compare_case_data
+from app.lib.queue import comparison_queue
+from app.jobs.comparison_job import compare_single_case
 
-# ... after upload completes ...
-result = compare_case_data(postgres_extracted, neo4j_extracted)
-if not result["all_match"]:
-    logger.warning(f"KG upload validation failed: {result['summary']}")
-    # Could return warning to user or trigger retry
+comparison_queue.enqueue(compare_single_case, case_id, True)  # force=True
 ```
+
+This ensures comparison results are always up-to-date after KG uploads.
+
+---
+
+## Batch Comparison API
+
+### Start Batch Comparison
+
+```bash
+POST /api/admin/comparisons/batch
+Content-Type: application/json
+
+{
+  "case_ids": null,  // null = all KG-submitted cases
+  "force": false     // force re-run even if fresh
+}
+```
+
+Response:
+```json
+{
+  "job_id": "uuid",
+  "queued_count": 42,
+  "message": "Queued 42 cases for comparison"
+}
+```
+
+### Stream Progress (SSE)
+
+```bash
+GET /api/admin/comparisons/progress/{job_id}
+Accept: text/event-stream
+```
+
+Events:
+- `{"type": "progress", "completed": 5, "total": 42, "current_case": "Smith v. Jones"}`
+- `{"type": "complete", "total": 42, "success_count": 40, "fail_count": 2}`
+- `{"type": "error", "message": "..."}`
+
+### Get Single Comparison Result
+
+```bash
+GET /api/admin/comparisons/{case_id}
+```
+
+### Force Re-run Single Comparison
+
+```bash
+POST /api/admin/comparisons/{case_id}
+Content-Type: application/json
+
+{"force": true}
+```
+
+---
+
+## Key Files (Batch Comparison)
+
+| File | Purpose |
+|------|---------|
+| `ai-backend/app/lib/schema.py` | `case_comparisons` table schema |
+| `ai-backend/app/lib/comparison_repo.py` | CRUD operations for comparison results |
+| `ai-backend/app/jobs/comparison_job.py` | Background job for batch comparisons |
+| `ai-backend/app/routes/comparisons.py` | Admin API endpoints |
+| `src/app/api/admin/comparisons/*` | Next.js proxy routes (admin-protected) |
+| `src/app/cases/page.tsx` | Case list UI with comparison features |
 
 ---
 

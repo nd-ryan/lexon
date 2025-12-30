@@ -59,6 +59,16 @@ export default function Neo4jCaseViewPage() {
   const [comparisonLoading, setComparisonLoading] = useState(false)
   const [comparisonError, setComparisonError] = useState<string | null>(null)
   const [comparisonData, setComparisonData] = useState<any>(null)
+  const [comparisonSource, setComparisonSource] = useState<'fresh' | 'cached' | null>(null)
+  const [cachedComparisonInfo, setCachedComparisonInfo] = useState<{
+    exists: boolean
+    is_stale?: boolean
+    compared_at?: string
+    postgres_updated_at?: string
+    kg_submitted_at?: string
+  } | null>(null)
+  const [loadingCachedComparison, setLoadingCachedComparison] = useState(false)
+  const [syncStatus, setSyncStatus] = useState<'synced' | 'issues' | 'pending' | 'not_checked' | 'not_in_kg' | undefined>(undefined)
 
   // Protect route
   useEffect(() => {
@@ -68,14 +78,51 @@ export default function Neo4jCaseViewPage() {
     }
   }, [session, sessionStatus, isAdmin, router, id])
 
+  // State for resolved Neo4j case ID (from URL or fetched from Postgres)
+  const [resolvedNeo4jCaseId, setResolvedNeo4jCaseId] = useState<string | null>(neo4jCaseId)
+  
+  // If no neo4jCaseId in URL, fetch the Postgres case to get it
+  useEffect(() => {
+    if (neo4jCaseId) {
+      setResolvedNeo4jCaseId(neo4jCaseId)
+      return
+    }
+    if (!id) return
+    if (sessionStatus !== 'authenticated') return
+    if (!isAdmin) return
+    
+    ;(async () => {
+      try {
+        const res = await fetch(`/api/cases/${id}`)
+        const data = await res.json()
+        if (!res.ok || !data?.success) {
+          setError('Failed to load case data')
+          setLoading(false)
+          return
+        }
+        
+        // Find the Case node and extract case_id
+        const caseNode = data.case?.extracted?.nodes?.find((n: any) => n.label === 'Case')
+        const caseId = caseNode?.properties?.case_id
+        
+        if (!caseId) {
+          setError('This case has not been submitted to the Knowledge Graph yet.')
+          setLoading(false)
+          return
+        }
+        
+        setResolvedNeo4jCaseId(caseId)
+      } catch (e) {
+        setError('Failed to load case data')
+        setLoading(false)
+      }
+    })()
+  }, [id, neo4jCaseId, sessionStatus, isAdmin])
+
   // Fetch Neo4j-backed view payload
   useEffect(() => {
     if (!id) return
-    if (!neo4jCaseId) {
-      setError('Missing Neo4j case ID. Please access this page from the case view.')
-      setLoading(false)
-      return
-    }
+    if (!resolvedNeo4jCaseId) return  // Wait for case_id to be resolved
     if (sessionStatus !== 'authenticated') return
     if (!isAdmin) return
 
@@ -84,7 +131,7 @@ export default function Neo4jCaseViewPage() {
       setError(null)
       try {
         // Pass the Neo4j case_id directly to the backend
-        const res = await fetch(`/api/admin/neo4j-cases/${encodeURIComponent(neo4jCaseId)}/view?view=holdingsCentric`)
+        const res = await fetch(`/api/admin/neo4j-cases/${encodeURIComponent(resolvedNeo4jCaseId)}/view?view=holdingsCentric`)
         const data = (await res.json()) as Neo4jCaseViewResponse
         if (!res.ok || !data?.success) {
           throw new Error(data?.error || data?.detail || 'Failed to load Neo4j case view')
@@ -98,7 +145,7 @@ export default function Neo4jCaseViewPage() {
         setLoading(false)
       }
     })()
-  }, [id, neo4jCaseId, sessionStatus, isAdmin])
+  }, [id, resolvedNeo4jCaseId, sessionStatus, isAdmin])
 
   // Graph state
   const { graphState, setGraphState, nodesArray, edgesArray, deletedNodeIds, orphanedNodeIds } = useGraphState(
@@ -133,6 +180,67 @@ export default function Neo4jCaseViewPage() {
       setGraphInitialized(true)
     }
   }, [extracted, graphInitialized, setGraphState])
+
+  // Load cached comparison on page load
+  useEffect(() => {
+    if (!id) return
+    if (sessionStatus !== 'authenticated') return
+    if (!isAdmin) return
+    
+    ;(async () => {
+      setLoadingCachedComparison(true)
+      try {
+        const res = await fetch(`/api/admin/comparisons/${encodeURIComponent(id)}`)
+        const data = await res.json()
+        
+        if (!res.ok) {
+          // If 404 or error, just means no comparison exists yet
+          setCachedComparisonInfo({ exists: false })
+          setSyncStatus('not_checked')
+          return
+        }
+        
+        setCachedComparisonInfo({
+          exists: data.exists,
+          is_stale: data.is_stale,
+          compared_at: data.compared_at,
+          postgres_updated_at: data.postgres_updated_at,
+          kg_submitted_at: data.kg_submitted_at,
+        })
+        
+        // Determine sync status based on backend response
+        if (data.not_in_kg) {
+          setSyncStatus('not_in_kg')
+        } else if (data.is_pending_sync) {
+          // Postgres was updated after KG submit - differences are expected
+          setSyncStatus('pending')
+        } else if (!data.exists) {
+          setSyncStatus('not_checked')
+        } else if (data.all_match) {
+          setSyncStatus('synced')
+        } else {
+          setSyncStatus('issues')
+        }
+        
+        // If comparison exists, load the full details
+        if (data.exists && data.details) {
+          setComparisonData({
+            all_match: data.all_match,
+            summary: data.details.summary,
+            node_comparisons: data.details.node_comparisons || [],
+            edge_comparisons: data.details.edge_comparisons || [],
+          })
+          setComparisonSource('cached')
+        }
+      } catch (e) {
+        console.error('Failed to load cached comparison:', e)
+        setCachedComparisonInfo({ exists: false })
+        setSyncStatus('not_checked')
+      } finally {
+        setLoadingCachedComparison(false)
+      }
+    })()
+  }, [id, sessionStatus, isAdmin])
 
   // Node/edge lookups
   const { edgesByFrom, edgesByTo, nodeById, getLiveReliefType, getLiveForumAndJurisdiction } = useNodeLookups(
@@ -353,14 +461,14 @@ export default function Neo4jCaseViewPage() {
 
   // Comparison handler
   const handleCompare = useCallback(async () => {
-    if (!neo4jCaseId || !id) return
+    if (!resolvedNeo4jCaseId || !id) return
     
     setComparisonLoading(true)
     setComparisonError(null)
     
     try {
       const res = await fetch(
-        `/api/admin/neo4j-cases/${encodeURIComponent(neo4jCaseId)}/compare?postgres_case_id=${encodeURIComponent(id)}`
+        `/api/admin/neo4j-cases/${encodeURIComponent(resolvedNeo4jCaseId)}/compare?postgres_case_id=${encodeURIComponent(id)}`
       )
       const data = await res.json()
       
@@ -369,12 +477,28 @@ export default function Neo4jCaseViewPage() {
       }
       
       setComparisonData(data)
+      setComparisonSource('fresh')
+      
+      // Update sync status based on fresh results
+      if (data.all_match) {
+        setSyncStatus('synced')
+      } else {
+        setSyncStatus('issues')
+      }
+      
+      // Update cached info to reflect fresh comparison
+      setCachedComparisonInfo(prev => ({
+        ...prev,
+        exists: true,
+        is_stale: false,
+        compared_at: new Date().toISOString(),
+      }))
     } catch (e) {
       setComparisonError(e instanceof Error ? e.message : 'Comparison failed')
     } finally {
       setComparisonLoading(false)
     }
-  }, [neo4jCaseId, id])
+  }, [resolvedNeo4jCaseId, id])
 
   if (sessionStatus === 'loading' || !session) {
     return (
@@ -460,6 +584,10 @@ export default function Neo4jCaseViewPage() {
             error={comparisonError}
             data={comparisonData}
             onCompare={handleCompare}
+            source={comparisonSource}
+            cachedInfo={cachedComparisonInfo || undefined}
+            syncStatus={syncStatus}
+            loadingCached={loadingCachedComparison}
           />
 
           {/* Top Section */}

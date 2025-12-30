@@ -67,6 +67,18 @@ interface ComparisonSummary {
   }
 }
 
+type ComparisonSource = 'fresh' | 'cached' | null
+
+interface CachedComparisonInfo {
+  exists: boolean
+  is_stale?: boolean
+  compared_at?: string
+  postgres_updated_at?: string
+  kg_submitted_at?: string
+}
+
+type SyncStatus = 'synced' | 'issues' | 'pending' | 'not_checked' | 'not_in_kg'
+
 interface ComparisonResultsProps {
   loading: boolean
   error: string | null
@@ -77,6 +89,14 @@ interface ComparisonResultsProps {
     edge_comparisons: EdgeComparison[]
   } | null
   onCompare: () => void
+  /** Whether this data came from cache or fresh comparison */
+  source?: ComparisonSource
+  /** Cached comparison metadata (when loaded from Postgres) */
+  cachedInfo?: CachedComparisonInfo
+  /** Computed sync status */
+  syncStatus?: SyncStatus
+  /** Whether the page is loading cached comparison */
+  loadingCached?: boolean
 }
 
 function StatusBadge({ status }: { status: ComparisonStatus }) {
@@ -286,9 +306,130 @@ function SummaryStats({ summary }: { summary: ComparisonSummary }) {
   )
 }
 
-export function ComparisonResults({ loading, error, data, onCompare }: ComparisonResultsProps) {
+function formatRelativeTime(dateString: string): string {
+  const date = new Date(dateString)
+  const now = new Date()
+  const diffMs = now.getTime() - date.getTime()
+  const diffMins = Math.floor(diffMs / 60000)
+  const diffHours = Math.floor(diffMins / 60)
+  const diffDays = Math.floor(diffHours / 24)
+  
+  if (diffMins < 1) return 'just now'
+  if (diffMins < 60) return `${diffMins}m ago`
+  if (diffHours < 24) return `${diffHours}h ago`
+  if (diffDays < 7) return `${diffDays}d ago`
+  return date.toLocaleDateString()
+}
+
+function SyncStatusBanner({ 
+  syncStatus, 
+  source, 
+  cachedInfo,
+  allMatch 
+}: { 
+  syncStatus?: SyncStatus
+  source?: ComparisonSource
+  cachedInfo?: CachedComparisonInfo
+  allMatch?: boolean
+}) {
+  // Pending sync: postgres was updated after KG submit, so mismatch is expected
+  if (syncStatus === 'pending') {
+    return (
+      <div className="p-3 rounded mb-4 bg-blue-50 border border-blue-200">
+        <div className="flex items-center gap-2">
+          <span className="text-lg text-blue-600">⏳</span>
+          <div>
+            <span className="font-medium text-blue-800">Pending sync</span>
+            <p className="text-xs text-blue-600 mt-0.5">
+              Postgres data was updated after the last KG submission. 
+              Differences are expected until the case is re-submitted to the Knowledge Graph.
+            </p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+  
+  // Not in KG yet
+  if (syncStatus === 'not_in_kg') {
+    return (
+      <div className="p-3 rounded mb-4 bg-gray-50 border border-gray-200">
+        <div className="flex items-center gap-2">
+          <span className="text-lg text-gray-500">—</span>
+          <div>
+            <span className="font-medium text-gray-700">Not in Knowledge Graph</span>
+            <p className="text-xs text-gray-500 mt-0.5">
+              This case has not been submitted to the Knowledge Graph yet.
+            </p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+  
+  // Show cached data indicator when we have results from cache
+  if (source === 'cached' && cachedInfo?.compared_at) {
+    const timeAgo = formatRelativeTime(cachedInfo.compared_at)
+    const isStale = cachedInfo.is_stale
+    
+    return (
+      <div className={`p-3 rounded mb-4 ${allMatch ? 'bg-green-50 border border-green-200' : 'bg-amber-50 border border-amber-200'}`}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className={`text-lg ${allMatch ? 'text-green-600' : 'text-amber-600'}`}>
+              {allMatch ? '✓' : '⚠'}
+            </span>
+            <span className={`font-medium ${allMatch ? 'text-green-800' : 'text-amber-800'}`}>
+              {allMatch ? 'All data matches!' : 'Differences found'}
+            </span>
+          </div>
+          <span className={`text-xs ${isStale ? 'text-amber-600' : 'text-gray-500'}`}>
+            {isStale && '⚠ Stale — '}Checked {timeAgo}
+          </span>
+        </div>
+      </div>
+    )
+  }
+  
+  // Fresh comparison result (no cache metadata)
+  if (allMatch !== undefined) {
+    return (
+      <div className={`p-3 rounded mb-4 ${allMatch ? 'bg-green-50 border border-green-200' : 'bg-amber-50 border border-amber-200'}`}>
+        <div className="flex items-center gap-2">
+          <span className={`text-lg ${allMatch ? 'text-green-600' : 'text-amber-600'}`}>
+            {allMatch ? '✓' : '⚠'}
+          </span>
+          <span className={`font-medium ${allMatch ? 'text-green-800' : 'text-amber-800'}`}>
+            {allMatch ? 'All data matches!' : 'Differences found'}
+          </span>
+        </div>
+      </div>
+    )
+  }
+  
+  return null
+}
+
+export function ComparisonResults({ 
+  loading, 
+  error, 
+  data, 
+  onCompare,
+  source,
+  cachedInfo,
+  syncStatus,
+  loadingCached 
+}: ComparisonResultsProps) {
   const [showMatches, setShowMatches] = useState(false)
   const [activeTab, setActiveTab] = useState<'nodes' | 'edges'>('nodes')
+  
+  // Determine button text based on state
+  const getButtonText = () => {
+    if (loading) return 'Comparing...'
+    if (source === 'cached' && cachedInfo?.is_stale) return 'Re-run Comparison (stale)'
+    if (source === 'cached') return 'Re-run Comparison'
+    return 'Run Comparison'
+  }
   
   return (
     <div className="border rounded-lg bg-white p-4 mb-6">
@@ -296,10 +437,10 @@ export function ComparisonResults({ loading, error, data, onCompare }: Compariso
         <h3 className="text-sm font-semibold">Postgres ↔ Neo4j Comparison</h3>
         <button
           onClick={onCompare}
-          disabled={loading}
+          disabled={loading || loadingCached}
           className="px-3 py-1.5 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 disabled:opacity-50"
         >
-          {loading ? 'Comparing...' : 'Run Comparison'}
+          {getButtonText()}
         </button>
       </div>
       
@@ -309,20 +450,22 @@ export function ComparisonResults({ loading, error, data, onCompare }: Compariso
         </div>
       )}
       
+      {loadingCached && (
+        <div className="text-center text-gray-500 text-sm py-4">
+          Loading comparison status...
+        </div>
+      )}
+      
+      {/* Sync status banner */}
+      <SyncStatusBanner 
+        syncStatus={syncStatus}
+        source={source}
+        cachedInfo={cachedInfo}
+        allMatch={data?.all_match}
+      />
+      
       {data && (
         <>
-          {/* Overall status */}
-          <div className={`p-3 rounded mb-4 ${data.all_match ? 'bg-green-50 border border-green-200' : 'bg-amber-50 border border-amber-200'}`}>
-            <div className="flex items-center gap-2">
-              <span className={`text-lg ${data.all_match ? 'text-green-600' : 'text-amber-600'}`}>
-                {data.all_match ? '✓' : '⚠'}
-              </span>
-              <span className={`font-medium ${data.all_match ? 'text-green-800' : 'text-amber-800'}`}>
-                {data.all_match ? 'All data matches!' : 'Differences found'}
-              </span>
-            </div>
-          </div>
-          
           {/* Summary stats */}
           <SummaryStats summary={data.summary} />
           

@@ -26,15 +26,15 @@ logger = setup_logger("rq-worker")
 
 from redis import Redis
 from rq import Worker
-from app.lib.queue import search_queue, case_extraction_queue
+from app.lib.queue import search_queue, case_extraction_queue, comparison_queue
 
 # Get Redis connection details from environment variables
 redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
 
 if __name__ == '__main__':
     redis_conn = Redis.from_url(redis_url)
-    # Worker handles both search and case extraction queues
-    worker = Worker([search_queue, case_extraction_queue], connection=redis_conn)
-    logger.info("🚀 Starting RQ worker handling search_jobs and case_extraction queues")
+    # Worker handles search, case extraction, and comparison queues
+    worker = Worker([search_queue, case_extraction_queue, comparison_queue], connection=redis_conn)
+    logger.info("🚀 Starting RQ worker handling search_jobs, case_extraction, and comparisons queues")
     logger.info("   Connected to Redis (REDIS_URL set)")
     worker.work() 

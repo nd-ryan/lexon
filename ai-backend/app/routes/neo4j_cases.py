@@ -13,6 +13,7 @@ it directly.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Any, Dict, List
 
@@ -25,6 +26,7 @@ from app.lib.db import get_db
 from app.lib.case_repo import case_repo
 
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/neo4j-cases", dependencies=[Depends(get_api_key)])
 
 def _load_schema_v3() -> List[Dict[str, Any]]:
@@ -515,6 +517,32 @@ def compare_case_postgres_neo4j(
         neo4j_data,
         neo4j_client=neo4j_client
     )
+    
+    # Save comparison result to database so it shows on case list page
+    try:
+        from app.lib.comparison_repo import comparison_repo
+        
+        summary = comparison_result.get("summary", {})
+        nodes_diff = summary.get("nodes_only_in_postgres", 0) + summary.get("nodes_only_in_neo4j", 0) + summary.get("nodes_with_differences", 0)
+        edges_diff = summary.get("edges_only_in_postgres", 0) + summary.get("edges_only_in_neo4j", 0) + summary.get("edges_with_differences", 0)
+        embeddings_validation = comparison_result.get("embeddings_validation", {})
+        embeddings_missing = embeddings_validation.get("total_missing", 0)
+        
+        comparison_repo.save_comparison(
+            conn=db.connection(),
+            case_id=postgres_case_id,
+            all_match=comparison_result.get("all_match", False),
+            nodes_differ_count=nodes_diff,
+            edges_differ_count=edges_diff,
+            embeddings_missing_count=embeddings_missing,
+            postgres_updated_at=postgres_record.get("updated_at"),
+            kg_submitted_at=postgres_record.get("kg_submitted_at"),
+            details=comparison_result,
+        )
+        db.commit()
+    except Exception as e:
+        logger.warning(f"Failed to save comparison result for case {postgres_case_id}: {e}")
+        # Don't fail the request if saving fails
     
     return {
         "success": True,

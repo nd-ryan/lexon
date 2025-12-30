@@ -501,6 +501,21 @@ async def submit_to_kg(payload: dict, request: Request, db: Session = Depends(ge
             
             logger.info(f"KG submit complete for case {case_id}: {nodes_count} nodes, {edges_count} edges uploaded to Neo4j and saved to Postgres")
             
+            # Queue auto-comparison after successful KG submit
+            try:
+                from app.lib.queue import comparison_queue
+                from app.jobs.comparison_job import compare_single_case
+                comparison_queue.enqueue(
+                    compare_single_case,
+                    case_id,
+                    True,  # force=True to ensure fresh comparison
+                    job_timeout=300,  # 5 minute timeout
+                )
+                logger.info(f"Queued auto-comparison for case {case_id}")
+            except Exception as comp_error:
+                # Don't fail the KG submit if comparison queue fails
+                logger.warning(f"Failed to queue auto-comparison for case {case_id}: {comp_error}")
+            
             return {
                 "success": True, 
                 "nodes": nodes_count, 

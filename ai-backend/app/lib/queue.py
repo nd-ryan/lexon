@@ -10,4 +10,5 @@ redis_conn = Redis.from_url(redis_url)
 
 # Create RQ queues
 search_queue = Queue("search_jobs", connection=redis_conn)
-case_extraction_queue = Queue("case_extraction", connection=redis_conn) 
+case_extraction_queue = Queue("case_extraction", connection=redis_conn)
+comparison_queue = Queue("comparisons", connection=redis_conn) 

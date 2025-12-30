@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Request
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Request, Query
 from sqlalchemy.orm import Session
 from app.lib.security import get_api_key
 from app.lib.db import get_db
@@ -188,9 +188,74 @@ async def get_upload_progress(job_id: str):
 
 
 @router.get("")
-def list_cases(limit: int = 50, offset: int = 0, db: Session = Depends(get_db)):
-    items = case_repo.list_cases(db.connection(), q=None, limit=limit, offset=offset)
-    return {"success": True, "items": items}
+def list_cases(
+    limit: int = 50, 
+    offset: int = 0, 
+    comparison_status: Optional[str] = Query(None, description="Filter by comparison status: issues|synced|pending|not_checked|not_in_kg"),
+    db: Session = Depends(get_db)
+):
+    """
+    List cases with optional comparison status filter.
+    
+    Comparison status values:
+    - issues: Cases where comparison found differences
+    - synced: Cases where comparison passed (all_match=true)
+    - pending: Cases with unsaved changes (updated_at > kg_submitted_at)
+    - not_checked: Cases in KG but no comparison run yet
+    - not_in_kg: Cases not yet submitted to KG
+    """
+    from app.lib.comparison_repo import comparison_repo
+    
+    conn = db.connection()
+    items = case_repo.list_cases(conn, q=None, limit=limit, offset=offset)
+    
+    # Get case IDs for batch comparison lookup
+    case_ids = [str(item["id"]) for item in items]
+    
+    # Batch fetch comparison results
+    comparisons = comparison_repo.get_comparisons_for_cases(conn, case_ids)
+    
+    # Enrich items with comparison data and compute status
+    enriched_items = []
+    for item in items:
+        case_id = str(item["id"])
+        comparison = comparisons.get(case_id)
+        
+        updated_at = item.get("updated_at")
+        kg_submitted_at = item.get("kg_submitted_at")
+        
+        # Compute comparison status
+        if kg_submitted_at is None:
+            status = "not_in_kg"
+        elif updated_at and kg_submitted_at and updated_at > kg_submitted_at:
+            status = "pending"
+        elif comparison is None:
+            status = "not_checked"
+        elif comparison.get("all_match"):
+            status = "synced"
+        else:
+            status = "issues"
+        
+        # Add comparison info to item
+        item["comparison_status"] = status
+        item["comparison"] = {
+            "all_match": comparison.get("all_match") if comparison else None,
+            "nodes_differ_count": comparison.get("nodes_differ_count", 0) if comparison else 0,
+            "edges_differ_count": comparison.get("edges_differ_count", 0) if comparison else 0,
+            "embeddings_missing_count": comparison.get("embeddings_missing_count", 0) if comparison else 0,
+            "compared_at": comparison.get("compared_at") if comparison else None,
+        } if comparison else None
+        
+        enriched_items.append(item)
+    
+    # Apply status filter if provided
+    if comparison_status:
+        enriched_items = [
+            item for item in enriched_items 
+            if item["comparison_status"] == comparison_status
+        ]
+    
+    return {"success": True, "items": enriched_items}
 
 
 @router.get("/{case_id}")

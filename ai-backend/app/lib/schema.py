@@ -76,9 +76,35 @@ def ensure_graph_events_table(engine: Engine) -> None:
         conn.execute(ddl)
 
 
+def ensure_case_comparisons_table(engine: Engine) -> None:
+    """Create the case_comparisons table for storing comparison results."""
+    ddl = text(
+        """
+        CREATE TABLE IF NOT EXISTS case_comparisons (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          case_id UUID NOT NULL UNIQUE REFERENCES cases(id) ON DELETE CASCADE,
+          compared_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          postgres_updated_at TIMESTAMPTZ,
+          kg_submitted_at TIMESTAMPTZ,
+          all_match BOOLEAN NOT NULL,
+          nodes_differ_count INTEGER DEFAULT 0,
+          edges_differ_count INTEGER DEFAULT 0,
+          embeddings_missing_count INTEGER DEFAULT 0,
+          details JSONB
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_case_comparisons_case_id ON case_comparisons(case_id);
+        CREATE INDEX IF NOT EXISTS idx_case_comparisons_all_match ON case_comparisons(all_match);
+        """
+    )
+    with engine.begin() as conn:
+        conn.execute(ddl)
+
+
 def ensure_all_tables(engine: Engine) -> None:
     """Ensure all required tables exist."""
     ensure_cases_table(engine)
     ensure_graph_events_table(engine)
+    ensure_case_comparisons_table(engine)
 
 
