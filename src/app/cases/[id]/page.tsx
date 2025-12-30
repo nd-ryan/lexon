@@ -105,7 +105,7 @@ export default function CaseEditorPage() {
   }, [schema, formatMinPerCaseReason, graphState])
   
   // Save functionality
-  const { saving, submittingKg, error, setError, onSave: saveCase, submitToKg } = useCaseSave(
+  const { saving, submittingKg, error, setError, kgEmbeddingWarning, setKgEmbeddingWarning, onSave: saveCase, submitToKg } = useCaseSave(
     id,
     graphState,
     pendingEditsRef,
@@ -905,14 +905,14 @@ export default function CaseEditorPage() {
                 caseId={id} 
                 hasFile={Boolean(data?.file_key)} 
               />
-              {isAdminEmail(session?.user?.email) && Boolean((data as any)?.kg_submitted_at) && (
+              {isAdminEmail(session?.user?.email) && Boolean((data as any)?.kg_submitted_at) && Boolean(caseNode?.properties?.case_id) ? (
                 <Link
-                  href={`/cases/${id}/neo4j`}
+                  href={`/cases/${id}/neo4j?neo4j_case_id=${encodeURIComponent(caseNode!.properties!.case_id as string)}`}
                   className="ml-2 rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
                 >
                   Neo4j view (admin)
                 </Link>
-              )}
+              ) : null}
             </div>
             {isViewMode ? (
               <span className="px-3 py-1 bg-blue-500 text-white rounded-full text-sm font-medium">
@@ -1126,8 +1126,10 @@ export default function CaseEditorPage() {
           submittingKg={submittingKg}
           kgDiverged={Boolean(data?.kg_diverged)}
           error={error}
+          kgEmbeddingWarning={kgEmbeddingWarning}
           onSave={onSave}
           onSubmitToKg={submitToKg}
+          onDismissEmbeddingWarning={() => setKgEmbeddingWarning(null)}
           onBack={() => {
             if (typeof window === 'undefined') return
             const last = uiState.scrollHistory[uiState.scrollHistory.length - 1]

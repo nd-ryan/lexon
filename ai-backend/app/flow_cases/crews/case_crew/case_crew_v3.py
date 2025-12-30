@@ -168,7 +168,7 @@ class CaseCrew:
             output_pydantic=output_model
         )
 
-    def phase5b_disposition_task(self) -> Task:
+    def phase5b_disposition_task(self, output_model: Type[BaseModel]) -> Task:
         """
         Extract disposition_text for Arguments (Phase 5B).
         
@@ -186,6 +186,7 @@ class CaseCrew:
         return Task(
             config=task_spec,
             agent=self.phase1_extract_agent(),
+            output_pydantic=output_model
         )
 
     def phase6_laws_per_ruling_task(self) -> Task:

@@ -20,6 +20,11 @@ export function useCaseSave(
   const [saving, setSaving] = useState(false)
   const [submittingKg, setSubmittingKg] = useState(false)
   const [error, setError] = useState('')
+  const [kgEmbeddingWarning, setKgEmbeddingWarning] = useState<{
+    missing: number
+    total: number
+    details: string[]
+  } | null>(null)
 
   const onSave = async () => {
     try {
@@ -172,6 +177,7 @@ export function useCaseSave(
   const submitToKg = async () => {
     try {
       setSubmittingKg(true)
+      setKgEmbeddingWarning(null)  // Clear previous warning
       
       // Run validation before submitting
       if (validateFn) {
@@ -195,6 +201,16 @@ export function useCaseSave(
         const txt = await res.text()
         throw new Error(txt || 'Failed to submit to KG')
       }
+      
+      // Check embedding status from response
+      const data = await res.json()
+      if (data.success && !data.embeddings_complete) {
+        setKgEmbeddingWarning({
+          missing: data.embeddings_summary?.missing ?? data.missing_embeddings?.length ?? 0,
+          total: data.embeddings_summary?.expected ?? 0,
+          details: data.missing_embeddings ?? []
+        })
+      }
     } catch (e: any) {
       setError(e?.message || 'Submit to KG failed')
     } finally {
@@ -207,6 +223,8 @@ export function useCaseSave(
     submittingKg,
     error,
     setError,
+    kgEmbeddingWarning,
+    setKgEmbeddingWarning,
     onSave,
     submitToKg
   }

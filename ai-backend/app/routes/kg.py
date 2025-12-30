@@ -480,10 +480,39 @@ async def submit_to_kg(payload: dict, request: Request, db: Session = Depends(ge
             case_repo.set_kg_submitted(db.connection(), case_id, user_id)
             db.commit()
             
-            nodes = len(updated_data.get("nodes", []))
-            edges = len(updated_data.get("edges", []))
-            logger.info(f"KG submit complete for case {case_id}: {nodes} nodes, {edges} edges uploaded to Neo4j and saved to Postgres")
-            return {"success": True, "nodes": nodes, "edges": edges}
+            nodes_count = len(updated_data.get("nodes", []))
+            edges_count = len(updated_data.get("edges", []))
+            
+            # Post-upload: verify all embeddings are present in Neo4j
+            from app.lib.case_comparison import check_neo4j_embeddings
+            embeddings_result = check_neo4j_embeddings(
+                neo4j_client, 
+                updated_data.get("nodes", [])
+            )
+            
+            embeddings_complete = embeddings_result.get("all_present", True)
+            missing_embeddings = embeddings_result.get("missing", [])
+            
+            if not embeddings_complete:
+                logger.warning(
+                    f"KG submit for case {case_id}: {len(missing_embeddings)} embeddings missing. "
+                    f"Missing: {missing_embeddings[:5]}{'...' if len(missing_embeddings) > 5 else ''}"
+                )
+            
+            logger.info(f"KG submit complete for case {case_id}: {nodes_count} nodes, {edges_count} edges uploaded to Neo4j and saved to Postgres")
+            
+            return {
+                "success": True, 
+                "nodes": nodes_count, 
+                "edges": edges_count,
+                "embeddings_complete": embeddings_complete,
+                "missing_embeddings": missing_embeddings if not embeddings_complete else [],
+                "embeddings_summary": {
+                    "expected": embeddings_result.get("total_expected", 0),
+                    "present": embeddings_result.get("total_present", 0),
+                    "missing": embeddings_result.get("total_missing", 0)
+                }
+            }
             
         except Exception as neo4j_error:
             logger.exception(f"Neo4j upload failed for case {case_id}")

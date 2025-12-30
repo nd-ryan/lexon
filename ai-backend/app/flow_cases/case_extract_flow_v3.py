@@ -1,6 +1,6 @@
 from crewai.flow.flow import Flow, listen, start
 from crewai import Crew, Process
-from pydantic import BaseModel, Field, create_model
+from pydantic import BaseModel, Field, create_model, field_validator
 from typing import Dict, Any, List, Optional
 from .crews.case_crew.case_crew_v3 import CaseCrew
 from .tools.io_tools import read_document, fetch_schema_v3
@@ -92,6 +92,25 @@ class RulingAndArgumentsBatchResponse(BaseModel):
 class SelectionResponse(BaseModel):
     """Response for selection tasks (Forum, ReliefType)"""
     selected: Dict[str, List[str]]
+
+
+class DispositionTextEntry(BaseModel):
+    """Single argument's disposition_text extraction result"""
+    argument_temp_id: str
+    disposition_text: str  # Required - Pydantic will error if missing or empty
+    
+    @field_validator('disposition_text')
+    @classmethod
+    def disposition_text_not_empty(cls, v: str) -> str:
+        """Ensure disposition_text is not empty or whitespace-only."""
+        if not v or not v.strip():
+            raise ValueError('disposition_text cannot be empty')
+        return v.strip()
+
+
+class DispositionTextBatchResponse(BaseModel):
+    """Response for Phase 5B: disposition_text extraction for arguments"""
+    results: List[DispositionTextEntry]
 
 class CaseExtractFlow(Flow[CaseExtractState]):
     @start()
@@ -1604,7 +1623,8 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                     replacements=replacements,
                 )
                 
-                task = crew.phase5b_disposition_task()
+                # Pass the Pydantic model for validation - disposition_text is required
+                task = crew.phase5b_disposition_task(DispositionTextBatchResponse)
                 single_crew = Crew(
                     agents=[crew.phase1_extract_agent()],
                     tasks=[task],
@@ -1613,23 +1633,36 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 
                 result = single_crew.kickoff()
                 
-                # Parse result
-                data = self.parse_crew_result(result)
-                results_list = data.get("results") if isinstance(data, dict) else None
-                if not isinstance(results_list, list):
-                    results_list = []
+                # Extract validated Pydantic result
+                results_list: List[DispositionTextEntry] = []
+                if hasattr(result, 'pydantic') and result.pydantic is not None:
+                    # Pydantic validation succeeded - use validated model
+                    pydantic_result = result.pydantic
+                    if hasattr(pydantic_result, 'results'):
+                        results_list = pydantic_result.results
+                    logger.debug(f"Phase 5B batch {batch_num + 1}: Pydantic validation succeeded, {len(results_list)} entries")
+                else:
+                    # Pydantic validation failed - try to parse manually but log error
+                    logger.error(f"Phase 5B batch {batch_num + 1}: Pydantic validation failed! disposition_text may be missing.")
+                    data = self.parse_crew_result(result)
+                    raw_results = data.get("results") if isinstance(data, dict) else None
+                    if isinstance(raw_results, list):
+                        for entry in raw_results:
+                            if isinstance(entry, dict):
+                                arg_id = entry.get("argument_temp_id")
+                                disp_text = entry.get("disposition_text")
+                                if isinstance(arg_id, str) and isinstance(disp_text, str) and disp_text.strip():
+                                    results_list.append(DispositionTextEntry(
+                                        argument_temp_id=arg_id,
+                                        disposition_text=disp_text
+                                    ))
+                                else:
+                                    logger.error(f"Phase 5B batch {batch_num + 1}: Missing/invalid disposition_text for argument {arg_id}")
                 
                 # Update existing argument nodes with disposition_text
                 for entry in results_list:
-                    if not isinstance(entry, dict):
-                        continue
-                    
-                    arg_temp_id = entry.get("argument_temp_id")
-                    disposition_text = entry.get("disposition_text")
-                    
-                    if not isinstance(arg_temp_id, str) or not isinstance(disposition_text, str):
-                        logger.warning(f"Phase 5B batch {batch_num + 1}: Invalid entry format")
-                        continue
+                    arg_temp_id = entry.argument_temp_id
+                    disposition_text = entry.disposition_text
                     
                     # Find and update the argument node
                     for n in (self.state.nodes_accumulated or []):
@@ -1641,10 +1674,25 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                                 logger.debug(f"Phase 5B batch {batch_num + 1}: Added disposition_text to {arg_temp_id}")
                             break
             
-            logger.info(f"Phase 5B: completed (dispositions_added={dispositions_added})")
-            return {"status": "phase5b_done"}
+            # Validate: check for any arguments still missing disposition_text
+            arguments_missing_disposition = [
+                n.get("temp_id")
+                for n in (self.state.nodes_accumulated or [])
+                if isinstance(n, dict) 
+                and n.get("label") == "Argument" 
+                and not ((n.get("properties") or {}).get("disposition_text"))
+            ]
+            
+            if arguments_missing_disposition:
+                logger.error(
+                    f"Phase 5B: CRITICAL - {len(arguments_missing_disposition)} arguments still missing disposition_text: "
+                    f"{arguments_missing_disposition}. These will be uploaded to KG without embeddings!"
+                )
+            
+            logger.info(f"Phase 5B: completed (dispositions_added={dispositions_added}, missing={len(arguments_missing_disposition)})")
+            return {"status": "phase5b_done", "missing_count": len(arguments_missing_disposition)}
         except Exception as e:
-            logger.warning(f"Phase 5B: Disposition extraction failed: {e}")
+            logger.error(f"Phase 5B: Disposition extraction failed: {e}")
             return {"status": "phase5b_skipped"}
 
     @listen(phase5b_extract_disposition)

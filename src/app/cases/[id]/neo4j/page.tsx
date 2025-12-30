@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { useSession } from 'next-auth/react'
 
 import type { Schema } from '@/types/case-graph'
@@ -9,7 +9,6 @@ import { useAppStore } from '@/lib/store/appStore'
 import { isAdminEmail } from '@/lib/admin'
 
 import { useGraphState } from '@/hooks/cases/useGraphState'
-import { useCatalogEnrichment } from '@/app/cases/[id]/_hooks/useCatalogEnrichment'
 import { useNodeLookups } from '@/app/cases/[id]/_hooks/useNodeLookups'
 import { useUIState } from '@/app/cases/[id]/_hooks/useUIState'
 import { useRelationshipProperties } from '@/hooks/cases/useRelationshipProperties'
@@ -24,6 +23,7 @@ import { CaseSidebar } from '@/components/cases/editor/CaseSidebar'
 import { SectionHeader } from '@/components/cases/editor/SectionHeader'
 import { ForumSelector } from '@/components/cases/editor/ForumSelector'
 import { IssueSection } from '@/app/cases/[id]/_components/IssueSection'
+import { ComparisonResults } from '@/components/cases/ComparisonResults'
 
 type Neo4jCaseViewResponse = {
   success: boolean
@@ -37,11 +37,14 @@ type Neo4jCaseViewResponse = {
 export default function Neo4jCaseViewPage() {
   const params = useParams()
   const router = useRouter()
+  const searchParams = useSearchParams()
   const { data: session, status: sessionStatus } = useSession()
 
   const id = params?.id as string
+  // Get the Neo4j case_id from query params (passed from the case page)
+  const neo4jCaseId = searchParams.get('neo4j_case_id')
+  
   const schema = useAppStore((s) => s.schema as Schema | null)
-  const catalogNodes = useAppStore((s) => s.catalogNodes)
 
   const isAdmin = isAdminEmail(session?.user?.email)
   const isViewMode = true
@@ -51,6 +54,11 @@ export default function Neo4jCaseViewPage() {
   const [extracted, setExtracted] = useState<any>(null)
   const [displayData, setDisplayData] = useState<any>(null)
   const [viewConfig, setViewConfig] = useState<any>(null)
+  
+  // Comparison state
+  const [comparisonLoading, setComparisonLoading] = useState(false)
+  const [comparisonError, setComparisonError] = useState<string | null>(null)
+  const [comparisonData, setComparisonData] = useState<any>(null)
 
   // Protect route
   useEffect(() => {
@@ -63,6 +71,11 @@ export default function Neo4jCaseViewPage() {
   // Fetch Neo4j-backed view payload
   useEffect(() => {
     if (!id) return
+    if (!neo4jCaseId) {
+      setError('Missing Neo4j case ID. Please access this page from the case view.')
+      setLoading(false)
+      return
+    }
     if (sessionStatus !== 'authenticated') return
     if (!isAdmin) return
 
@@ -70,7 +83,8 @@ export default function Neo4jCaseViewPage() {
       setLoading(true)
       setError(null)
       try {
-        const res = await fetch(`/api/admin/neo4j-cases/${encodeURIComponent(id)}/view?view=holdingsCentric`)
+        // Pass the Neo4j case_id directly to the backend
+        const res = await fetch(`/api/admin/neo4j-cases/${encodeURIComponent(neo4jCaseId)}/view?view=holdingsCentric`)
         const data = (await res.json()) as Neo4jCaseViewResponse
         if (!res.ok || !data?.success) {
           throw new Error(data?.error || data?.detail || 'Failed to load Neo4j case view')
@@ -84,7 +98,7 @@ export default function Neo4jCaseViewPage() {
         setLoading(false)
       }
     })()
-  }, [id, sessionStatus, isAdmin])
+  }, [id, neo4jCaseId, sessionStatus, isAdmin])
 
   // Graph state
   const { graphState, setGraphState, nodesArray, edgesArray, deletedNodeIds, orphanedNodeIds } = useGraphState(
@@ -92,14 +106,33 @@ export default function Neo4jCaseViewPage() {
     []
   )
 
-  // Initialize graph state from extracted (same pattern as normal case page)
-  useCatalogEnrichment(
-    extracted ? { extracted } : null,
-    catalogNodes as any,
-    graphState,
-    setGraphState,
-    () => {}
-  )
+  // Initialize graph state directly from extracted data (simpler than useCatalogEnrichment)
+  // Neo4j data is already complete - no need for catalog enrichment
+  const [graphInitialized, setGraphInitialized] = useState(false)
+  
+  useEffect(() => {
+    if (extracted && !graphInitialized) {
+      const nodes = extracted.nodes || []
+      const edges = extracted.edges || []
+      
+      const initialNodes = nodes.map((n: any) => ({ 
+        ...n, 
+        status: 'active' as const, 
+        source: 'initial' as const 
+      }))
+      const initialEdges = edges.map((e: any) => ({ 
+        ...e, 
+        status: 'active' as const,
+        properties: e.properties || {}
+      }))
+      
+      setGraphState({
+        nodes: initialNodes,
+        edges: initialEdges
+      })
+      setGraphInitialized(true)
+    }
+  }, [extracted, graphInitialized, setGraphState])
 
   // Node/edge lookups
   const { edgesByFrom, edgesByTo, nodeById, getLiveReliefType, getLiveForumAndJurisdiction } = useNodeLookups(
@@ -248,9 +281,17 @@ export default function Neo4jCaseViewPage() {
       const isReused = reusedNodes.has(node.temp_id)
       const parentLabel = options.parentId ? formatLabel(nodeById.get(options.parentId)?.label || 'parent') : ''
 
+      // Include parentId and index in key to handle shared/reused nodes and duplicates
+      const keyParts = [options.contextId || 'ctx']
+      if (options.parentId) keyParts.push(options.parentId)
+      keyParts.push(node.temp_id)
+      // Add index to handle duplicate nodes in the same list
+      if (options.index !== undefined) keyParts.push(String(options.index))
+      const uniqueKey = keyParts.join('-')
+
       return (
         <NodeCard
-          key={`${options.contextId || 'ctx'}-${node.temp_id}`}
+          key={uniqueKey}
           node={liveNode}
           label={label}
           index={options.index}
@@ -310,6 +351,31 @@ export default function Neo4jCaseViewPage() {
 
   const toggleFact = (factId: string) => uiActions.toggleFact(factId)
 
+  // Comparison handler
+  const handleCompare = useCallback(async () => {
+    if (!neo4jCaseId || !id) return
+    
+    setComparisonLoading(true)
+    setComparisonError(null)
+    
+    try {
+      const res = await fetch(
+        `/api/admin/neo4j-cases/${encodeURIComponent(neo4jCaseId)}/compare?postgres_case_id=${encodeURIComponent(id)}`
+      )
+      const data = await res.json()
+      
+      if (!res.ok || !data?.success) {
+        throw new Error(data?.error || data?.detail || 'Comparison failed')
+      }
+      
+      setComparisonData(data)
+    } catch (e) {
+      setComparisonError(e instanceof Error ? e.message : 'Comparison failed')
+    } finally {
+      setComparisonLoading(false)
+    }
+  }, [neo4jCaseId, id])
+
   if (sessionStatus === 'loading' || !session) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -320,16 +386,7 @@ export default function Neo4jCaseViewPage() {
 
   if (!isAdmin) return null
 
-  if (loading || !extracted || (graphState as any).nodes.length === 0) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="rounded-md border bg-gray-50 px-2 py-1 text-xs text-gray-600">
-          Loading Neo4j view...
-        </div>
-      </div>
-    )
-  }
-
+  // Check for errors FIRST (before loading check)
   if (error) {
     return (
       <div className="min-h-screen bg-gray-50">
@@ -337,6 +394,17 @@ export default function Neo4jCaseViewPage() {
           <div className="rounded border border-red-200 bg-red-50 p-4 text-sm text-red-800">
             {error}
           </div>
+        </div>
+      </div>
+    )
+  }
+
+  // Show loading state while fetching or while graph state is being initialized
+  if (loading || !extracted || (graphState as any).nodes.length === 0) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="rounded-md border bg-gray-50 px-2 py-1 text-xs text-gray-600">
+          Loading Neo4j view...
         </div>
       </div>
     )
@@ -385,6 +453,14 @@ export default function Neo4jCaseViewPage() {
               {domainName}
             </span>
           </div>
+
+          {/* Comparison Section */}
+          <ComparisonResults
+            loading={comparisonLoading}
+            error={comparisonError}
+            data={comparisonData}
+            onCompare={handleCompare}
+          />
 
           {/* Top Section */}
           <div className="space-y-4">

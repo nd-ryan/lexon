@@ -13,6 +13,8 @@ interface CaseStatus {
   jobId?: string
   currentMessage?: string
   progress?: number
+  embeddingsComplete?: boolean
+  missingEmbeddingsCount?: number
 }
 
 export default function BulkUploadPage() {
@@ -119,9 +121,17 @@ export default function BulkUploadPage() {
         throw new Error(kgData.error || 'KG upload failed')
       }
 
+      // Track embedding status
+      const embeddingsComplete = kgData.embeddings_complete !== false
+      const missingCount = kgData.embeddings_summary?.missing ?? 0
+
       updateCaseStatus(index, {
         status: 'completed',
-        currentMessage: 'Successfully uploaded to Knowledge Graph'
+        currentMessage: embeddingsComplete 
+          ? 'Successfully uploaded to Knowledge Graph'
+          : `Uploaded to KG (${missingCount} embeddings missing)`,
+        embeddingsComplete,
+        missingEmbeddingsCount: missingCount
       })
 
       return true
@@ -132,6 +142,19 @@ export default function BulkUploadPage() {
       })
       return false
     }
+  }
+
+  const retryEmbeddings = async (index: number) => {
+    const caseStatus = caseStatuses[index]
+    if (!caseStatus.caseId) return
+
+    updateCaseStatus(index, {
+      currentMessage: 'Retrying embedding generation...',
+      embeddingsComplete: undefined,
+      missingEmbeddingsCount: undefined
+    })
+
+    await processKGUpload(index, caseStatus.caseId)
   }
 
   const processSingleCase = async (index: number): Promise<boolean> => {
@@ -221,7 +244,8 @@ export default function BulkUploadPage() {
     return <div className="p-8">Loading...</div>
   }
 
-  const completedCount = caseStatuses.filter(s => s.status === 'completed').length
+  const completedCount = caseStatuses.filter(s => s.status === 'completed' && s.embeddingsComplete !== false).length
+  const warningCount = caseStatuses.filter(s => s.status === 'completed' && s.embeddingsComplete === false).length
   const failedCount = caseStatuses.filter(s => s.status === 'failed').length
 
   return (
@@ -275,7 +299,7 @@ export default function BulkUploadPage() {
             <h2 className="text-lg font-semibold">Processing Status</h2>
             {!processing && (
               <div className="text-sm text-gray-600">
-                Completed: {completedCount} | Failed: {failedCount} | Total: {caseStatuses.length}
+                Completed: {completedCount} {warningCount > 0 && `| Warnings: ${warningCount}`} | Failed: {failedCount} | Total: {caseStatuses.length}
               </div>
             )}
           </div>
@@ -295,7 +319,9 @@ export default function BulkUploadPage() {
               <div
                 key={idx}
                 className={`p-4 rounded border transition-colors ${
-                  caseStatus.status === 'completed'
+                  caseStatus.status === 'completed' && caseStatus.embeddingsComplete === false
+                    ? 'bg-amber-50 border-amber-200'
+                    : caseStatus.status === 'completed'
                     ? 'bg-green-50 border-green-200'
                     : caseStatus.status === 'failed'
                     ? 'bg-red-50 border-red-200'
@@ -340,8 +366,21 @@ export default function BulkUploadPage() {
                     {caseStatus.status === 'uploading-kg' && (
                       <span className="text-sm text-blue-600 whitespace-nowrap">🔄 Uploading to KG...</span>
                     )}
-                    {caseStatus.status === 'completed' && (
+                    {caseStatus.status === 'completed' && caseStatus.embeddingsComplete !== false && (
                       <span className="text-sm text-green-600 whitespace-nowrap">✅ Complete</span>
+                    )}
+                    {caseStatus.status === 'completed' && caseStatus.embeddingsComplete === false && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm text-amber-600 whitespace-nowrap">⚠️ Missing embeddings</span>
+                        {!processing && (
+                          <button
+                            onClick={() => retryEmbeddings(idx)}
+                            className="text-xs bg-amber-100 hover:bg-amber-200 text-amber-800 px-2 py-1 rounded"
+                          >
+                            Retry
+                          </button>
+                        )}
+                      </div>
                     )}
                     {caseStatus.status === 'failed' && (
                       <span className="text-sm text-red-600 whitespace-nowrap">❌ Failed</span>

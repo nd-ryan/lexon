@@ -21,26 +21,40 @@ CALL (c) {
     WITH p
     OPTIONAL MATCH (p)-[:ADDRESSES]->(i:Issue)
     WITH DISTINCT i
+    WHERE i IS NOT NULL
+    
+    // Collect related nodes using subqueries with DISTINCT
+    CALL (i) {
+      WITH i
+      OPTIONAL MATCH (i)-[:RELATES_TO_DOCTRINE]->(doc:Doctrine)
+      WITH DISTINCT doc
+      WHERE doc IS NOT NULL
+      RETURN collect(apoc.map.removeKeys(properties(doc), [k IN keys(doc) WHERE k ENDS WITH "_embedding"])) AS doctrines
+    }
+    CALL (i) {
+      WITH i
+      OPTIONAL MATCH (i)-[:RELATES_TO_POLICY]->(po:Policy)
+      WITH DISTINCT po
+      WHERE po IS NOT NULL
+      RETURN collect(apoc.map.removeKeys(properties(po), [k IN keys(po) WHERE k ENDS WITH "_embedding"])) AS policies
+    }
+    CALL (i) {
+      WITH i
+      OPTIONAL MATCH (i)-[:RELATES_TO_FACTPATTERN]->(fp:FactPattern)
+      WITH DISTINCT fp
+      WHERE fp IS NOT NULL
+      RETURN collect(apoc.map.removeKeys(properties(fp), [k IN keys(fp) WHERE k ENDS WITH "_embedding"])) AS fact_patterns
+    }
+    
     RETURN collect(
-      CASE WHEN i IS NULL THEN NULL ELSE
-        apoc.map.merge(
-          apoc.map.removeKeys(properties(i), [k IN keys(i) WHERE k ENDS WITH "_embedding"]),
-          {
-            doctrines: [
-              (i)-[:RELATES_TO_DOCTRINE]->(doc:Doctrine) |
-              apoc.map.removeKeys(properties(doc), [k IN keys(doc) WHERE k ENDS WITH "_embedding"])
-            ],
-            policies: [
-              (i)-[:RELATES_TO_POLICY]->(po:Policy) |
-              apoc.map.removeKeys(properties(po), [k IN keys(po) WHERE k ENDS WITH "_embedding"])
-            ],
-            fact_patterns: [
-              (i)-[:RELATES_TO_FACTPATTERN]->(fp:FactPattern) |
-              apoc.map.removeKeys(properties(fp), [k IN keys(fp) WHERE k ENDS WITH "_embedding"])
-            ]
-          }
-        )
-      END
+      apoc.map.merge(
+        apoc.map.removeKeys(properties(i), [k IN keys(i) WHERE k ENDS WITH "_embedding"]),
+        {
+          doctrines: doctrines,
+          policies: policies,
+          fact_patterns: fact_patterns
+        }
+      )
     ) AS issues
   }
 
@@ -48,62 +62,97 @@ CALL (c) {
     WITH p
     OPTIONAL MATCH (p)-[:RESULTS_IN]->(r:Ruling)
     WITH DISTINCT r
-    RETURN collect(
-      CASE WHEN r IS NULL THEN NULL ELSE
+    WHERE r IS NOT NULL
+    
+    // Get the issue this ruling sets
+    OPTIONAL MATCH (r)-[s:SETS]->(setIssue:Issue)
+    WITH r, head(collect({
+      props: apoc.map.removeKeys(properties(setIssue), [k IN keys(setIssue) WHERE k ENDS WITH "_embedding"]),
+      in_favor: s.in_favor
+    })) AS setsIssueData
+    
+    // Collect reliefs
+    CALL (r) {
+      WITH r
+      OPTIONAL MATCH (r)-[rr:RESULTS_IN]->(rel:Relief)
+      WITH DISTINCT rel, rr
+      WHERE rel IS NOT NULL
+      OPTIONAL MATCH (rel)-[:IS_TYPE]->(rt:ReliefType)
+      RETURN collect(
         apoc.map.merge(
-          apoc.map.removeKeys(properties(r), [k IN keys(r) WHERE k ENDS WITH "_embedding"]),
+          apoc.map.removeKeys(properties(rel), [k IN keys(rel) WHERE k ENDS WITH "_embedding"]),
           {
-            sets_issue: head([
-              (r)-[s:SETS]->(i:Issue) |
-              apoc.map.merge(
-                apoc.map.removeKeys(properties(i), [k IN keys(i) WHERE k ENDS WITH "_embedding"]),
-                { in_favor: s.in_favor }
-              )
-            ]),
-
-            reliefs: [
-              (r)-[rr:RESULTS_IN]->(rel:Relief) |
-              apoc.map.merge(
-                apoc.map.removeKeys(properties(rel), [k IN keys(rel) WHERE k ENDS WITH "_embedding"]),
-                {
-                  relief_status: rr.relief_status,
-                  relief_type: head([
-                    (rel)-[:IS_TYPE]->(rt:ReliefType) |
-                    apoc.map.removeKeys(properties(rt), [k IN keys(rt) WHERE k ENDS WITH "_embedding"])
-                  ])
-                }
-              )
-            ],
-
-            laws: [
-              (r)-[:RELIES_ON_LAW]->(law:Law) |
-              apoc.map.removeKeys(properties(law), [k IN keys(law) WHERE k ENDS WITH "_embedding"])
-            ],
-
-            arguments: [
-              (r)<-[ev:EVALUATED_IN]-(a:Argument) |
-              apoc.map.merge(
-                apoc.map.removeKeys(properties(a), [k IN keys(a) WHERE k ENDS WITH "_embedding"]),
-                {
-                  status: ev.status,
-                  doctrines: [
-                    (a)-[:RELATES_TO_DOCTRINE]->(doc:Doctrine) |
-                    apoc.map.removeKeys(properties(doc), [k IN keys(doc) WHERE k ENDS WITH "_embedding"])
-                  ],
-                  policies: [
-                    (a)-[:RELATES_TO_POLICY]->(po:Policy) |
-                    apoc.map.removeKeys(properties(po), [k IN keys(po) WHERE k ENDS WITH "_embedding"])
-                  ],
-                  fact_patterns: [
-                    (a)-[:RELATES_TO_FACTPATTERN]->(fp:FactPattern) |
-                    apoc.map.removeKeys(properties(fp), [k IN keys(fp) WHERE k ENDS WITH "_embedding"])
-                  ]
-                }
-              )
-            ]
+            relief_status: rr.relief_status,
+            relief_type: CASE WHEN rt IS NULL THEN NULL ELSE apoc.map.removeKeys(properties(rt), [k IN keys(rt) WHERE k ENDS WITH "_embedding"]) END
           }
         )
-      END
+      ) AS reliefs
+    }
+    
+    // Collect laws
+    CALL (r) {
+      WITH r
+      OPTIONAL MATCH (r)-[:RELIES_ON_LAW]->(law:Law)
+      WITH DISTINCT law
+      WHERE law IS NOT NULL
+      RETURN collect(apoc.map.removeKeys(properties(law), [k IN keys(law) WHERE k ENDS WITH "_embedding"])) AS laws
+    }
+    
+    // Collect arguments with their nested entities
+    CALL (r) {
+      WITH r
+      OPTIONAL MATCH (r)<-[ev:EVALUATED_IN]-(a:Argument)
+      WITH DISTINCT a, ev
+      WHERE a IS NOT NULL
+      
+      // Get doctrines for this argument
+      CALL (a) {
+        WITH a
+        OPTIONAL MATCH (a)-[:RELATES_TO_DOCTRINE]->(doc:Doctrine)
+        WITH DISTINCT doc
+        WHERE doc IS NOT NULL
+        RETURN collect(apoc.map.removeKeys(properties(doc), [k IN keys(doc) WHERE k ENDS WITH "_embedding"])) AS argDoctrines
+      }
+      // Get policies for this argument
+      CALL (a) {
+        WITH a
+        OPTIONAL MATCH (a)-[:RELATES_TO_POLICY]->(po:Policy)
+        WITH DISTINCT po
+        WHERE po IS NOT NULL
+        RETURN collect(apoc.map.removeKeys(properties(po), [k IN keys(po) WHERE k ENDS WITH "_embedding"])) AS argPolicies
+      }
+      // Get fact patterns for this argument
+      CALL (a) {
+        WITH a
+        OPTIONAL MATCH (a)-[:RELATES_TO_FACTPATTERN]->(fp:FactPattern)
+        WITH DISTINCT fp
+        WHERE fp IS NOT NULL
+        RETURN collect(apoc.map.removeKeys(properties(fp), [k IN keys(fp) WHERE k ENDS WITH "_embedding"])) AS argFactPatterns
+      }
+      
+      RETURN collect(
+        apoc.map.merge(
+          apoc.map.removeKeys(properties(a), [k IN keys(a) WHERE k ENDS WITH "_embedding"]),
+          {
+            status: ev.status,
+            doctrines: argDoctrines,
+            policies: argPolicies,
+            fact_patterns: argFactPatterns
+          }
+        )
+      ) AS arguments
+    }
+    
+    RETURN collect(
+      apoc.map.merge(
+        apoc.map.removeKeys(properties(r), [k IN keys(r) WHERE k ENDS WITH "_embedding"]),
+        {
+          sets_issue: CASE WHEN setsIssueData.props IS NULL THEN NULL ELSE apoc.map.merge(setsIssueData.props, {in_favor: setsIssueData.in_favor}) END,
+          reliefs: reliefs,
+          laws: laws,
+          arguments: arguments
+        }
+      )
     ) AS rulings
   }
 
@@ -128,5 +177,4 @@ RETURN apoc.map.merge(
     proceedings: proceedings
   }
 ) AS case_data;
-
 

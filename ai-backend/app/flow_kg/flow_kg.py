@@ -441,28 +441,33 @@ class KGFlow(Flow[KGState]):
                 # Get embedding source fields for this label
                 embedding_fields = node_list[0]["embedding_fields"]
                 
-                # Build query to fetch text fields
-                return_fields = [f"n.{id_prop} as id"] + [f"n.{field} as {field}" for field in embedding_fields]
+                # Build query to fetch text fields AND check if embeddings exist
+                return_fields = [f"n.{id_prop} as id"]
+                for field in embedding_fields:
+                    return_fields.append(f"n.{field} as {field}")
+                    return_fields.append(f"n.{field}_embedding IS NOT NULL as {field}_has_embedding")
                 query = f"MATCH (n:`{label}`) WHERE n.{id_prop} IN $ids RETURN {', '.join(return_fields)}"
                 
                 try:
                     result = neo4j_client.execute_query(query, {"ids": uuids})
                     
-                    # Build hash map of existing node text fields
-                    existing_hashes = {}
+                    # Build hash map of existing node text fields and embedding existence
+                    existing_info = {}
                     for record in result:
                         node_id = str(record.get("id"))
                         if not node_id:
                             continue
                         
-                        # Hash all text fields
-                        text_hash = {}
+                        # Hash all text fields and track embedding existence
+                        node_data = {"text_hashes": {}, "embeddings_exist": {}}
                         for field in embedding_fields:
                             text_value = record.get(field, "")
                             if text_value:
                                 hash_obj = hashlib.sha256(str(text_value).encode('utf-8'))
-                                text_hash[field] = hash_obj.hexdigest()
-                        existing_hashes[node_id] = text_hash
+                                node_data["text_hashes"][field] = hash_obj.hexdigest()
+                            # Check if embedding exists
+                            node_data["embeddings_exist"][field] = bool(record.get(f"{field}_has_embedding", False))
+                        existing_info[node_id] = node_data
                     
                     # Compare with input nodes to determine which need new embeddings
                     for node_info in node_list:
@@ -470,20 +475,28 @@ class KGFlow(Flow[KGState]):
                         props = node_info["props"]
                         
                         # If node doesn't exist in Neo4j, it needs embeddings
-                        if node_uuid not in existing_hashes:
+                        if node_uuid not in existing_info:
                             nodes_needing_embeddings.add(node_uuid)
                             logger.debug(f"Node {label}:{node_uuid} is new, needs embeddings")
                             continue
                         
-                        # Compare hashes of text fields
-                        existing_hash = existing_hashes[node_uuid]
+                        # Compare hashes of text fields AND check embedding existence
+                        existing = existing_info[node_uuid]
+                        existing_hashes = existing["text_hashes"]
+                        embeddings_exist = existing["embeddings_exist"]
                         needs_update = False
                         
                         for field in embedding_fields:
                             current_text = props.get(field, "")
                             if current_text:
+                                # Check if embedding is missing
+                                if not embeddings_exist.get(field, False):
+                                    needs_update = True
+                                    logger.debug(f"Node {label}:{node_uuid} field '{field}' missing embedding")
+                                    break
+                                # Check if text changed
                                 current_hash = hashlib.sha256(str(current_text).encode('utf-8')).hexdigest()
-                                if existing_hash.get(field) != current_hash:
+                                if existing_hashes.get(field) != current_hash:
                                     needs_update = True
                                     logger.debug(f"Node {label}:{node_uuid} field '{field}' changed, needs embeddings")
                                     break

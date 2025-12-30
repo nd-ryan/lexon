@@ -3,6 +3,11 @@
 These routes are protected by the same X-API-Key mechanism used elsewhere in the backend.
 They are intended to be called via Next.js admin proxy routes (so Neo4j credentials never
 reach the browser).
+
+Note: The case_id parameter in these routes is the Neo4j case_id (the UUID stored as the
+case_id property on Case nodes in Neo4j), NOT the Postgres case table primary key. The
+frontend is responsible for extracting the Neo4j case_id from the case data and passing
+it directly.
 """
 
 from __future__ import annotations
@@ -12,9 +17,12 @@ import os
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
 
 from app.lib.neo4j_client import neo4j_client
 from app.lib.security import get_api_key
+from app.lib.db import get_db
+from app.lib.case_repo import case_repo
 
 
 router = APIRouter(prefix="/neo4j-cases", dependencies=[Depends(get_api_key)])
@@ -82,6 +90,7 @@ def _case_data_to_extracted(case_data: Dict[str, Any]) -> Dict[str, Any]:
 
     nodes_by_id: Dict[str, Dict[str, Any]] = {}
     edges: List[Dict[str, Any]] = []
+    seen_edges: set[tuple[str, str, str]] = set()  # (from, to, label) for deduplication
 
     def add_node(label: str, props: Dict[str, Any]) -> str:
         if not isinstance(props, dict):
@@ -108,6 +117,11 @@ def _case_data_to_extracted(case_data: Dict[str, Any]) -> Dict[str, Any]:
     def add_edge(frm: str, to: str, label: str, properties: Dict[str, Any] | None = None):
         if not frm or not to:
             return
+        # Deduplicate edges by (from, to, label)
+        edge_key = (frm, to, label)
+        if edge_key in seen_edges:
+            return
+        seen_edges.add(edge_key)
         e: Dict[str, Any] = {"from": frm, "to": to, "label": label}
         if properties is not None:
             e["properties"] = properties
@@ -313,6 +327,9 @@ def get_case_graph_from_neo4j(
     Important: This is intentionally *Neo4j-native* shape, not the Postgres extracted/edited shape.
     We also prevent traversal through other Case nodes to avoid pulling in neighboring cases via
     shared nodes like Domain.
+    
+    Note: case_id parameter is the Neo4j case_id (UUID stored on Case node), passed directly
+    from the frontend which extracts it from the case data.
     """
     if not case_id:
         raise HTTPException(status_code=400, detail="case_id is required")
@@ -343,7 +360,11 @@ def get_case_graph_from_neo4j(
 
 @router.get("/{case_id}/view")
 def get_case_view_from_neo4j(case_id: str, view: str = "holdingsCentric"):
-    """Return a Neo4j-backed case in the same {nodes,edges}+displayData shape as Postgres cases."""
+    """Return a Neo4j-backed case in the same {nodes,edges}+displayData shape as Postgres cases.
+    
+    Note: case_id parameter is the Neo4j case_id (UUID stored on Case node), passed directly
+    from the frontend which extracts it from the case data.
+    """
     if not case_id:
         raise HTTPException(status_code=400, detail="case_id is required")
 
@@ -352,7 +373,27 @@ def get_case_view_from_neo4j(case_id: str, view: str = "holdingsCentric"):
     cypher = template.replace("$caseId", case_literal)
     rows = neo4j_client.execute_query(cypher, {})
     if not rows:
-        raise HTTPException(status_code=404, detail="Case not found in Neo4j")
+        # NOTE: `case_graph.cypher` has an inner mandatory MATCH on Proceeding:
+        #   MATCH (c)-[:HAS_PROCEEDING]->(p:Proceeding)
+        # So a Case can exist in Neo4j but still return 0 rows if it has no proceedings yet.
+        # In that situation, fall back to a minimal `case_data` so the view page can render.
+        fallback = neo4j_client.execute_query(
+            f"""
+            MATCH (c:Case {{case_id: {case_literal}}})
+            OPTIONAL MATCH (d:Domain)-[:CONTAINS]->(c)
+            RETURN apoc.map.merge(
+              apoc.map.removeKeys(properties(c), [k IN keys(c) WHERE k ENDS WITH "_embedding"]),
+              {{
+                domain: CASE WHEN d IS NULL THEN NULL ELSE apoc.map.removeKeys(properties(d), [k IN keys(d) WHERE k ENDS WITH "_embedding"]) END,
+                proceedings: []
+              }}
+            ) AS case_data
+            """,
+            {},
+        )
+        if not fallback:
+            raise HTTPException(status_code=404, detail="Case not found in Neo4j")
+        rows = fallback
     row = rows[0]
     case_data = row.get("case_data")
     if not case_data:
@@ -384,4 +425,101 @@ def get_case_view_from_neo4j(case_id: str, view: str = "holdingsCentric"):
         "data": filtered_structured,
     }
 
+
+@router.get("/{neo4j_case_id}/compare")
+def compare_case_postgres_neo4j(
+    neo4j_case_id: str,
+    postgres_case_id: str = Query(..., description="Postgres case table primary key"),
+    db: Session = Depends(get_db),
+):
+    """Compare case data between Postgres and Neo4j.
+    
+    This endpoint fetches the case from both Postgres and Neo4j and returns
+    a detailed comparison showing what matches and what differs.
+    
+    Args:
+        neo4j_case_id: The Neo4j case_id (UUID stored on Case node)
+        postgres_case_id: The Postgres case table primary key
+    
+    Returns:
+        Comparison result with summary stats and detailed field-by-field comparisons
+    """
+    from app.lib.case_comparison import compare_case_data
+    from app.lib.property_filter import filter_case_data
+    
+    if not neo4j_case_id:
+        raise HTTPException(status_code=400, detail="neo4j_case_id is required")
+    if not postgres_case_id:
+        raise HTTPException(status_code=400, detail="postgres_case_id is required")
+    
+    # Fetch from Postgres
+    postgres_record = case_repo.get_case(db.connection(), postgres_case_id)
+    if not postgres_record:
+        raise HTTPException(status_code=404, detail="Case not found in Postgres")
+    
+    # Use kg_extracted if available (represents what was actually sent to Neo4j),
+    # otherwise fall back to extracted
+    postgres_data = postgres_record.get("kg_extracted") or postgres_record.get("extracted")
+    if not postgres_data:
+        raise HTTPException(status_code=400, detail="Case has no extracted data in Postgres")
+    
+    # Filter out hidden properties for fair comparison
+    try:
+        postgres_data = filter_case_data(postgres_data)
+    except Exception:
+        pass  # Continue even if filtering fails
+    
+    # Fetch from Neo4j
+    template = _load_case_graph_cypher()
+    case_literal = f"'{_escape_cypher_string_literal(neo4j_case_id)}'"
+    cypher = template.replace("$caseId", case_literal)
+    
+    rows = neo4j_client.execute_query(cypher, {})
+    if not rows:
+        # Try fallback query for cases without proceedings
+        fallback = neo4j_client.execute_query(
+            f"""
+            MATCH (c:Case {{case_id: {case_literal}}})
+            OPTIONAL MATCH (d:Domain)-[:CONTAINS]->(c)
+            RETURN apoc.map.merge(
+              apoc.map.removeKeys(properties(c), [k IN keys(c) WHERE k ENDS WITH "_embedding"]),
+              {{
+                domain: CASE WHEN d IS NULL THEN NULL ELSE apoc.map.removeKeys(properties(d), [k IN keys(d) WHERE k ENDS WITH "_embedding"]) END,
+                proceedings: []
+              }}
+            ) AS case_data
+            """,
+            {},
+        )
+        if not fallback:
+            raise HTTPException(status_code=404, detail="Case not found in Neo4j")
+        rows = fallback
+    
+    row = rows[0]
+    case_data = row.get("case_data")
+    if not case_data:
+        raise HTTPException(status_code=404, detail="Case not found in Neo4j")
+    
+    case_data = _strip_embedding_properties(case_data)
+    neo4j_data = _case_data_to_extracted(case_data)
+    
+    # Filter Neo4j data for fair comparison
+    try:
+        neo4j_data = filter_case_data(neo4j_data)
+    except Exception:
+        pass  # Continue even if filtering fails
+    
+    # Run comparison (pass neo4j_client for embedding validation)
+    comparison_result = compare_case_data(
+        postgres_data, 
+        neo4j_data,
+        neo4j_client=neo4j_client
+    )
+    
+    return {
+        "success": True,
+        "postgres_case_id": postgres_case_id,
+        "neo4j_case_id": neo4j_case_id,
+        **comparison_result
+    }
 
