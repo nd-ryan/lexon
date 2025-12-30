@@ -48,17 +48,17 @@ export default function CasesListPage() {
   }
   
   const fetchCases = useCallback(async () => {
-    try {
-      const response = await fetch('/api/cases');
-      const result = await response.json();
-      setData(result);
-      setIsLoading(false);
-    } catch (err) {
-      setError(err);
-      setIsLoading(false);
-    }
+      try {
+        const response = await fetch('/api/cases');
+        const result = await response.json();
+        setData(result);
+        setIsLoading(false);
+      } catch (err) {
+        setError(err);
+        setIsLoading(false);
+      }
   }, []);
-  
+    
   useEffect(() => {
     fetchCases();
   }, [fetchCases]);
@@ -119,7 +119,7 @@ export default function CasesListPage() {
       items = items.filter((item: any) => item.comparison_status === selectedComparisonStatus);
     }
     
-    return items;
+      return items;
   }, [data, selectedDomain, selectedComparisonStatus, isAdmin]);
   
   // Start batch comparison
@@ -286,12 +286,12 @@ export default function CasesListPage() {
                 {batchRunning ? 'Running...' : 'Run Comparisons'}
               </button>
             )}
-            <Link 
-              href="/cases/upload"
-              className="text-blue-600 underline text-sm hover:text-blue-700"
-            >
-              Upload
-            </Link>
+          <Link 
+            href="/cases/upload"
+            className="text-blue-600 underline text-sm hover:text-blue-700"
+          >
+            Upload
+          </Link>
           </div>
         </div>
 
@@ -409,19 +409,19 @@ export default function CasesListPage() {
                           {c.extracted?.case_name || c.filename}
                         </h3>
                       </Link>
-                      <div className="flex items-center gap-3 mt-1 text-xs text-gray-600">
-                        <span className="capitalize">{c.status}</span>
-                        {domainName && (
-                          <>
-                            <span className="text-gray-300">•</span>
-                            <span className="px-2 py-0.5 bg-blue-500 text-white rounded-full">
-                              {domainName}
-                            </span>
-                          </>
-                        )}
+                        <div className="flex items-center gap-3 mt-1 text-xs text-gray-600">
+                          <span className="capitalize">{c.status}</span>
+                          {domainName && (
+                            <>
+                              <span className="text-gray-300">•</span>
+                              <span className="px-2 py-0.5 bg-blue-500 text-white rounded-full">
+                                {domainName}
+                              </span>
+                            </>
+                          )}
                         {/* Comparison status badge (admin only) */}
                         {renderComparisonBadge(c)}
-                      </div>
+                        </div>
                     </div>
                     <div className="flex items-center gap-2">
                       <DocumentDownloadButton caseId={c.id} hasFile={c.has_file} />

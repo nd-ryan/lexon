@@ -446,16 +446,19 @@ def prune_ui_schema_for_llm(schema_payload: Any) -> Dict[str, Any]:
     return {"labels": labels}
 
 
-def build_property_models(spec: Dict[str, Any]) -> Tuple[Dict[str, Type[BaseModel]], Dict[str, Dict[str, str]], Dict[str, Dict[str, Dict[str, Any]]], Dict[str, Dict[str, bool]]]:
+def build_property_models(spec: Dict[str, Any]) -> Tuple[Dict[str, Type[BaseModel]], Dict[str, Dict[str, str]], Dict[str, Dict[str, Dict[str, Any]]], Dict[str, Dict[str, bool]], Dict[str, Dict[str, str]]]:
     """Create Pydantic models per label for node.properties and return:
     - models_by_label: { label: PydanticModel }
     - relationships_by_label: { label: { rel_label: target_label } }
     - properties_meta_by_label: { label: { prop_name: {required, type, options, format?} } }
+    - label_flags_by_label: { label: { case_unique, can_create_new, ai_ignore } }
+    - relationship_cardinality_by_label: { label: { rel_label: cardinality } }
     """
     models_by_label: Dict[str, Type[BaseModel]] = {}
     relationships_by_label: Dict[str, Dict[str, str]] = {}
     properties_meta_by_label: Dict[str, Dict[str, Dict[str, Any]]] = {}
     label_flags_by_label: Dict[str, Dict[str, bool]] = {}
+    relationship_cardinality_by_label: Dict[str, Dict[str, str]] = {}
 
     labels = spec.get("labels", []) if isinstance(spec, dict) else []
     for label_def in labels:
@@ -544,19 +547,25 @@ def build_property_models(spec: Dict[str, Any]) -> Tuple[Dict[str, Type[BaseMode
 
         models_by_label[label] = model
         
-        # Extract relationship targets (handle both string and object formats)
+        # Extract relationship targets and cardinality (handle both string and object formats)
         rels_raw = label_def.get("relationships", {}) or {}
         rels_mapped: Dict[str, str] = {}
+        cardinality_mapped: Dict[str, str] = {}
         for rel_label, rel_def in rels_raw.items():
             if isinstance(rel_def, str):
-                # Old format: "INVOLVES": "Party"
+                # Old format: "INVOLVES": "Party" - assume one-to-many as default
                 rels_mapped[rel_label] = rel_def
+                cardinality_mapped[rel_label] = "one-to-many"
             elif isinstance(rel_def, dict):
-                # New format: "INVOLVES": {"target": "Party", "properties": {...}}
+                # New format: "INVOLVES": {"target": "Party", "cardinality": "one-to-many", "properties": {...}}
                 target = rel_def.get("target")
                 if isinstance(target, str):
                     rels_mapped[rel_label] = target
+                    # Extract cardinality, default to one-to-many if not specified
+                    cardinality = rel_def.get("cardinality", "one-to-many")
+                    cardinality_mapped[rel_label] = cardinality if isinstance(cardinality, str) else "one-to-many"
         relationships_by_label[label] = rels_mapped
+        relationship_cardinality_by_label[label] = cardinality_mapped
         
         properties_meta_by_label[label] = properties_meta
         # Capture flags; defaults if not present
@@ -566,7 +575,7 @@ def build_property_models(spec: Dict[str, Any]) -> Tuple[Dict[str, Type[BaseMode
             "ai_ignore": bool(label_def.get("ai_ignore", False)),
         }
 
-    return models_by_label, relationships_by_label, properties_meta_by_label, label_flags_by_label
+    return models_by_label, relationships_by_label, properties_meta_by_label, label_flags_by_label, relationship_cardinality_by_label
 
 
 def convert_properties_for_neo4j(
@@ -622,6 +631,7 @@ def validate_case_graph(
     properties_meta_by_label: Dict[str, Dict[str, Dict[str, Any]]],
     label_flags_by_label: Optional[Dict[str, Dict[str, bool]]] = None,
     existing_catalog_by_label: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    relationship_cardinality_by_label: Optional[Dict[str, Dict[str, str]]] = None,
 ) -> Tuple[Dict[str, Any], List[str]]:
     """Validate and coerce a CaseGraph-like payload.
 
@@ -629,6 +639,7 @@ def validate_case_graph(
     - Enforces date format YYYY-MM-DD where specified
     - Enforces enums where configured (via model type)
     - Validates edges: label allowed for source label and target label matches expected
+    - Validates cardinality constraints (one-to-one, one-to-many, many-to-one, many-to-many)
     Returns (cleaned_payload, errors)
     """
     errors: List[str] = []
@@ -817,12 +828,109 @@ def validate_case_graph(
             "properties": eprops,
         })
 
+    # Validate cardinality constraints
+    if relationship_cardinality_by_label:
+        cardinality_errors = _validate_cardinality(cleaned_edges, id_to_label, relationship_cardinality_by_label)
+        errors.extend(cardinality_errors)
+
     cleaned = {
         "case_name": case_name if isinstance(case_name, str) else "",
         "nodes": cleaned_nodes,
         "edges": cleaned_edges,
     }
     return cleaned, errors
+
+
+def _validate_cardinality(
+    edges: List[Dict[str, Any]],
+    id_to_label: Dict[str, str],
+    relationship_cardinality_by_label: Dict[str, Dict[str, str]],
+) -> List[str]:
+    """Validate cardinality constraints on edges.
+    
+    Cardinality types:
+    - one-to-one: Each source can have at most ONE edge of this type, AND each target can only be referenced once
+    - one-to-many: Each source can have MANY edges, but each target can only be referenced once per relationship type
+    - many-to-one: Each source can have at most ONE edge of this type, but targets can be referenced many times
+    - many-to-many: No restrictions
+    
+    Returns list of error messages for any violations.
+    """
+    errors: List[str] = []
+    
+    # Track edges by (source_label, rel_label) -> list of (from_id, to_id)
+    edges_by_type: Dict[Tuple[str, str], List[Tuple[str, str]]] = {}
+    
+    for edge in edges:
+        frm = edge.get("from")
+        to = edge.get("to")
+        elabel = edge.get("label")
+        
+        if not frm or not to or not elabel:
+            continue
+        
+        src_label = id_to_label.get(frm)
+        if not src_label:
+            continue
+        
+        key = (src_label, elabel)
+        if key not in edges_by_type:
+            edges_by_type[key] = []
+        edges_by_type[key].append((frm, to))
+    
+    # Check cardinality for each relationship type
+    for (src_label, rel_label), edge_list in edges_by_type.items():
+        cardinality = relationship_cardinality_by_label.get(src_label, {}).get(rel_label, "many-to-many")
+        
+        # Count edges per source and per target
+        edges_per_source: Dict[str, List[str]] = {}  # source_id -> list of target_ids
+        edges_per_target: Dict[str, List[str]] = {}  # target_id -> list of source_ids
+        
+        for frm, to in edge_list:
+            if frm not in edges_per_source:
+                edges_per_source[frm] = []
+            edges_per_source[frm].append(to)
+            
+            if to not in edges_per_target:
+                edges_per_target[to] = []
+            edges_per_target[to].append(frm)
+        
+        if cardinality == "one-to-one":
+            # Each source can have at most ONE edge, AND each target can only be referenced once
+            for src_id, targets in edges_per_source.items():
+                if len(targets) > 1:
+                    errors.append(
+                        f"Cardinality violation: {src_label}-[{rel_label}] is one-to-one, "
+                        f"but source '{src_id}' has {len(targets)} edges (targets: {targets[:3]}{'...' if len(targets) > 3 else ''})"
+                    )
+            for tgt_id, sources in edges_per_target.items():
+                if len(sources) > 1:
+                    errors.append(
+                        f"Cardinality violation: {src_label}-[{rel_label}] is one-to-one, "
+                        f"but target '{tgt_id}' is referenced by {len(sources)} sources (sources: {sources[:3]}{'...' if len(sources) > 3 else ''})"
+                    )
+        
+        elif cardinality == "one-to-many":
+            # Each source can have many, but each target can only be referenced once (per this relationship type)
+            for tgt_id, sources in edges_per_target.items():
+                if len(sources) > 1:
+                    errors.append(
+                        f"Cardinality violation: {src_label}-[{rel_label}] is one-to-many, "
+                        f"but target '{tgt_id}' is referenced by {len(sources)} sources (sources: {sources[:3]}{'...' if len(sources) > 3 else ''})"
+                    )
+        
+        elif cardinality == "many-to-one":
+            # Each source can have at most ONE edge of this type, but targets can be shared
+            for src_id, targets in edges_per_source.items():
+                if len(targets) > 1:
+                    errors.append(
+                        f"Cardinality violation: {src_label}-[{rel_label}] is many-to-one, "
+                        f"but source '{src_id}' has {len(targets)} edges (targets: {targets[:3]}{'...' if len(targets) > 3 else ''})"
+                    )
+        
+        # many-to-many: no restrictions
+    
+    return errors
 
 
 def render_spec_text(spec: Dict[str, Any]) -> str:

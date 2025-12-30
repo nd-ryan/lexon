@@ -38,6 +38,170 @@ def _get_label_instructions_and_examples(label: str, node_instructions_by_label:
     return instructions, examples_json
 
 
+# ==============================================================================
+# INDEX-BASED CATALOG SELECTION HELPERS
+# ==============================================================================
+# These helpers prevent UUID hallucination by having the AI return simple indices
+# instead of UUIDs. We then validate and map indices back to real IDs in code.
+
+def build_indexed_catalog(
+    catalog: List[Dict[str, Any]], 
+    id_field: str,
+    display_fields: Optional[List[str]] = None
+) -> tuple[List[Dict[str, Any]], Dict[int, str]]:
+    """
+    Build an indexed version of a catalog for AI consumption.
+    
+    Instead of exposing UUIDs to the AI (which can be hallucinated), we add a simple
+    integer index `_idx` to each entry. The AI returns indices, which we then map
+    back to real IDs.
+    
+    Args:
+        catalog: List of catalog entries (each a dict with properties)
+        id_field: The name of the ID field (e.g., "doctrine_id", "forum_id")
+        display_fields: Optional list of fields to include in indexed catalog.
+                       If None, includes all fields except embeddings.
+    
+    Returns:
+        Tuple of:
+        - indexed_catalog: List of catalog entries with `_idx` field added
+        - idx_to_id_map: Dict mapping index -> original ID value
+    
+    Example:
+        indexed, idx_map = build_indexed_catalog(doctrine_catalog, "doctrine_id", ["name", "description"])
+        # indexed: [{"_idx": 0, "name": "Rule of Reason", ...}, {"_idx": 1, ...}]
+        # idx_map: {0: "abc-123-...", 1: "def-456-..."}
+    """
+    indexed_catalog = []
+    idx_to_id_map: Dict[int, str] = {}
+    
+    for idx, entry in enumerate(catalog):
+        if not isinstance(entry, dict):
+            continue
+        
+        # Get the real ID
+        real_id = entry.get(id_field)
+        if real_id is None:
+            continue
+        
+        # Build indexed entry
+        indexed_entry: Dict[str, Any] = {"_idx": idx}
+        
+        # Add requested fields (or all non-embedding fields)
+        for key, value in entry.items():
+            # Skip embedding fields (they're large and not needed for selection)
+            if isinstance(key, str) and key.endswith("_embedding"):
+                continue
+            # Skip the original ID field - we use _idx instead
+            if key == id_field:
+                continue
+            # Include field if no display_fields specified, or if in display_fields
+            if display_fields is None or key in display_fields:
+                indexed_entry[key] = value
+        
+        indexed_catalog.append(indexed_entry)
+        idx_to_id_map[idx] = str(real_id)
+    
+    return indexed_catalog, idx_to_id_map
+
+
+def resolve_indices_to_ids(
+    returned_values: List[Any],
+    idx_to_id_map: Dict[int, str],
+    label: str,
+    phase: str
+) -> List[str]:
+    """
+    Validate and convert AI-returned indices to real IDs.
+    
+    Handles three cases:
+    1. Integer index -> map to real ID
+    2. String that looks like an integer -> convert and map
+    3. Invalid value -> log warning and skip
+    
+    Args:
+        returned_values: List of values returned by AI (should be indices)
+        idx_to_id_map: Mapping from index to real ID
+        label: Node label for logging (e.g., "Doctrine")
+        phase: Phase name for logging (e.g., "Phase 7")
+    
+    Returns:
+        List of valid IDs (only those that successfully resolved)
+    """
+    valid_ids = []
+    
+    for val in returned_values:
+        idx: Optional[int] = None
+        
+        # Try to get an integer index
+        if isinstance(val, int):
+            idx = val
+        elif isinstance(val, str):
+            # Check if it's a string representation of an integer
+            try:
+                idx = int(val)
+            except ValueError:
+                # Not an integer - might be a hallucinated UUID or name
+                logger.warning(f"{phase}: {label} returned non-index value '{val}' - rejecting hallucinated ID")
+                continue
+        else:
+            logger.warning(f"{phase}: {label} returned unexpected type {type(val).__name__}: '{val}'")
+            continue
+        
+        # Validate index is in our map
+        if idx in idx_to_id_map:
+            valid_ids.append(idx_to_id_map[idx])
+        else:
+            logger.warning(f"{phase}: {label} index {idx} out of range (max={len(idx_to_id_map)-1}) - rejecting")
+    
+    return valid_ids
+
+
+def validate_catalog_ids(
+    returned_ids: List[str],
+    catalog: List[Dict[str, Any]],
+    id_field: str,
+    label: str,
+    phase: str
+) -> List[str]:
+    """
+    Validate that returned IDs actually exist in the catalog.
+    
+    This is a fallback validator for cases where we still use UUID-based selection.
+    It filters out any hallucinated IDs.
+    
+    Args:
+        returned_ids: List of IDs returned by AI
+        catalog: The catalog to validate against
+        id_field: The ID field name (e.g., "doctrine_id")
+        label: Node label for logging
+        phase: Phase name for logging
+    
+    Returns:
+        List of valid IDs (only those that exist in catalog)
+    """
+    # Build set of valid IDs from catalog
+    valid_id_set = set()
+    for entry in catalog:
+        if isinstance(entry, dict):
+            entry_id = entry.get(id_field)
+            if entry_id is not None:
+                valid_id_set.add(str(entry_id))
+            # Also include temp_id if present (for newly created nodes)
+            temp_id = entry.get("temp_id")
+            if temp_id is not None:
+                valid_id_set.add(str(temp_id))
+    
+    valid_ids = []
+    for returned_id in returned_ids:
+        if str(returned_id) in valid_id_set:
+            valid_ids.append(str(returned_id))
+        else:
+            logger.warning(f"{phase}: {label} ID '{returned_id}' not found in catalog - rejecting hallucinated ID")
+    
+    return valid_ids
+
+
 class CaseExtractState(BaseModel):
     file_path: str = ""
     filename: str = ""
@@ -51,6 +215,7 @@ class CaseExtractState(BaseModel):
     rels_by_label: Dict[str, Dict[str, str]] | None = None
     props_meta_by_label: Dict[str, Dict[str, Dict[str, Any]]] | None = None
     label_flags_by_label: Dict[str, Dict[str, bool]] | None = None
+    rel_cardinality_by_label: Dict[str, Dict[str, str]] | None = None
     # Relationship property validators keyed by (source_label, rel_label)
     rel_prop_models_by_key: Dict[tuple[str, str], Any] | None = None
     rel_prop_meta_by_key: Dict[tuple[str, str], Dict[str, Dict[str, Any]]] | None = None
@@ -90,8 +255,8 @@ class RulingAndArgumentsBatchResponse(BaseModel):
 
 
 class SelectionResponse(BaseModel):
-    """Response for selection tasks (Forum, ReliefType)"""
-    selected: Dict[str, List[str]]
+    """Response for selection tasks (Forum, Domain, etc.) - now uses integer indices"""
+    selected: Dict[str, List[Any]]  # Can be integers (indices) or strings
 
 
 class DispositionTextEntry(BaseModel):
@@ -300,7 +465,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             schema_payload = None
 
         spec = prune_ui_schema_for_llm(schema_payload) if schema_payload is not None else {"labels": []}
-        models_by_label, rels_by_label, props_meta_by_label, label_flags_by_label = build_property_models(spec)
+        models_by_label, rels_by_label, props_meta_by_label, label_flags_by_label, rel_cardinality_by_label = build_property_models(spec)
         spec_text = render_spec_text(spec)
         # Persist on state for later listeners
         self.state.schema_spec = spec
@@ -310,6 +475,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
         # ui
         self.state.props_meta_by_label = props_meta_by_label
         self.state.label_flags_by_label = label_flags_by_label
+        self.state.rel_cardinality_by_label = rel_cardinality_by_label
         # Relationship property models from full schema when available
         try:
             rel_models, rel_meta = build_relationship_property_models(schema_payload)
@@ -754,10 +920,19 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             # Build catalog for Forum only
             catalogs = self.build_catalog_for_labels(["Forum"])
             
+            # Build indexed catalog to prevent UUID hallucination
+            forum_catalog = catalogs.get("Forum", [])
+            indexed_forum_catalog, forum_idx_to_id = build_indexed_catalog(
+                forum_catalog, 
+                "forum_id",
+                display_fields=["name", "type"]  # Only show fields needed for selection
+            )
+            indexed_catalogs = {"Forum": indexed_forum_catalog}
+            
             # Get Forum instructions and examples from flow_map
             forum_instructions, forum_examples_json = _get_label_instructions_and_examples("Forum", self.state.node_instructions_by_label)
 
-            # Select Forum based on case text
+            # Select Forum based on case text (using indexed catalog)
             crew_sel = _CaseCrew(
                 self.state.file_path,
                 self.state.filename,
@@ -767,7 +942,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                     "FORUM_INSTRUCTIONS": forum_instructions,
                     "FORUM_EXAMPLES_JSON": forum_examples_json,
                     "CASE_TEXT": self.state.document_text or "",
-                    "CATALOGS_JSON": json.dumps(catalogs, ensure_ascii=False),
+                    "CATALOGS_JSON": json.dumps(indexed_catalogs, ensure_ascii=False),
                 },
             )
             task_sel = crew_sel.phase2_select_forum_task(SelectionResponse)
@@ -791,32 +966,32 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             selected = self.parse_selection_response(result_sel)
             
             # Debug logging for forum selection
-            logger.info(f"Phase 2: AI selected forum_ids: {selected}")
-            logger.info(f"Phase 2: Forum catalog size: {len(catalogs.get('Forum', []))}")
-            if catalogs.get('Forum'):
-                sample = catalogs['Forum'][:3]
-                logger.info(f"Phase 2: Sample catalog entries: {sample}")
+            logger.info(f"Phase 2: AI returned indices: {selected}")
+            logger.info(f"Phase 2: Forum catalog size: {len(forum_catalog)}")
+
+            # Convert returned indices to validated forum_ids
+            returned_forum_indices = selected.get("Forum") or []
+            forum_ids = resolve_indices_to_ids(returned_forum_indices, forum_idx_to_id, "Forum", "Phase 2")
+            logger.info(f"Phase 2: Resolved forum_ids: {forum_ids}")
 
             # Create selected Forum nodes by ID lookup
             next_idx = 1 + len(self.state.nodes_accumulated or [])
-            for lbl in ["Forum"]:
-                forum_ids = selected.get(lbl) or []
-                props_meta = (self.state.props_meta_by_label or {}).get(lbl, {})
-                allowed_keys = [k for k in (props_meta.keys() if isinstance(props_meta, dict) else []) if isinstance(k, str)]
-                catalog_rows = catalogs.get(lbl, [])
-                
-                # Lookup catalog entry by forum_id
-                def find_catalog_by_id(forum_id: str) -> Dict[str, Any] | None:
-                    for row in catalog_rows:
-                        if isinstance(row, dict) and str(row.get("forum_id")) == str(forum_id):
-                            return row
-                    return None
-                
-                for forum_id in forum_ids:
-                    entry = find_catalog_by_id(forum_id)
-                    if not entry:
-                        logger.warning(f"Phase 2: Forum ID '{forum_id}' not found in catalog; skipping (can_create_new=false)")
-                        continue
+            props_meta = (self.state.props_meta_by_label or {}).get("Forum", {})
+            allowed_keys = [k for k in (props_meta.keys() if isinstance(props_meta, dict) else []) if isinstance(k, str)]
+            
+            # Lookup catalog entry by forum_id
+            def find_catalog_by_id(forum_id: str) -> Dict[str, Any] | None:
+                for row in forum_catalog:
+                    if isinstance(row, dict) and str(row.get("forum_id")) == str(forum_id):
+                        return row
+                return None
+            
+            for forum_id in forum_ids:
+                entry = find_catalog_by_id(forum_id)
+                if not entry:
+                    # This shouldn't happen since we validated indices, but keep as safety
+                    logger.warning(f"Phase 2: Forum ID '{forum_id}' not found in catalog; skipping")
+                    continue
                     
                     # Use all properties from catalog entry
                     props: Dict[str, Any] = {}
@@ -1141,18 +1316,10 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 
                 logger.info(f"Phase 4: Processing batch {batch_num + 1}/{num_batches} ({len(batch_issues)} issues)")
                 
-                # Build context of already-created Rulings for AI deduplication
-                existing_rulings = [
-                    {"temp_id": n.get("temp_id"), "properties": n.get("properties") or {}}
-                    for n in (self.state.nodes_accumulated or [])
-                    if isinstance(n, dict) and n.get("label") == "Ruling" and isinstance(n.get("temp_id"), str)
-                ]
-                
                 # Build replacements for YAML task template
                 replacements = {
                     "CASE_TEXT": self.state.document_text or "",
                     "ISSUES_JSON": json.dumps({"issues": batch_issues}, ensure_ascii=False),
-                    "EXISTING_RULINGS_JSON": json.dumps({"rulings": existing_rulings}, ensure_ascii=False),
                     "RULING_INSTRUCTIONS": ruling_instructions,
                     "RULING_EXAMPLES_JSON": ruling_examples_json,
                     "RULING_SPEC_TEXT": ruling_spec_text,
@@ -1167,14 +1334,11 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                     replacements=replacements,
                 )
                 
-                # Create Pydantic output model that accepts either temp_id OR ruling properties
-                # For reuse: {"issue_temp_id": "...", "temp_id": "n123", "in_favor": "..."}
-                # For new: {"issue_temp_id": "...", "ruling": {...}, "in_favor": "..."}
+                # Create Pydantic output model - each issue gets its own unique ruling (one-to-one)
                 ruling_per_issue_result = create_model(
                     'RulingPerIssueResult',
                     issue_temp_id=(str, ...),
-                    temp_id=(Optional[str], None),
-                    ruling=(Optional[ruling_model], None),
+                    ruling=(ruling_model, ...),  # Required - each issue must have its own ruling
                     in_favor=(Optional[str], None),
                 )
                 ruling_batch_response = create_model(
@@ -1202,80 +1366,63 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 if not isinstance(rulings_list, list):
                     rulings_list = []
                 
-                # Process each ruling result
+                # Process each ruling result - enforce ONE ruling per issue (one-to-one)
+                rel_label_sets = get_relationship_label_for_edge("Ruling", "Issue", self.state.rels_by_label or {})
+                
                 for entry in rulings_list:
                     if not isinstance(entry, dict):
                         continue
                     
                     issue_temp_id = entry.get("issue_temp_id")
-                    reuse_temp_id = entry.get("temp_id")
                     ruling_props = entry.get("ruling")
                     in_favor = entry.get("in_favor")
                     
-                    ruling_temp_id = None
+                    # Skip if no valid ruling data
+                    if not isinstance(ruling_props, dict):
+                        logger.warning(f"Phase 4 batch {batch_num + 1}: No valid ruling data for issue {issue_temp_id}")
+                        continue
                     
-                    # Check if AI is reusing an existing ruling
-                    if isinstance(reuse_temp_id, str) and reuse_temp_id:
-                        # Verify the temp_id exists in our accumulated nodes
-                        if any(n.get("temp_id") == reuse_temp_id and n.get("label") == "Ruling" 
-                               for n in (self.state.nodes_accumulated or []) if isinstance(n, dict)):
-                            ruling_temp_id = reuse_temp_id
-                            logger.debug(f"Phase 4 batch {batch_num + 1}: Reusing existing Ruling ({ruling_temp_id}) for issue {issue_temp_id}")
-                        else:
-                            logger.warning(f"Phase 4 batch {batch_num + 1}: AI returned invalid temp_id {reuse_temp_id}; will try to create new ruling")
-                    
-                    # If not reusing, create new ruling
-                    if ruling_temp_id is None:
-                        if not isinstance(ruling_props, dict):
-                            logger.warning(f"Phase 4 batch {batch_num + 1}: No valid ruling data for issue {issue_temp_id}")
+                    # Enforce one-to-one: Check if this issue already has a ruling
+                    if rel_label_sets:
+                        existing_sets_to_issue = any(
+                            e.get("to") == issue_temp_id and e.get("label") == rel_label_sets
+                            for e in (self.state.edges_accumulated or []) if isinstance(e, dict)
+                        )
+                        if existing_sets_to_issue:
+                            logger.warning(f"Phase 4 batch {batch_num + 1}: Issue {issue_temp_id} already has a ruling, skipping duplicate")
                             continue
-                        
-                        # Validate Ruling properties
-                        ruling_properties = self.validate_with_model(ruling_props, ruling_model)
-                        
-                        # Create new Ruling
-                        ruling_temp_id = f"n{next_idx}"
-                        next_idx += 1
-                        ruling_node = {"temp_id": ruling_temp_id, "label": "Ruling", "properties": ruling_properties}
-                        self.state.nodes_accumulated.append(ruling_node)
-                        logger.debug(f"Phase 4 batch {batch_num + 1}: Created new Ruling ({ruling_temp_id}) for issue {issue_temp_id}")
-                        
-                        # Create edge: Proceeding → Ruling (RESULTS_IN) - only for new rulings
-                        if proceeding_temp_id:
-                            rel_label_results_in = get_relationship_label_for_edge("Proceeding", "Ruling", self.state.rels_by_label or {})
-                            if rel_label_results_in:
-                                # Check if edge already exists
-                                existing = any(
-                                    e.get("from") == proceeding_temp_id and e.get("to") == ruling_temp_id and e.get("label") == rel_label_results_in
-                                    for e in (self.state.edges_accumulated or []) if isinstance(e, dict)
-                                )
-                                if not existing:
-                                    self.state.edges_accumulated.append({
-                                        "from": proceeding_temp_id,
-                                        "to": ruling_temp_id,
-                                        "label": rel_label_results_in,
-                                        "properties": {}
-                                    })
                     
-                    # Create edge: Ruling → Issue (SETS) with in_favor property (for both new and reused rulings)
-                    if isinstance(issue_temp_id, str) and issue_temp_id and isinstance(ruling_temp_id, str):
-                        rel_label_sets = get_relationship_label_for_edge("Ruling", "Issue", self.state.rels_by_label or {})
-                        if rel_label_sets:
-                            # Check if edge already exists
-                            existing = any(
-                                e.get("from") == ruling_temp_id and e.get("to") == issue_temp_id and e.get("label") == rel_label_sets
-                                for e in (self.state.edges_accumulated or []) if isinstance(e, dict)
-                            )
-                            if not existing:
-                                # Validate in_favor property against schema
-                                raw_sets_props = {"in_favor": in_favor} if isinstance(in_favor, str) else {}
-                                validated_sets_props = self.validate_relationship_properties("Ruling", rel_label_sets, raw_sets_props)
-                                self.state.edges_accumulated.append({
-                                    "from": ruling_temp_id,
-                                    "to": issue_temp_id,
-                                    "label": rel_label_sets,
-                                    "properties": validated_sets_props
-                                })
+                    # Validate Ruling properties
+                    ruling_properties = self.validate_with_model(ruling_props, ruling_model)
+                    
+                    # Create new Ruling (always unique per issue)
+                    ruling_temp_id = f"n{next_idx}"
+                    next_idx += 1
+                    ruling_node = {"temp_id": ruling_temp_id, "label": "Ruling", "properties": ruling_properties}
+                    self.state.nodes_accumulated.append(ruling_node)
+                    logger.debug(f"Phase 4 batch {batch_num + 1}: Created Ruling ({ruling_temp_id}) for issue {issue_temp_id}")
+                    
+                    # Create edge: Proceeding → Ruling (RESULTS_IN)
+                    if proceeding_temp_id:
+                        rel_label_results_in = get_relationship_label_for_edge("Proceeding", "Ruling", self.state.rels_by_label or {})
+                        if rel_label_results_in:
+                            self.state.edges_accumulated.append({
+                                "from": proceeding_temp_id,
+                                "to": ruling_temp_id,
+                                "label": rel_label_results_in,
+                                "properties": {}
+                            })
+                    
+                    # Create edge: Ruling → Issue (SETS) with in_favor property
+                    if rel_label_sets and isinstance(issue_temp_id, str) and issue_temp_id:
+                        raw_sets_props = {"in_favor": in_favor} if isinstance(in_favor, str) else {}
+                        validated_sets_props = self.validate_relationship_properties("Ruling", rel_label_sets, raw_sets_props)
+                        self.state.edges_accumulated.append({
+                            "from": ruling_temp_id,
+                            "to": issue_temp_id,
+                            "label": rel_label_sets,
+                            "properties": validated_sets_props
+                        })
             
             try:
                 nodes_after = len(self.state.nodes_accumulated or [])
@@ -1728,6 +1875,15 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             
             # Build Law catalog
             catalogs = self.build_catalog_for_labels(["Law"])
+            law_catalog = catalogs.get("Law", [])
+            
+            # Build indexed catalog to prevent UUID hallucination
+            indexed_law_catalog, law_idx_to_id = build_indexed_catalog(
+                law_catalog,
+                "law_id",
+                display_fields=["name", "citation", "type"]  # Only show fields needed for selection
+            )
+            indexed_catalogs = {"Law": indexed_law_catalog}
             
             # Build rulings payload
             rulings_payload = {"rulings": rulings}
@@ -1737,7 +1893,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 "CASE_TEXT": self.state.document_text or "",
                 "RULINGS_JSON": json.dumps(rulings_payload, ensure_ascii=False),
                 "LAW_SPEC_TEXT": law_spec_text,
-                "CATALOGS_JSON": json.dumps(catalogs, ensure_ascii=False),
+                "CATALOGS_JSON": json.dumps(indexed_catalogs, ensure_ascii=False),
             }
             
             # Create crew with replacements
@@ -1774,24 +1930,22 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                     continue
                 
                 ruling_temp_id = entry.get("ruling_temp_id")
-                law_ids = entry.get("law_ids") or []
+                raw_law_indices = entry.get("law_ids") or []
                 
                 if not isinstance(ruling_temp_id, str):
                     logger.warning(f"Phase 6: ruling_temp_id is not a string")
                     continue
                 
+                # Convert returned indices to validated law_ids
+                law_ids = resolve_indices_to_ids(raw_law_indices, law_idx_to_id, "Law", "Phase 6")
+                
                 # Create Ruling → Law edges (RELIES_ON_LAW)
-                if isinstance(law_ids, list) and law_ids:
+                if law_ids:
                     rel_label_law = get_relationship_label_for_edge("Ruling", "Law", self.state.rels_by_label or {})
                     if rel_label_law:
-                        # Find or create Law nodes from catalog
-                        law_catalog = catalogs.get("Law", [])
                         existing_edges = self.get_existing_edges_set()
                         
                         for law_id in law_ids:
-                            if not isinstance(law_id, str):
-                                continue
-                            
                             # Find Law in catalog by ID
                             law_entry = None
                             for row in law_catalog:
@@ -1800,6 +1954,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                                     break
                             
                             if not law_entry:
+                                # This shouldn't happen since we validated indices, but keep as safety
                                 logger.warning(f"Phase 6: Law ID '{law_id}' not found in catalog; skipping")
                                 continue
                             
@@ -1997,7 +2152,24 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 
                 logger.info(f"Phase 7: Processing batch {batch_num + 1}/{num_batches} ({len(batch_arguments)} arguments)")
                 
-                # Create crew for this batch with current catalogs
+                # Build indexed catalogs for this batch to prevent UUID hallucination
+                # Rebuild each batch since new concepts may have been added
+                indexed_doctrine_catalog, doctrine_idx_to_id = build_indexed_catalog(
+                    catalogs.get("Doctrine", []), "doctrine_id", display_fields=["name", "description", "temp_id"]
+                )
+                indexed_policy_catalog, policy_idx_to_id = build_indexed_catalog(
+                    catalogs.get("Policy", []), "policy_id", display_fields=["name", "description", "temp_id"]
+                )
+                indexed_factpattern_catalog, factpattern_idx_to_id = build_indexed_catalog(
+                    catalogs.get("FactPattern", []), "fact_pattern_id", display_fields=["name", "description", "temp_id"]
+                )
+                indexed_catalogs = {
+                    "Doctrine": indexed_doctrine_catalog,
+                    "Policy": indexed_policy_catalog,
+                    "FactPattern": indexed_factpattern_catalog
+                }
+                
+                # Create crew for this batch with indexed catalogs
                 crew = _CaseCrew(
                     self.state.file_path,
                     self.state.filename,
@@ -2005,7 +2177,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                     tools=[],
                     replacements={
                         "ARGUMENTS_JSON": json.dumps({"arguments": batch_arguments}, ensure_ascii=False),
-                        "CATALOGS_JSON": json.dumps(catalogs, ensure_ascii=False),
+                        "CATALOGS_JSON": json.dumps(indexed_catalogs, ensure_ascii=False),
                         "SCHEMA_SPEC_TEXT": spec_text,
                         "DOCTRINE_INSTRUCTIONS": doctrine_instructions,
                         "DOCTRINE_EXAMPLES_JSON": doctrine_examples_json,
@@ -2024,9 +2196,9 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 argument_concept_assignment = create_model(
                     'ArgumentConceptAssignment',
                     argument_temp_id=(str, ...),
-                    doctrine_ids=(List[str], []),
-                    policy_ids=(List[str], []),
-                    factpattern_ids=(List[str], []),
+                    doctrine_ids=(List[Any], []),  # Now accepts integer indices
+                    policy_ids=(List[Any], []),    # Now accepts integer indices
+                    factpattern_ids=(List[Any], []),  # Now accepts integer indices
                     new_doctrines=(List[new_concept_node], []),
                     new_policies=(List[new_concept_node], []),
                     new_factpatterns=(List[new_concept_node], [])
@@ -2062,15 +2234,20 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                         continue
                     
                     arg_temp_id = entry.get("argument_temp_id")
-                    doctrine_ids = entry.get("doctrine_ids") or []
-                    policy_ids = entry.get("policy_ids") or []
-                    factpattern_ids = entry.get("factpattern_ids") or []
+                    raw_doctrine_indices = entry.get("doctrine_ids") or []
+                    raw_policy_indices = entry.get("policy_ids") or []
+                    raw_factpattern_indices = entry.get("factpattern_ids") or []
                     new_doctrines = entry.get("new_doctrines") or []
                     new_policies = entry.get("new_policies") or []
                     new_factpatterns = entry.get("new_factpatterns") or []
                     
                     if not isinstance(arg_temp_id, str):
                         continue
+                    
+                    # Convert returned indices to validated IDs
+                    doctrine_ids = resolve_indices_to_ids(raw_doctrine_indices, doctrine_idx_to_id, "Doctrine", "Phase 7")
+                    policy_ids = resolve_indices_to_ids(raw_policy_indices, policy_idx_to_id, "Policy", "Phase 7")
+                    factpattern_ids = resolve_indices_to_ids(raw_factpattern_indices, factpattern_idx_to_id, "FactPattern", "Phase 7")
                     
                     # Handle newly created Doctrines
                     if isinstance(new_doctrines, list):
@@ -2193,11 +2370,9 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                                     existing_edges.add(key)
                                     concepts_to_propagate["FactPattern"].add(temp_id)
                     
-                    # Create Argument → Doctrine edges (for selected IDs)
-                    if isinstance(doctrine_ids, list) and rel_label_doctrine:
+                    # Create Argument → Doctrine edges (for selected IDs - already validated)
+                    if doctrine_ids and rel_label_doctrine:
                         for doctrine_id in doctrine_ids:
-                            if not isinstance(doctrine_id, str):
-                                continue
                             doctrine_temp_id = find_catalog_node_temp_id("Doctrine", doctrine_id, catalogs.get("Doctrine", []))
                             if doctrine_temp_id:
                                 key = (arg_temp_id, doctrine_temp_id, rel_label_doctrine)
@@ -2211,11 +2386,9 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                                     existing_edges.add(key)
                                     concepts_to_propagate["Doctrine"].add(doctrine_temp_id)
                     
-                    # Create Argument → Policy edges (for selected IDs)
-                    if isinstance(policy_ids, list) and rel_label_policy:
+                    # Create Argument → Policy edges (for selected IDs - already validated)
+                    if policy_ids and rel_label_policy:
                         for policy_id in policy_ids:
-                            if not isinstance(policy_id, str):
-                                continue
                             policy_temp_id = find_catalog_node_temp_id("Policy", policy_id, catalogs.get("Policy", []))
                             if policy_temp_id:
                                 key = (arg_temp_id, policy_temp_id, rel_label_policy)
@@ -2229,11 +2402,9 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                                     existing_edges.add(key)
                                     concepts_to_propagate["Policy"].add(policy_temp_id)
                     
-                    # Create Argument → FactPattern edges (for selected IDs)
-                    if isinstance(factpattern_ids, list) and rel_label_factpattern:
+                    # Create Argument → FactPattern edges (for selected IDs - already validated)
+                    if factpattern_ids and rel_label_factpattern:
                         for factpattern_id in factpattern_ids:
-                            if not isinstance(factpattern_id, str):
-                                continue
                             fp_temp_id = find_catalog_node_temp_id("FactPattern", factpattern_id, catalogs.get("FactPattern", []))
                             if fp_temp_id:
                                 key = (arg_temp_id, fp_temp_id, rel_label_factpattern)
@@ -2353,6 +2524,15 @@ class CaseExtractFlow(Flow[CaseExtractState]):
 
             # Build ReliefType catalog
             catalogs = self.build_catalog_for_labels(["ReliefType"])
+            relief_type_catalog = catalogs.get("ReliefType", [])
+            
+            # Build indexed catalog to prevent UUID hallucination
+            indexed_relief_type_catalog, relief_type_idx_to_id = build_indexed_catalog(
+                relief_type_catalog,
+                "relief_type_id",
+                display_fields=["type", "description"]  # Only show fields needed for selection
+            )
+            indexed_catalogs = {"ReliefType": indexed_relief_type_catalog}
 
             # Get cached node instructions for Relief and ReliefType (O(1) lookups)
             relief_instructions, relief_examples_json = _get_label_instructions_and_examples("Relief", self.state.node_instructions_by_label)
@@ -2372,7 +2552,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             # Build rulings payload
             rulings_payload = {"rulings": rulings}
             
-            # Build replacements for YAML task template
+            # Build replacements for YAML task template (using indexed catalog)
             replacements = {
                 "CASE_TEXT": self.state.document_text or "",
                 "RULINGS_JSON": json.dumps(rulings_payload, ensure_ascii=False),
@@ -2381,7 +2561,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 "RELIEF_EXAMPLES_JSON": relief_examples_json,
                 "RELIEFTYPE_INSTRUCTIONS": relieftype_instructions,
                 "RELIEFTYPE_EXAMPLES_JSON": relieftype_examples_json,
-                "CATALOGS_JSON": json.dumps(catalogs, ensure_ascii=False),
+                "CATALOGS_JSON": json.dumps(indexed_catalogs, ensure_ascii=False),
             }
             
             # Create crew with replacements
@@ -2424,7 +2604,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 ruling_temp_id = entry.get("ruling_temp_id")
                 relief_props = entry.get("relief")
                 relief_status = entry.get("relief_status")  # For RESULTS_IN relationship property
-                relief_type_id = entry.get("relief_type_id")
+                raw_relief_type_idx = entry.get("relief_type_id")
                 
                 if not isinstance(ruling_temp_id, str):
                     logger.warning(f"Phase 8: ruling_temp_id is not a string")
@@ -2433,6 +2613,15 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 if not isinstance(relief_props, dict):
                     logger.warning(f"Phase 8: Relief properties for ruling {ruling_temp_id} is not a dict")
                     continue
+                
+                # Convert returned index to validated relief_type_id
+                relief_type_ids = resolve_indices_to_ids(
+                    [raw_relief_type_idx] if raw_relief_type_idx is not None else [],
+                    relief_type_idx_to_id,
+                    "ReliefType",
+                    "Phase 8"
+                )
+                relief_type_id = relief_type_ids[0] if relief_type_ids else None
                 
                 # Validate Relief properties
                 relief_properties = self.validate_with_model(relief_props, relief_model)
@@ -2552,10 +2741,18 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             
             logger.info(f"Phase 9: Using catalog with {len(domain_catalog)} domains")
             
+            # Build indexed catalog to prevent UUID hallucination
+            indexed_domain_catalog, domain_idx_to_id = build_indexed_catalog(
+                domain_catalog,
+                "domain_id",
+                display_fields=["name", "description"]  # Only show fields needed for selection
+            )
+            indexed_catalogs = {"Domain": indexed_domain_catalog}
+            
             # Get Domain instructions and examples from flow_map
             domain_instructions, domain_examples_json = _get_label_instructions_and_examples("Domain", self.state.node_instructions_by_label)
             
-            # Create crew with catalog
+            # Create crew with indexed catalog
             crew = _CaseCrew(
                 self.state.file_path,
                 self.state.filename,
@@ -2565,7 +2762,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                     "DOMAIN_INSTRUCTIONS": domain_instructions,
                     "DOMAIN_EXAMPLES_JSON": domain_examples_json,
                     "CASE_TEXT": self.state.document_text or "",
-                    "CATALOGS_JSON": json.dumps(catalogs, ensure_ascii=False),
+                    "CATALOGS_JSON": json.dumps(indexed_catalogs, ensure_ascii=False),
                 },
             )
             
@@ -2582,10 +2779,13 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             
             # Parse result as SelectionResponse
             selected = self.parse_selection_response(result)
-            domain_ids = selected.get("Domain") or []
+            raw_domain_indices = selected.get("Domain") or []
             
-            if not domain_ids or len(domain_ids) == 0:
-                logger.warning("Phase 9: No domain selected by AI; skipping")
+            # Convert returned indices to validated domain_ids
+            domain_ids = resolve_indices_to_ids(raw_domain_indices, domain_idx_to_id, "Domain", "Phase 9")
+            
+            if not domain_ids:
+                logger.warning("Phase 9: No valid domain selected by AI; skipping")
                 return {"status": "phase9_skipped"}
             
             selected_domain_id = domain_ids[0]
@@ -2677,6 +2877,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
         rels_by_label = self.state.rels_by_label
         props_meta_by_label = self.state.props_meta_by_label
         label_flags_by_label = self.state.label_flags_by_label
+        rel_cardinality_by_label = self.state.rel_cardinality_by_label
 
         # Fallback if state doesn't expose mapping (Flow state is BaseModel; use previous ctx return pattern)
         if not models_by_label or not rels_by_label or not props_meta_by_label:
@@ -2723,6 +2924,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             props_meta_by_label,
             label_flags_by_label=label_flags_by_label,
             existing_catalog_by_label=self.state.existing_catalog_by_label if isinstance(self.state.existing_catalog_by_label, dict) else None,
+            relationship_cardinality_by_label=rel_cardinality_by_label,
         )
         
         # Log validation results

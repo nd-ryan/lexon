@@ -18,7 +18,7 @@ def prepare_nodes_for_neo4j(nodes: List[Dict[str, Any]], schema_payload: Any) ->
     """
     # Build property metadata from schema
     spec = prune_ui_schema_for_llm(schema_payload) if schema_payload is not None else {"labels": []}
-    _, _, props_meta_by_label, _ = build_property_models(spec)
+    _, _, props_meta_by_label, _, _ = build_property_models(spec)
     
     converted_nodes = []
     for node in nodes:

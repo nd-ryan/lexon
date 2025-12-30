@@ -135,6 +135,7 @@ def test_case_extract_flow_golden_shape_phases_0_to_3_then_validate(tmp_path: Pa
         flow.state.props_meta_by_label or {},
         label_flags_by_label=flow.state.label_flags_by_label or {},
         existing_catalog_by_label=flow.state.existing_catalog_by_label or {},
+        relationship_cardinality_by_label=flow.state.rel_cardinality_by_label or {},
     )
     assert errors == []
     assert isinstance(cleaned, dict)

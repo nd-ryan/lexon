@@ -64,12 +64,12 @@ CALL (c) {
     WITH DISTINCT r
     WHERE r IS NOT NULL
     
-    // Get the issue this ruling sets
+    // Get all issues this ruling sets (can be multiple)
     OPTIONAL MATCH (r)-[s:SETS]->(setIssue:Issue)
-    WITH r, head(collect({
+    WITH r, collect(CASE WHEN setIssue IS NULL THEN NULL ELSE {
       props: apoc.map.removeKeys(properties(setIssue), [k IN keys(setIssue) WHERE k ENDS WITH "_embedding"]),
       in_favor: s.in_favor
-    })) AS setsIssueData
+    } END) AS setsIssuesData
     
     // Collect reliefs
     CALL (r) {
@@ -147,7 +147,7 @@ CALL (c) {
       apoc.map.merge(
         apoc.map.removeKeys(properties(r), [k IN keys(r) WHERE k ENDS WITH "_embedding"]),
         {
-          sets_issue: CASE WHEN setsIssueData.props IS NULL THEN NULL ELSE apoc.map.merge(setsIssueData.props, {in_favor: setsIssueData.in_favor}) END,
+          sets_issues: [x IN setsIssuesData WHERE x IS NOT NULL | apoc.map.merge(x.props, {in_favor: x.in_favor})],
           reliefs: reliefs,
           laws: laws,
           arguments: arguments

@@ -92,26 +92,26 @@ phase2_select_forum_task:
     YOUR TASK:
     1. Read the CASE_TEXT below and identify which court/tribunal heard this case
     2. Look through the CATALOGS JSON below to find the matching Forum entry
-    3. Return the forum_id from that catalog entry
+    3. Return the _idx (index number) from that catalog entry
 
     CRITICAL RULES:
-    - You MUST select a forum_id from the catalog below
+    - You MUST select using the _idx field (an integer index) from the catalog below
     - DO NOT leave the selection empty unless absolutely no match exists
     - Look for courts mentioned in the case text (e.g., "Supreme Court", "District Court", "Court of Appeals")
-    - The forum_id is the UUID string in the catalog entry
-    - Return format: { "selected": { "Forum": ["<forum_id_from_catalog>"] } }
+    - Return format: { "selected": { "Forum": [<_idx_number>] } }
+    - IMPORTANT: Return the _idx as an INTEGER, not a string or UUID
 
     STEP-BY-STEP PROCESS:
     1. Identify the court name from the case text (look at the beginning of the document)
     2. Search the Forum catalog for a matching entry by name
-    3. Extract the forum_id value from that entry
-    4. Return: { "selected": { "Forum": ["<that_forum_id>"] } }
+    3. Find the _idx value (integer) from that entry
+    4. Return: { "selected": { "Forum": [<_idx_number>] } }
 
     EXAMPLE:
     If case text mentions "Supreme Court of the United States" and catalog contains:
-    {"name": "U.S. Supreme Court", "type": "court", "forum_id": "abc-123-def"}
+    {"_idx": 0, "name": "U.S. Supreme Court", "type": "court"}
     
-    Then return: { "selected": { "Forum": ["abc-123-def"] } }
+    Then return: { "selected": { "Forum": [0] } }
 
     FORUM INSTRUCTIONS:
     {FORUM_INSTRUCTIONS}
@@ -132,32 +132,22 @@ phase4_ruling_per_issue_task:
     
     CRITICAL: Extract information ONLY from the provided case text. Do not use general knowledge or external information.
     
-    DEDUPLICATION - IMPORTANT: Check if an existing ruling from previous batches applies to this issue before creating a new ruling.
-    
-    CONTEXT: Already-created rulings from previous batches:
-    {EXISTING_RULINGS_JSON}
-    
-    If a ruling already exists that applies to this issue:
-    - Return: {"issue_temp_id": "...", "temp_id": "n123", "in_favor": "..."}
-    - DO NOT include "ruling" field when reusing an existing ruling
-    
-    If a new ruling is needed:
-    - Return: {"issue_temp_id": "...", "ruling": {...properties...}, "in_favor": "..."}
-    - DO NOT include "temp_id" field when creating a new ruling
+    IMPORTANT - ONE RULING PER ISSUE: Create a UNIQUE ruling for EACH issue. Even if multiple issues 
+    have similar outcomes, each issue MUST have its own distinct Ruling node with its own specific 
+    reasoning and ratio tailored to that issue. Do NOT reuse rulings across issues.
 
     RULING INSTRUCTIONS:
     {RULING_INSTRUCTIONS}
 
-    RULING EXAMPLES (illustrative, may be partial). Note that ruling examples contain example issues that are paired with the ruling. 
+    RULING EXAMPLES (illustrative, may be partial):
     {RULING_EXAMPLES_JSON}
 
     Guidance:
     - The ISSUES_JSON above contains existing Issue nodes with their temp_id values.
-    - IMPORTANT: The examples below show full issue objects for context only. Your output should only reference issues by their temp_id, not reproduce the full issue object.
-    - For each issue, identify the Ruling (court's disposition/decision on that issue) from the case text.
-    - A single ruling may apply to multiple issues if they share the same disposition.
-    - For each issue's ruling, identify which party the ruling favored (in_favor: plaintiff|defendant|appellant|appellee|petitioner|respondent).
-    - Return JSON as: { "rulings": [ { "issue_temp_id": string, "ruling": {...properties...} OR "temp_id": string, "in_favor": string }, ... ] }.
+    - For each issue, create ONE unique Ruling with the court's disposition/decision on that specific issue.
+    - Each ruling should have reasoning and ratio specific to that individual issue.
+    - For each ruling, identify which party it favored (in_favor: plaintiff|defendant|appellant|appellee|petitioner|respondent).
+    - Return JSON as: { "rulings": [ { "issue_temp_id": string, "ruling": {...properties...}, "in_favor": string }, ... ] }.
     - Use the temp_id from the provided ISSUES_JSON for "issue_temp_id" - do not generate new temp_ids.
     - The "ruling" object should match Ruling schema properties exactly.
     - Enforce types, enums, and date formats exactly as specified.
@@ -173,7 +163,7 @@ phase4_ruling_per_issue_task:
     ISSUES_JSON:
     {ISSUES_JSON}
 
-  expected_output: "A JSON object { rulings: [ { issue_temp_id: string, ruling: {...} OR temp_id: string, in_favor: string }, ... ] }"
+  expected_output: "A JSON object { rulings: [ { issue_temp_id: string, ruling: {...}, in_favor: string }, ... ] }"
 
 phase5_arguments_per_ruling_task:
   description: |
@@ -262,19 +252,26 @@ phase6_laws_per_ruling_task:
 
     Guidance:
     - For each ruling, identify the Law(s) from the catalog that the ruling explicitly relies upon or cites.
-    - Return JSON as: { "results": [ { "ruling_temp_id": string, "law_ids": [law_id1, law_id2, ...] } ] }.
-    - For law_ids, ONLY use law_id values that exist in the provided catalog. If no laws are referenced, return empty array [].
+    - Return JSON as: { "results": [ { "ruling_temp_id": string, "law_ids": [_idx1, _idx2, ...] } ] }.
+    - For law_ids, ONLY use _idx values (integers) from the provided catalog. If no laws are referenced, return empty array [].
+    - IMPORTANT: Return _idx values as INTEGERS, not UUIDs or strings
     - Extract from case text only; do not invent laws.
+
+    EXAMPLE:
+    If the ruling cites "Sherman Act" and catalog contains:
+    {"_idx": 3, "name": "Sherman Antitrust Act", "citation": "15 U.S.C. §§ 1-7"}
+    
+    Then include 3 in the law_ids array: { "ruling_temp_id": "n35", "law_ids": [3] }
 
     LAW SCHEMA:
     {LAW_SPEC_TEXT}
 
-    LAW CATALOG (select law_ids from here):
+    LAW CATALOG (select _idx values from here):
     {CATALOGS_JSON}
 
     CASE_TEXT:
     {CASE_TEXT}
-  expected_output: "A JSON object { results: [ { ruling_temp_id: string, law_ids: [...] } ] }"
+  expected_output: "A JSON object { results: [ { ruling_temp_id: string, law_ids: [<integers>] } ] }"
 
 
 phase7_argument_concepts_task:
@@ -286,7 +283,7 @@ phase7_argument_concepts_task:
 
     You also have access to a catalog of Doctrine, Policy, and FactPattern concepts.
 
-    CATALOGS (prefer selecting IDs from these):
+    CATALOGS (select using _idx values from these):
     {CATALOGS_JSON}
 
     Instructions:
@@ -304,9 +301,9 @@ phase7_argument_concepts_task:
       "argument_map": [
         {
           "argument_temp_id": string,
-          "doctrine_ids": [doctrine_id1, ...],  // IDs from catalog
-          "policy_ids": [policy_id1, ...],      // IDs from catalog
-          "factpattern_ids": [factpattern_id1, ...],  // IDs from catalog
+          "doctrine_ids": [_idx1, _idx2, ...],     // _idx integers from catalog
+          "policy_ids": [_idx1, _idx2, ...],       // _idx integers from catalog
+          "factpattern_ids": [_idx1, _idx2, ...],  // _idx integers from catalog
           "new_doctrines": [{"properties": {...}}, ...],  // Only if no catalog match
           "new_policies": [{"properties": {...}}, ...],   // Only if no catalog match
           "new_factpatterns": [{"properties": {...}}, ...]  // Only if no catalog match
@@ -322,26 +319,31 @@ phase7_argument_concepts_task:
     - For newly created nodes, include only the properties defined in the schema
 
     Constraints (STRICTLY ENFORCED):
-    - For selected IDs: ONLY return IDs that exist in the provided catalogs.
-    - For new nodes: ensure properties match the schema definitions provided.
-    - Return ONLY the ID field values as they appear in the catalog entries (e.g., doctrine_id, policy_id, factpattern_id)
-    - CRITICAL: When selecting from catalog, use the actual ID field value (e.g., "d12345" or UUID format), NOT the name field (e.g., NOT "Rule of Reason")
+    - For selected IDs: ONLY use _idx values (INTEGERS) from the provided catalogs
+    - IMPORTANT: doctrine_ids/policy_ids/factpattern_ids must contain _idx INTEGERS, NOT UUIDs or strings
+    - For new nodes: ensure properties match the schema definitions provided
     - CRITICAL: For new concepts, put them in the new_doctrines/new_policies/new_factpatterns arrays, NOT in the doctrine_ids/policy_ids/factpattern_ids arrays
-    - CRITICAL: NEVER put temp_ids (like "n1", "n32", "n123") in the doctrine_ids/policy_ids/factpattern_ids arrays - these are NOT valid catalog IDs
-    - CRITICAL: doctrine_ids/policy_ids/factpattern_ids arrays should ONLY contain UUIDs or IDs that appear in the CATALOGS_JSON, never temp_ids from nodes
-    - If you cannot find an exact ID match in the catalog, either use new_doctrines/new_policies/new_factpatterns or leave the IDs array empty
-    - NEVER invent IDs (UUIDs, names, temp_ids, etc.) - only use IDs that literally appear in the catalog
+    - If you cannot find an exact match in the catalog, either use new_doctrines/new_policies/new_factpatterns or leave the IDs array empty
+    - NEVER invent IDs - only use _idx values that literally appear in the catalog
     - NEVER use general legal knowledge - base everything on the argument text and case context
     
     WRONG EXAMPLES (DO NOT DO THIS):
-    ❌ "doctrine_ids": ["n32"] - This is a temp_id, not a catalog ID
-    ❌ "doctrine_ids": ["Rule of Reason"] - This is a name, not an ID
-    ❌ "doctrine_ids": ["doctrine123"] - This is invented, not from catalog
+    ❌ "doctrine_ids": ["n32"] - This is a temp_id, not a valid _idx
+    ❌ "doctrine_ids": ["Rule of Reason"] - This is a name, not a valid _idx
+    ❌ "doctrine_ids": ["a1b2c3d4-5e6f-..."] - This is a UUID, not a valid _idx
+    ❌ "doctrine_ids": [999] - This _idx doesn't exist in the catalog
     
     CORRECT EXAMPLES:
-    ✅ "doctrine_ids": ["a1b2c3d4-5e6f-7g8h-9i0j-k1l2m3n4o5p6"] - Real UUID from catalog
+    ✅ "doctrine_ids": [0, 3, 7] - Valid _idx integers from catalog
     ✅ "doctrine_ids": [] and "new_doctrines": [{"properties": {...}}] - Creating new doctrine
     ✅ "doctrine_ids": [] - No matching doctrine
+
+    EXAMPLE:
+    If catalog contains:
+    {"_idx": 0, "name": "Rule of Reason", "description": "..."}
+    {"_idx": 1, "name": "Per Se Rule", "description": "..."}
+    
+    And argument references "Rule of Reason", return: "doctrine_ids": [0]
 
     DOCTRINE INSTRUCTIONS:
     {DOCTRINE_INSTRUCTIONS}
@@ -382,16 +384,23 @@ phase8_relief_and_type_task:
     - For each ruling, identify the Relief (specific remedy/outcome/order granted by the court).
     - Extract Relief properties (description of what was granted/denied).
     - Determine the relief_status: "granted", "denied", or "partially granted".
-    - Select the most appropriate ReliefType from the catalog that categorizes this relief.
-    - Return JSON as: { "results": [ { "ruling_temp_id": string, "relief": <Relief properties>, "relief_status": "granted"|"denied"|"partially granted", "relief_type_id": string }, ... ] }.
+    - Select the most appropriate ReliefType from the catalog using its _idx (index number).
+    - Return JSON as: { "results": [ { "ruling_temp_id": string, "relief": <Relief properties>, "relief_status": "granted"|"denied"|"partially granted", "relief_type_id": <_idx integer> }, ... ] }.
     - If no relief was specified for a ruling, you may omit that ruling from results.
 
     Constraints (STRICTLY ENFORCED):
-    - For relief_type_id, YOU MUST return the 'relief_type_id' field (UUID) from the catalog, NOT the 'type' field
-    - DO NOT return type names like "injunction" or "damages" - these are NOT relief_type_id values
-    - ONLY return the full UUID relief_type_id value as it appears in the catalog (e.g., "a1b2c3d4-...")
-    - YOU MUST ONLY RETURN relief_type_id values THAT EXIST IN THE PROVIDED CATALOG
+    - For relief_type_id, YOU MUST return the '_idx' field (INTEGER) from the catalog
+    - DO NOT return type names like "injunction" or "damages" - return the _idx integer
+    - DO NOT return UUIDs - return the _idx integer
+    - ONLY return _idx values that exist in the provided catalog
     - Extract from case text only; do not invent relief information
+
+    EXAMPLE:
+    If catalog contains:
+    {"_idx": 0, "type": "Injunction", "description": "Court order to do or stop doing something"}
+    {"_idx": 1, "type": "Damages", "description": "Monetary compensation"}
+    
+    And the ruling grants an injunction, return: "relief_type_id": 0
 
     RELIEF INSTRUCTIONS:
     {RELIEF_INSTRUCTIONS}
@@ -408,9 +417,9 @@ phase8_relief_and_type_task:
     RELIEFTYPE EXAMPLES:
     {RELIEFTYPE_EXAMPLES_JSON}
 
-    RELIEFTYPE CATALOG (each entry has a 'relief_type_id' field - return this UUID, NOT the 'type' field):
+    RELIEFTYPE CATALOG (select using _idx value):
     {CATALOGS_JSON}
-  expected_output: "A JSON object { results: [ { ruling_temp_id: string, relief: {...}, relief_status: string, relief_type_id: string }, ... ] }"
+  expected_output: "A JSON object { results: [ { ruling_temp_id: string, relief: {...}, relief_status: string, relief_type_id: <integer> }, ... ] }"
 
 
 phase9_party_task:
@@ -465,26 +474,33 @@ phase9_select_domain_task:
     
     Inputs:
     - CASE_TEXT: raw case text
-    - CATALOGS: { "Domain": [ { domain_id, name, ...}, ... ] }
+    - CATALOGS: { "Domain": [ { _idx, name, ...}, ... ] }
     
     Steps:
     1) Read the case text and determine which domain (legal subject area) this case belongs to
     2) Select the most appropriate Domain from the catalog
-    3) Return JSON as { "selected": { "Domain": [domain_id] } } where domain_id is the 'domain_id' field value from the catalog entry
+    3) Return JSON as { "selected": { "Domain": [_idx] } } where _idx is the integer index from the catalog entry
     
     Constraints (STRICTLY ENFORCED):
-    - YOU MUST ONLY RETURN domain_id VALUES THAT EXIST IN THE PROVIDED CATALOG
-    - DO NOT create, invent, or return domain names - ONLY return the domain_id
-    - Return ONLY the ID field value as it appears in the catalog
+    - YOU MUST ONLY RETURN _idx VALUES (INTEGERS) THAT EXIST IN THE PROVIDED CATALOG
+    - DO NOT return domain names or UUIDs - ONLY return the _idx integer
     - You MUST select exactly ONE domain
-    - NEVER use general knowledge - ONLY select from the catalog IDs provided
+    - NEVER use general knowledge - ONLY select from the catalog _idx values provided
+    
+    EXAMPLE:
+    If catalog contains:
+    {"_idx": 0, "name": "Antitrust"}
+    {"_idx": 1, "name": "Contract Law"}
+    {"_idx": 2, "name": "Criminal Law"}
+    
+    And the case is about antitrust violations, return: { "selected": { "Domain": [0] } }
     
     CASE_TEXT:
     {CASE_TEXT}
     
     CATALOGS:
     {CATALOGS_JSON}
-  expected_output: "A JSON object { selected: { Domain: [domain_id] } }."
+  expected_output: "A JSON object { selected: { Domain: [<integer>] } }."
 
 
 

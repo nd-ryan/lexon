@@ -40,7 +40,7 @@ def test_validate_with_model_drops_unknown_fields_and_keeps_known():
 
     schema_payload = _load_min_schema()
     spec = prune_ui_schema_for_llm(schema_payload)
-    models_by_label, _, _, _ = build_property_models(spec)
+    models_by_label, _, _, _, _ = build_property_models(spec)
 
     flow = CaseExtractFlow()
     model = models_by_label["Case"]

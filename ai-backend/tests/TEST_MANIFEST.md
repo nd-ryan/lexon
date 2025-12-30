@@ -266,13 +266,35 @@ Tests mapping of temporary node IDs to permanent Neo4j UUIDs.
 
 ---
 
-## 9. `test_neo4j_uploader.py` - Neo4j Uploader Helpers (2 tests)
+## 9. `test_cardinality_validation.py` - Cardinality Validation (11 tests)
+
+**Purpose:** Validates relationship cardinality enforcement in `app/lib/schema_runtime.py`.
+
+**Key tests:**
+- **TestValidateCardinality** - Unit tests for `_validate_cardinality()` helper
+  - `test_one_to_one_valid` - Valid one-to-one relationships pass
+  - `test_one_to_one_source_violation` - Detects when source has multiple edges
+  - `test_one_to_one_target_violation` - Detects when target is referenced multiple times
+  - `test_one_to_many_valid` - Valid one-to-many relationships pass
+  - `test_one_to_many_target_violation` - Detects when target is reused in one-to-many
+  - `test_many_to_one_valid` - Valid many-to-one relationships pass
+  - `test_many_to_one_source_violation` - Detects when source has multiple edges
+  - `test_many_to_many_no_restrictions` - Many-to-many has no restrictions
+  - `test_unknown_cardinality_defaults_to_many_to_many` - Unknown defaults to no restrictions
+
+- **TestValidateCaseGraphWithCardinality** - Integration tests with real schema
+  - `test_ruling_sets_issue_one_to_one_enforced` - Verifies Ruling→SETS→Issue is one-to-one
+  - `test_case_has_proceeding_one_to_many_allows_multiple` - Verifies Case→HAS_PROCEEDING is one-to-many
+
+---
+
+## 10. `test_neo4j_uploader.py` - Neo4j Uploader Helpers (2 tests)
 
 **Purpose:** Validates helper utilities in `app/lib/neo4j_uploader.py` (e.g., snake_case conversion and ID property mapping).
 
 ---
 
-## 10. Integration Tests (optional / external dependencies)
+## 11. Integration Tests (optional / external dependencies)
 
 These are marked with `@pytest.mark.integration` and are **skipped** unless required environment variables are present.
 

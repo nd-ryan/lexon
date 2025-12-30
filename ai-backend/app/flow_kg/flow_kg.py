@@ -776,6 +776,9 @@ class KGFlow(Flow[KGState]):
                             issues.append(f"Node {i}: UUID not preserved (input={input_uuid_to_check}, output={node_id})")
         
         # Check 5: Embeddings count
+        # Get the set of nodes that needed embeddings (skips unchanged catalog nodes)
+        nodes_needing_embeddings = self.state.nodes_needing_embeddings or set()
+        
         for node in output_nodes:
             if not isinstance(node, dict):
                 continue
@@ -783,6 +786,10 @@ class KGFlow(Flow[KGState]):
             props = node.get("properties", {})
             if not isinstance(props, dict):
                 continue
+            
+            # Get the node UUID
+            id_prop = get_id_prop_for_label(label, schema_payload)
+            node_uuid = props.get(id_prop)
             
             # Count embedding properties
             embedding_count = sum(1 for k in props.keys() if k.endswith("_embedding"))
@@ -795,8 +802,13 @@ class KGFlow(Flow[KGState]):
             expected_fields = embedding_config.get(label, [])
             stats["embeddings_by_label"][label]["expected"] = len(expected_fields)
             
+            # Only flag missing embeddings for nodes that SHOULD have had embeddings generated
+            # Skip validation for unchanged catalog nodes (not in nodes_needing_embeddings)
             if embedding_count != len(expected_fields):
-                issues.append(f"Node {label}: expected {len(expected_fields)} embeddings, found {embedding_count}")
+                if node_uuid and str(node_uuid) in nodes_needing_embeddings:
+                    # This node was supposed to get embeddings but didn't get enough
+                    issues.append(f"Node {label}: expected {len(expected_fields)} embeddings, found {embedding_count}")
+                # else: unchanged catalog node - skip validation (it has embeddings in Neo4j already)
         
         # Check 6: Edge integrity
         if len(output_edges) != len(input_edges):

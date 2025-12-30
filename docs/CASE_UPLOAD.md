@@ -197,8 +197,27 @@ If embeddings fail to generate:
 
 Before submission:
 - Required field validation runs
+- Cardinality constraints validated (see below)
 - User sees error message if validation fails
 - Submission blocked until errors fixed
+
+### Cardinality Validation
+
+The system validates relationship cardinality constraints defined in `schema_v3.json`:
+
+| Cardinality | Source Limit | Target Limit | Example |
+|-------------|--------------|--------------|---------|
+| `one-to-one` | 1 edge max | 1 reference max | Ruling → SETS → Issue |
+| `one-to-many` | unlimited | 1 reference max | Case → HAS_PROCEEDING → Proceeding |
+| `many-to-one` | 1 edge max | unlimited | Forum → PART_OF → Jurisdiction |
+| `many-to-many` | unlimited | unlimited | Issue → RELATES_TO_DOCTRINE → Doctrine |
+
+**Example violation:**
+```
+Cardinality violation: Ruling-[SETS] is one-to-one, but source 'n1' has 3 edges
+```
+
+This prevents issues like a single Ruling being linked to multiple Issues, which would indicate extraction errors.
 
 ---
 

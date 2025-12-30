@@ -210,18 +210,22 @@ def _case_data_to_extracted(case_data: Dict[str, Any]) -> Dict[str, Any]:
             for ruling in rulings:
                 if not isinstance(ruling, dict):
                     continue
-                r_props = _split_node_properties(ruling, ["sets_issue", "reliefs", "laws", "arguments"])
+                r_props = _split_node_properties(ruling, ["sets_issues", "reliefs", "laws", "arguments"])
                 r_id = add_node("Ruling", r_props)
                 add_edge(p_id, r_id, "RESULTS_IN")
 
-                sets_issue = ruling.get("sets_issue")
-                if isinstance(sets_issue, dict):
-                    in_favor = sets_issue.get("in_favor")
-                    si_props = dict(sets_issue)
-                    si_props.pop("in_favor", None)
-                    i_id = add_node("Issue", si_props)
-                    edge_props = {"in_favor": in_favor} if in_favor is not None else {}
-                    add_edge(r_id, i_id, "SETS", edge_props)
+                # Handle multiple SETS relationships (one ruling can set multiple issues)
+                sets_issues = ruling.get("sets_issues") or []
+                if isinstance(sets_issues, list):
+                    for sets_issue in sets_issues:
+                        if not isinstance(sets_issue, dict):
+                            continue
+                        in_favor = sets_issue.get("in_favor")
+                        si_props = dict(sets_issue)
+                        si_props.pop("in_favor", None)
+                        i_id = add_node("Issue", si_props)
+                        edge_props = {"in_favor": in_favor} if in_favor is not None else {}
+                        add_edge(r_id, i_id, "SETS", edge_props)
 
                 reliefs = ruling.get("reliefs") or []
                 if isinstance(reliefs, list):
