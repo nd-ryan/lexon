@@ -169,8 +169,8 @@ def test_phase2_assign_forum_creates_forum_node_and_edges_using_catalog_id(tmp_p
 
     forum_id = "forum-1"
 
-    # Mock selection result for phase2.
-    selection = {"selected": {"Forum": [forum_id]}}
+    # Mock selection result for phase2 - AI returns integer index (0) which maps to forum_id
+    selection = {"selected": {"Forum": [0]}}  # Index 0 -> "forum-1"
     _patch_crew_kickoff_sequence(monkeypatch, [FakeCrewResult(pydantic=FakePydantic(selection))])
 
     def fake_execute_query(query: str, parameters: Dict[str, Any] | None = None):

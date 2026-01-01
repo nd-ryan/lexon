@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation'
 import Button from '@/components/ui/button'
 import { isAdminEmail } from '@/lib/admin'
 
+export const dynamic = 'force-dynamic'
+
 interface CaseStatus {
   filename: string
   status: 'pending' | 'extracting' | 'uploading-kg' | 'completed' | 'failed'

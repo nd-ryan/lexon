@@ -1,5 +1,19 @@
 from typing import Any, Dict, List, Optional
-from sqlalchemy import Table, Column, String, Text, DateTime, func, select, insert, update, delete
+from sqlalchemy import (
+    Table,
+    Column,
+    String,
+    Text,
+    DateTime,
+    and_,
+    cast,
+    delete,
+    func,
+    insert,
+    literal,
+    select,
+    update,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.schema import MetaData
 from sqlalchemy.engine import Connection
@@ -55,47 +69,75 @@ class CaseRepo:
         )
 
     def list_cases(self, conn: Connection, q: Optional[str], limit: int, offset: int) -> List[Dict[str, Any]]:
-        stmt = select(cases).order_by(cases.c.updated_at.desc()).limit(limit).offset(offset)
+        # List view should not transfer or deserialize the full extracted graph.
+        # Extract only the fields we need using Postgres JSONB operators.
+        empty_jsonb_array = cast(literal("[]"), JSONB)
+        nodes_json = func.coalesce(cases.c.extracted["nodes"], empty_jsonb_array)
+        edges_json = func.coalesce(cases.c.extracted["edges"], empty_jsonb_array)
+
+        # Extract Case.name from nodes[]
+        n_case_name = func.jsonb_array_elements(nodes_json).table_valued("value").alias("n_case_name")
+        case_name_sq = (
+            select(n_case_name.c.value.op("->")("properties").op("->>")("name"))
+            .where(n_case_name.c.value.op("->>")("label") == "Case")
+            .limit(1)
+            .scalar_subquery()
+        )
+
+        # Extract Case.temp_id so we can locate Domain → Case CONTAINS edge and return edge.from as domain_id
+        n_case_temp = func.jsonb_array_elements(nodes_json).table_valued("value").alias("n_case_temp")
+        case_temp_id_sq = (
+            select(n_case_temp.c.value.op("->>")("temp_id"))
+            .where(n_case_temp.c.value.op("->>")("label") == "Case")
+            .limit(1)
+            .scalar_subquery()
+        )
+
+        e_domain = func.jsonb_array_elements(edges_json).table_valued("value").alias("e_domain")
+        domain_id_sq = (
+            select(e_domain.c.value.op("->>")("from"))
+            .where(
+                and_(
+                    e_domain.c.value.op("->>")("label") == "CONTAINS",
+                    e_domain.c.value.op("->>")("to") == case_temp_id_sq,
+                )
+            )
+            .limit(1)
+            .scalar_subquery()
+        )
+
+        # Select only minimal columns (+ derived fields)
+        stmt = (
+            select(
+                cases.c.id,
+                cases.c.filename,
+                cases.c.status,
+                cases.c.file_key,
+                cases.c.updated_at,
+                cases.c.kg_submitted_at,
+                case_name_sq.label("case_name"),
+                domain_id_sq.label("domain_id"),
+            )
+            .order_by(cases.c.updated_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
         rows = conn.execute(stmt).mappings().all()
         
         # Return minimal data for list view - extract only necessary fields
         result = []
         for row in rows:
             case_dict = dict(row)
-            extracted = case_dict.get("extracted") or {}
-            nodes = extracted.get("nodes", [])
-            edges = extracted.get("edges", [])
-            
-            # Find Case node for case_name and its temp_id
-            case_node = next(
-                (n for n in nodes if n.get("label") == "Case"),
-                None
-            )
-            case_name = None
-            case_temp_id = None
-            if case_node:
-                if case_node.get("properties"):
-                    case_name = case_node["properties"].get("name")
-                case_temp_id = case_node.get("temp_id")
-            
-            # Find Domain via CONTAINS edge (Domain → Case)
-            # The edge's 'from' field contains the domain_id (Neo4j ID)
-            domain_id = None
-            if case_temp_id:
-                for edge in edges:
-                    if isinstance(edge, dict) and edge.get("label") == "CONTAINS" and edge.get("to") == case_temp_id:
-                        domain_id = edge.get("from")
-                        break
-            
+
             # Return minimal fields only
             result.append({
                 "id": case_dict.get("id"),
                 "filename": case_dict.get("filename"),
                 "status": case_dict.get("status"),
                 "extracted": {
-                    "case_name": case_name
+                    "case_name": case_dict.get("case_name")
                 },
-                "domain_id": domain_id,  # Send domain_id instead of domain_name
+                "domain_id": case_dict.get("domain_id"),  # Send domain_id instead of domain_name
                 "has_file": bool(case_dict.get("file_key")),  # Whether original file is available
                 "updated_at": case_dict.get("updated_at"),
                 "kg_submitted_at": case_dict.get("kg_submitted_at"),

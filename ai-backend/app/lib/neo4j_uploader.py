@@ -63,6 +63,7 @@ class Neo4jUploader:
         self.schema_payload = schema_payload
         self.neo4j_client = neo4j_client
         self.catalog_labels = self._identify_catalog_labels()
+        self.case_unique_labels = self._identify_case_unique_labels()
         self.schema_by_label = self._build_schema_lookup()
         
     def _identify_catalog_labels(self) -> Set[str]:
@@ -86,6 +87,18 @@ class Neo4jUploader:
                 if isinstance(node_def, dict) and "label" in node_def:
                     schema_by_label[node_def["label"]] = node_def
         return schema_by_label
+
+    def _identify_case_unique_labels(self) -> Set[str]:
+        """Identify labels where case_unique=true in schema."""
+        labels: Set[str] = set()
+        if isinstance(self.schema_payload, list):
+            for node_def in self.schema_payload:
+                if not isinstance(node_def, dict):
+                    continue
+                label = node_def.get("label")
+                if label and node_def.get("case_unique") is True:
+                    labels.add(label)
+        return labels
     
     def upload_graph_data(self, nodes: List[Dict[str, Any]], edges: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Upload nodes and edges to Neo4j, returning updated data with _ids.
@@ -462,7 +475,7 @@ class Neo4jUploader:
         # Query all connected nodes
         query = f"""
         MATCH (n:`{label}` {{{id_prop}: $node_id}})-[r]-(connected)
-        RETURN connected, keys(connected) as props
+        RETURN connected, labels(connected) as labels, keys(connected) as props
         """
         
         try:
@@ -470,20 +483,35 @@ class Neo4jUploader:
             
             for record in results:
                 connected = record.get("connected", {})
+                connected_labels = record.get("labels", []) or []
                 props = record.get("props", [])
                 
-                # Check if any *_id property is in case_node_ids
+                # "Isolation" is meant as a safety check before deleting case-unique nodes.
+                #
+                # Connections to non-case-unique nodes (shared/catalog) are expected and safe:
+                # deleting the case-unique node will remove those relationships but preserve the shared nodes.
+                #
+                # The only unsafe scenario is when a case-unique node connects to *another case-unique node*
+                # that is not part of this case (i.e., could belong to a different case / reused node).
+                is_connected_case_unique = any(lbl in self.case_unique_labels for lbl in connected_labels)
+                if not is_connected_case_unique:
+                    # Connected node is shared/catalog (or unknown) → ignore for isolation purposes.
+                    continue
+
+                # For case-unique connected nodes, require that at least one *_id is in case_node_ids
+                # (meaning the connected node belongs to this case).
                 is_case_node = False
                 for prop in props:
-                    if prop.endswith("_id"):
+                    if isinstance(prop, str) and prop.endswith("_id"):
                         connected_id = connected.get(prop)
                         if connected_id and str(connected_id) in case_node_ids:
                             is_case_node = True
                             break
-                
+
                 if not is_case_node:
-                    # Found a connection outside the case
-                    logger.info(f"Node {label}:{node_id} has external connections")
+                    logger.info(
+                        f"Node {label}:{node_id} has external case-unique connections (connected labels={connected_labels})"
+                    )
                     return False
             
             return True
@@ -583,4 +611,72 @@ class Neo4jUploader:
         except Exception as e:
             logger.warning(f"Failed to check connections for {label}:{node_id}: {e}")
             return True  # Assume connected to be safe
+
+    def get_node_preset(self, label: str, node_id: str) -> bool:
+        """Check if a node has the preset property set to true.
+        
+        Preset nodes are canonical, stable nodes defined by legal experts.
+        They should not be auto-deleted when orphaned (only admin can force-delete).
+        
+        Args:
+            label: Node label
+            node_id: The node's *_id property value
+            
+        Returns:
+            True if node has preset: true, False otherwise
+        """
+        id_prop = get_id_prop_for_label(label, self.schema_payload)
+        
+        query = f"""
+        MATCH (n:`{label}` {{{id_prop}: $node_id}})
+        RETURN n.preset as preset
+        """
+        
+        try:
+            results = self.neo4j_client.execute_query(query, {"node_id": node_id})
+            if results and len(results) > 0:
+                return results[0].get("preset") is True
+            return False
+        except Exception as e:
+            logger.warning(f"Failed to check preset for {label}:{node_id}: {e}")
+            return False  # Default to non-preset
+
+    def set_node_preset(self, label: str, node_id: str, preset: bool) -> bool:
+        """Set or remove the preset property on a node.
+        
+        Args:
+            label: Node label
+            node_id: The node's *_id property value
+            preset: If True, set preset=true; if False, remove the preset property
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        id_prop = get_id_prop_for_label(label, self.schema_payload)
+        
+        if preset:
+            # Set preset to true
+            query = f"""
+            MATCH (n:`{label}` {{{id_prop}: $node_id}})
+            SET n.preset = true
+            RETURN n.{id_prop} as id
+            """
+        else:
+            # Remove the preset property
+            query = f"""
+            MATCH (n:`{label}` {{{id_prop}: $node_id}})
+            REMOVE n.preset
+            RETURN n.{id_prop} as id
+            """
+        
+        try:
+            results = self.neo4j_client.execute_query(query, {"node_id": node_id})
+            if results and len(results) > 0:
+                logger.info(f"Set preset={preset} for {label}:{node_id}")
+                return True
+            logger.warning(f"Node not found when setting preset: {label}:{node_id}")
+            return False
+        except Exception as e:
+            logger.error(f"Failed to set preset for {label}:{node_id}: {e}")
+            return False
 

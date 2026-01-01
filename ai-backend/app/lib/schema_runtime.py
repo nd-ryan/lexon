@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple, Type
+from functools import lru_cache
 from pydantic import BaseModel, create_model
 try:
     # Pydantic v2
@@ -14,6 +15,9 @@ from datetime import date as python_date
 
 
 DATE_REGEX = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+@lru_cache(maxsize=1)
 def load_schema_payload() -> Any:
     """Load the static schema_v3.json payload from the project root ai-backend directory.
 
@@ -23,10 +27,11 @@ def load_schema_payload() -> Any:
     logger = logging.getLogger(__name__)
     base_dir = os.path.join(os.path.dirname(__file__), "..", "..")
     path = os.path.abspath(os.path.join(base_dir, "schema_v3.json"))
-    logger.info(f"Loading schema from: {path}")
+    # This function is memoized; keep logs low-noise in hot paths.
+    logger.debug(f"Loading schema from: {path}")
     with open(path, "r") as f:
         data = json.load(f)
-    logger.info(f"Loaded schema with {len(data) if isinstance(data, list) else 0} node definitions")
+    logger.debug(f"Loaded schema with {len(data) if isinstance(data, list) else 0} node definitions")
     return data
 
 

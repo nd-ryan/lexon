@@ -79,8 +79,8 @@ def build_indexed_catalog(
         if not isinstance(entry, dict):
             continue
         
-        # Get the real ID
-        real_id = entry.get(id_field)
+        # Get the real ID (fall back to temp_id for newly created nodes within the same extraction)
+        real_id = entry.get(id_field) or entry.get("temp_id")
         if real_id is None:
             continue
         
@@ -992,20 +992,20 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                     # This shouldn't happen since we validated indices, but keep as safety
                     logger.warning(f"Phase 2: Forum ID '{forum_id}' not found in catalog; skipping")
                     continue
-                    
-                    # Use all properties from catalog entry
-                    props: Dict[str, Any] = {}
-                    for k in allowed_keys:
-                        if entry.get(k) is not None:
-                            props[k] = entry.get(k)
-                    # Ensure ID fields are included
-                    for k, v in entry.items():
-                        if isinstance(k, str) and k.endswith("_id") and v is not None:
-                            props[k] = str(v) if not isinstance(v, (int, float, bool)) else v
-                    
-                    node = {"temp_id": f"n{next_idx}", "label": lbl, "properties": props}
-                    next_idx += 1
-                    self.state.nodes_accumulated.append(node)
+                
+                # Use all properties from catalog entry
+                props: Dict[str, Any] = {}
+                for k in allowed_keys:
+                    if entry.get(k) is not None:
+                        props[k] = entry.get(k)
+                # Ensure ID fields are included
+                for k, v in entry.items():
+                    if isinstance(k, str) and k.endswith("_id") and v is not None:
+                        props[k] = str(v) if not isinstance(v, (int, float, bool)) else v
+                
+                node = {"temp_id": f"n{next_idx}", "label": "Forum", "properties": props}
+                next_idx += 1
+                self.state.nodes_accumulated.append(node)
 
             # Create edges: Proceeding → Forum (using Neo4j ID instead of temp_id)
             try:
@@ -1907,7 +1907,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             
             task = crew.phase6_laws_per_ruling_task()
             single_crew = Crew(
-                agents=[crew.phase1_extract_agent()],
+                agents=[crew.phase6_law_agent()],
                 tasks=[task],
                 process=Process.sequential,
             )
@@ -2258,26 +2258,49 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                             if not isinstance(new_props, dict):
                                 continue
                             
-                            # Assign temp_id and add to nodes_accumulated
-                            temp_id = f"n{next_idx}"
-                            next_idx += 1
-                            
                             # Validate and filter properties against schema
                             props_meta = (self.state.props_meta_by_label or {}).get("Doctrine", {})
                             allowed_keys = [k for k in props_meta.keys() if isinstance(k, str)]
                             validated_props: Dict[str, Any] = {k: new_props[k] for k in allowed_keys if k in new_props}
                             
-                            self.state.nodes_accumulated.append({
-                                "temp_id": temp_id,
-                                "label": "Doctrine",
-                                "properties": validated_props
-                            })
+                            # Check for existing doctrine with same name (deduplication)
+                            new_name = (validated_props.get("name") or "").strip().lower()
+                            existing_temp_id = None
+                            if new_name:
+                                # Check catalog (includes preset + previously created in this extraction)
+                                for cat_entry in catalogs.get("Doctrine", []):
+                                    if isinstance(cat_entry, dict):
+                                        cat_name = (cat_entry.get("name") or "").strip().lower()
+                                        if cat_name == new_name:
+                                            # Found existing - get or create temp_id
+                                            existing_temp_id = cat_entry.get("temp_id")
+                                            if not existing_temp_id:
+                                                # Catalog entry from Neo4j - find/create in nodes_accumulated
+                                                cat_doctrine_id = cat_entry.get("doctrine_id")
+                                                if cat_doctrine_id:
+                                                    existing_temp_id = find_catalog_node_temp_id("Doctrine", cat_doctrine_id, catalogs.get("Doctrine", []))
+                                            if existing_temp_id:
+                                                logger.info(f"Phase 7: Deduplicating Doctrine '{validated_props.get('name')}' - using existing {existing_temp_id}")
+                                            break
                             
-                            # Add to catalog with temp_id for future batch matching
-                            catalogs["Doctrine"].append({
-                                "temp_id": temp_id,
-                                **validated_props
-                            })
+                            if existing_temp_id:
+                                temp_id = existing_temp_id
+                            else:
+                                # Create new doctrine
+                                temp_id = f"n{next_idx}"
+                                next_idx += 1
+                                
+                                self.state.nodes_accumulated.append({
+                                    "temp_id": temp_id,
+                                    "label": "Doctrine",
+                                    "properties": validated_props
+                                })
+                                
+                                # Add to catalog with temp_id for future batch matching
+                                catalogs["Doctrine"].append({
+                                    "temp_id": temp_id,
+                                    **validated_props
+                                })
                             
                             # Create edge Argument → Doctrine
                             if rel_label_doctrine:
@@ -2301,23 +2324,47 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                             if not isinstance(new_props, dict):
                                 continue
                             
-                            temp_id = f"n{next_idx}"
-                            next_idx += 1
-                            
                             props_meta = (self.state.props_meta_by_label or {}).get("Policy", {})
                             allowed_keys = [k for k in props_meta.keys() if isinstance(k, str)]
                             validated_props: Dict[str, Any] = {k: new_props[k] for k in allowed_keys if k in new_props}
                             
-                            self.state.nodes_accumulated.append({
-                                "temp_id": temp_id,
-                                "label": "Policy",
-                                "properties": validated_props
-                            })
+                            # Check for existing policy with same name (deduplication)
+                            new_name = (validated_props.get("name") or "").strip().lower()
+                            existing_temp_id = None
+                            if new_name:
+                                # Check catalog (includes preset + previously created in this extraction)
+                                for cat_entry in catalogs.get("Policy", []):
+                                    if isinstance(cat_entry, dict):
+                                        cat_name = (cat_entry.get("name") or "").strip().lower()
+                                        if cat_name == new_name:
+                                            # Found existing - get or create temp_id
+                                            existing_temp_id = cat_entry.get("temp_id")
+                                            if not existing_temp_id:
+                                                # Catalog entry from Neo4j - find/create in nodes_accumulated
+                                                cat_policy_id = cat_entry.get("policy_id")
+                                                if cat_policy_id:
+                                                    existing_temp_id = find_catalog_node_temp_id("Policy", cat_policy_id, catalogs.get("Policy", []))
+                                            if existing_temp_id:
+                                                logger.info(f"Phase 7: Deduplicating Policy '{validated_props.get('name')}' - using existing {existing_temp_id}")
+                                            break
                             
-                            catalogs["Policy"].append({
-                                "temp_id": temp_id,
-                                **validated_props
-                            })
+                            if existing_temp_id:
+                                temp_id = existing_temp_id
+                            else:
+                                # Create new policy
+                                temp_id = f"n{next_idx}"
+                                next_idx += 1
+                                
+                                self.state.nodes_accumulated.append({
+                                    "temp_id": temp_id,
+                                    "label": "Policy",
+                                    "properties": validated_props
+                                })
+                                
+                                catalogs["Policy"].append({
+                                    "temp_id": temp_id,
+                                    **validated_props
+                                })
                             
                             if rel_label_policy:
                                 key = (arg_temp_id, temp_id, rel_label_policy)
@@ -2340,23 +2387,47 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                             if not isinstance(new_props, dict):
                                 continue
                             
-                            temp_id = f"n{next_idx}"
-                            next_idx += 1
-                            
                             props_meta = (self.state.props_meta_by_label or {}).get("FactPattern", {})
                             allowed_keys = [k for k in props_meta.keys() if isinstance(k, str)]
                             validated_props: Dict[str, Any] = {k: new_props[k] for k in allowed_keys if k in new_props}
                             
-                            self.state.nodes_accumulated.append({
-                                "temp_id": temp_id,
-                                "label": "FactPattern",
-                                "properties": validated_props
-                            })
+                            # Check for existing fact pattern with same name (deduplication)
+                            new_name = (validated_props.get("name") or "").strip().lower()
+                            existing_temp_id = None
+                            if new_name:
+                                # Check catalog (includes preset + previously created in this extraction)
+                                for cat_entry in catalogs.get("FactPattern", []):
+                                    if isinstance(cat_entry, dict):
+                                        cat_name = (cat_entry.get("name") or "").strip().lower()
+                                        if cat_name == new_name:
+                                            # Found existing - get or create temp_id
+                                            existing_temp_id = cat_entry.get("temp_id")
+                                            if not existing_temp_id:
+                                                # Catalog entry from Neo4j - find/create in nodes_accumulated
+                                                cat_fp_id = cat_entry.get("fact_pattern_id")
+                                                if cat_fp_id:
+                                                    existing_temp_id = find_catalog_node_temp_id("FactPattern", cat_fp_id, catalogs.get("FactPattern", []))
+                                            if existing_temp_id:
+                                                logger.info(f"Phase 7: Deduplicating FactPattern '{validated_props.get('name')}' - using existing {existing_temp_id}")
+                                            break
                             
-                            catalogs["FactPattern"].append({
-                                "temp_id": temp_id,
-                                **validated_props
-                            })
+                            if existing_temp_id:
+                                temp_id = existing_temp_id
+                            else:
+                                # Create new fact pattern
+                                temp_id = f"n{next_idx}"
+                                next_idx += 1
+                                
+                                self.state.nodes_accumulated.append({
+                                    "temp_id": temp_id,
+                                    "label": "FactPattern",
+                                    "properties": validated_props
+                                })
+                                
+                                catalogs["FactPattern"].append({
+                                    "temp_id": temp_id,
+                                    **validated_props
+                                })
                             
                             if rel_label_factpattern:
                                 key = (arg_temp_id, temp_id, rel_label_factpattern)

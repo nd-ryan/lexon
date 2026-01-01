@@ -411,10 +411,20 @@ def delete_case(case_id: str, request: Request, db: Session = Depends(get_db)):
                 is_existing = node.get("is_existing", False)
                 
                 if is_existing:
-                    # Pre-existing node: just detach from this case's nodes, leave in KG
+                    # Pre-existing node: detach from this case's nodes
                     try:
                         detached = uploader.detach_node_from_case(label, node_id, case_node_ids)
                         logger.info(f"Detached pre-existing node {label}:{node_id} ({detached} relationships)")
+                        
+                        # After detaching, check if node is now isolated and non-preset
+                        # Non-preset isolated shared nodes should be deleted
+                        if label not in case_unique_labels:
+                            is_preset = uploader.get_node_preset(label, node_id)
+                            if not is_preset:
+                                has_connections = uploader.check_node_has_connections(label, node_id)
+                                if not has_connections:
+                                    uploader.delete_node(label, node_id)
+                                    logger.info(f"Deleted isolated non-preset shared node {label}:{node_id}")
                     except Exception as e:
                         kg_cleanup_ok = False
                         kg_cleanup_notes.append(f"Failed to detach pre-existing node {label}:{node_id}: {e}")
@@ -444,6 +454,15 @@ def delete_case(case_id: str, request: Request, db: Session = Depends(get_db)):
                     try:
                         detached = uploader.detach_node_from_case(label, node_id, case_node_ids)
                         logger.info(f"Detached non-case-unique node {label}:{node_id} ({detached} relationships)")
+                        
+                        # After detaching, check if node is now isolated and non-preset
+                        # Non-preset isolated shared nodes should be deleted
+                        is_preset = uploader.get_node_preset(label, node_id)
+                        if not is_preset:
+                            has_connections = uploader.check_node_has_connections(label, node_id)
+                            if not has_connections:
+                                uploader.delete_node(label, node_id)
+                                logger.info(f"Deleted isolated non-preset shared node {label}:{node_id}")
                     except Exception as e:
                         kg_cleanup_ok = False
                         kg_cleanup_notes.append(f"Failed to detach node {label}:{node_id}: {e}")

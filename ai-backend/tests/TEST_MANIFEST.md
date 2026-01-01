@@ -4,9 +4,9 @@
 
 This document provides a centralized reference for all backend tests, organized by test file and category.
 
-**Total Tests:** 104  
+**Total Tests:** 115  
 **Test Framework:** pytest with async support  
-**Coverage Areas:** Case extraction flow (V3), shared nodes management, graph event logging, Neo4j uploader helpers, optional Neo4j/Search integration checks, API security  
+**Coverage Areas:** Case extraction flow (V3), shared nodes management, preset node behavior, graph event logging, Neo4j uploader helpers, optional Neo4j/Search integration checks, API security  
 **Pass Rate:** 100% ✅
 
 ---
@@ -40,7 +40,7 @@ This document provides a centralized reference for all backend tests, organized 
 
 ---
 
-## 2. `test_shared_nodes.py` - Shared Node Management (47 tests)
+## 2. `test_shared_nodes.py` - Shared Node Management (58 tests)
 
 ### Helper Function Tests (20 tests)
 
@@ -99,7 +99,7 @@ Tests extraction of all node IDs from a case's node list.
 - **test_handles_missing_properties** - Handles nodes without properties
 - **test_handles_non_dict_nodes** - Filters out invalid node entries
 
-### API Endpoint Tests (26 tests)
+### API Endpoint Tests (26 tests + 11 preset node tests)
 
 #### `TestListSharedNodesEndpoint` (4 tests)
 Tests `GET /api/ai/shared-nodes` endpoint for listing shared nodes.
@@ -136,6 +136,23 @@ Tests `DELETE /api/ai/shared-nodes/{label}/{node_id}` for node deletion with cat
 - **test_min_per_case_error_prevents_any_deletion** - No deletion occurs when min_per_case violated ✨
 - **test_detachment_removes_only_case_relationships** - Detachment only removes relationships to specific case nodes ✨
 - **(behavior note)** - Detachment also removes the node reference from Postgres `cases.extracted` (authoritative case membership) ✨
+
+#### `TestPresetNodeBehavior` (7 tests) ✨NEW
+Tests behavior for preset nodes (canonical nodes uploaded by legal experts).
+
+- **test_list_nodes_returns_is_preset** - Returns isPreset=true for preset nodes in list
+- **test_list_nodes_returns_is_preset_false** - Returns isPreset=false for non-preset nodes
+- **test_get_node_returns_is_preset** - Returns isPreset field in single node response
+- **test_orphaned_preset_node_preserved** - Orphaned preset nodes are preserved (not deleted) by default
+- **test_orphaned_preset_node_force_deleted** - Orphaned preset nodes can be force-deleted with force_delete=true
+- **test_orphaned_non_preset_node_auto_deleted** - Orphaned non-preset nodes are auto-deleted
+
+#### `TestPresetToggleEndpoint` (4 tests) ✨NEW
+Tests `PATCH /api/ai/shared-nodes/{label}/{node_id}/preset` for toggling preset status.
+
+- **test_set_preset_true** - Sets preset=true on a node
+- **test_set_preset_false** - Removes preset property from a node
+- **test_toggle_preset_404_for_missing_node** - Returns 404 when node not found
 
 ---
 

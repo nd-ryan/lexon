@@ -72,12 +72,13 @@ export async function DELETE(
   const { label, nodeId } = await params
   const { searchParams } = new URL(req.url)
   const forcePartial = searchParams.get('force_partial') === 'true'
+  const forceDelete = searchParams.get('force_delete') === 'true'
   
   const backendUrl = process.env.AI_BACKEND_URL || 'http://localhost:8000'
   const apiKey = process.env.FASTAPI_API_KEY || ''
 
   try {
-    const url = `${backendUrl}/api/ai/shared-nodes/${label}/${nodeId}?force_partial=${forcePartial}`
+    const url = `${backendUrl}/api/ai/shared-nodes/${label}/${nodeId}?force_partial=${forcePartial}&force_delete=${forceDelete}`
     const res = await fetch(url, {
       method: 'DELETE',
       headers: {

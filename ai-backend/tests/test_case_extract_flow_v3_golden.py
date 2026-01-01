@@ -70,7 +70,7 @@ def test_case_extract_flow_golden_shape_phases_0_to_3_then_validate(tmp_path: Pa
     issue_items = [FakePydantic({"issue_id": "i1", "name": "Breach"})]
     # Use UUID-like IDs so validate_case_graph recognizes these as catalog IDs.
     forum_id = "123e4567-e89b-12d3-a456-426614174000"
-    selection = {"selected": {"Forum": [forum_id]}}
+    selection = {"selected": {"Forum": [0]}}  # Index 0 maps to forum_id
     parties_roles = {
         "parties": [{"name": "Alice"}, {"name": "Bob"}],
         "case_roles": [{"party_index": 0, "role": "plaintiff"}, {"party_index": 1, "role": "defendant"}],

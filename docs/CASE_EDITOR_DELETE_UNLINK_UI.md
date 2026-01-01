@@ -5,6 +5,8 @@ This doc describes **what an editor sees** in the case editor UI (`/cases/[id]`)
 - **In scope**: UI controls, confirmation modal copy, `graphState`/`displayData` changes, “orphaned” behavior.
 - **Out of scope**: Saving to Postgres, submitting to Neo4j, backend APIs.
 
+Note: the UI uses `(shared)` to mean `case_unique: false`. In backend KG deletion/cleanup, **shared/catalog relationships do not block deletion** of case-unique nodes; the backend only falls back to “detach-only” when it detects connections to **case-unique nodes outside the case**.
+
 ## Entry points: where Delete / Unlink appears
 
 ### Node “actions” menu (three-dot menu)

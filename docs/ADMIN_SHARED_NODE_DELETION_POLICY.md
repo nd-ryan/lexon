@@ -2,12 +2,17 @@
 
 ## Overview
 
-This document describes the deletion policy for **catalog nodes** vs **regular (user-created) shared nodes** in the shared nodes management system.
+This document describes the deletion policy for shared nodes in the shared nodes management system, including:
+- **Catalog nodes** (`can_create_new: false`) - fixed taxonomies
+- **Preset nodes** (`preset: true`) - canonical nodes uploaded by legal experts
+- **Regular (user-created) shared nodes** - nodes created by users
 
-**Important (current behavior):** The backend primarily decides between **detach vs delete** based on whether the node is referenced by any cases:
+**Important:** The deletion behavior depends on whether the node is **preset** and whether it has **case references**:
 
 - If a shared node is referenced by **one or more cases**, the delete action **detaches it from cases and preserves the node** in Neo4j.
-- A shared node is only **fully deleted** from Neo4j when it is **orphaned** (no case references).
+- If a shared node is **orphaned** (no case references):
+  - **Preset nodes**: **preserved** in Neo4j (unless admin uses `force_delete=true`)
+  - **Non-preset nodes**: **deleted** from Neo4j automatically
 
 **Related:** For a full end-to-end view of *all* delete entry points (admin shared-nodes delete, delete case, editor delete + save/submit), see `docs/DELETE_WORKFLOWS.md`.
 
@@ -43,7 +48,31 @@ This document describes the deletion policy for **catalog nodes** vs **regular (
 - May be shared across cases or case-unique
 - More ephemeral nature
 
+### Preset Nodes (`preset: true`)
+
+**Definition:** Canonical, stable nodes uploaded by legal experts that should be protected from accidental deletion.
+
+**Examples:**
+- Pre-loaded **Doctrine** nodes (e.g., "Rule of Reason", "Per Se Illegality")
+- Pre-loaded **FactPattern** nodes (e.g., "Price Fixing", "Bid Rigging")
+- Pre-loaded **Policy** nodes (e.g., "Consumer Welfare", "Economic Efficiency")
+- Pre-loaded **Law** nodes (e.g., "Sherman Act, Section 1", "Clayton Act, Section 7")
+
+**Characteristics:**
+- Marked with `preset: true` property in Neo4j
+- Protected from auto-deletion when orphaned
+- Admin can toggle preset status via the shared nodes page
+- Admin can force-delete orphaned preset nodes if needed
+
+**Note:** The preset flag is orthogonal to `can_create_new` - both catalog nodes and user-creatable node types can be marked as preset.
+
 **Note:** The **admin shared nodes page** (and the `/api/ai/shared-nodes/...` endpoints) only manages labels where `case_unique=false`. Case-specific labels like `Case`, `Issue`, and `Ruling` (`case_unique=true`) are managed via the **case update / submit / delete** flows, not via the shared-nodes admin interface.
+
+**Related safety note (case delete / KG submit):**
+When the backend decides whether it is safe to delete a `case_unique:true` node from Neo4j, it uses an isolation safety check:
+
+- Connections to **shared/catalog** nodes (e.g. `Domain`, `ReliefType`, `Doctrine`, `Party`) are expected and **do not** block deletion of the case-unique node.
+- Only connections to **case-unique** nodes outside the case will force “detach-only” instead of deletion.
 
 ---
 
@@ -73,21 +102,38 @@ This document describes the deletion policy for **catalog nodes** vs **regular (
 **UI Message (admin shared nodes page):**
 > ℹ️ **Detach from Cases:** This node will be **detached from all connected cases** but **preserved in the Knowledge Graph**.
 
-### 2. Any Shared Node WITHOUT Case References (Orphaned)
+### 2. Orphaned Non-Preset Shared Node
 
-**Scenario:** Admin deletes a shared node that has no case references.
+**Scenario:** Admin deletes a non-preset shared node that has no case references.
 
 **Behavior:**
 ```
 ✅ Delete from Knowledge Graph (DETACH DELETE)
 ```
 
-**Rationale:** Orphaned shared nodes serve no purpose and can be safely cleaned up.
+**Rationale:** Orphaned non-preset shared nodes serve no purpose and can be safely cleaned up.
 
 **Event logging note:** Orphaned node deletion does not log to `graph_events` because the audit log is case-scoped and there are no referencing cases to attach an event to.
 
 **UI Message (admin shared nodes page):**
 > ⚠️ **Orphaned Node:** This orphaned node will be **permanently deleted** from the Knowledge Graph.
+
+### 3. Orphaned Preset Shared Node
+
+**Scenario:** Admin deletes a preset shared node that has no case references.
+
+**Behavior:**
+```
+❌ DO NOT delete from Knowledge Graph (by default)
+✅ Can be deleted with force_delete=true
+```
+
+**Rationale:** Preset nodes are canonical data uploaded by legal experts and should be protected from accidental deletion. They may be temporarily orphaned but could be needed for future cases.
+
+**UI Message (admin shared nodes page):**
+> 🔒 **Preset Node:** This is a **preset node** (canonical data from legal experts). It will be **preserved in the Knowledge Graph** unless you explicitly force delete it.
+
+**Force Delete:** Admin can explicitly force-delete an orphaned preset node by clicking "Force Delete Preset Node" in the delete modal. This passes `force_delete=true` to the backend.
 
 ---
 
@@ -332,4 +378,4 @@ Catalog nodes are identified by the `can_create_new` property in `ai-backend/sch
 }
 ```
 
-Last Updated: December 17, 2025
+Last Updated: December 31, 2025

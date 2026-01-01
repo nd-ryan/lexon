@@ -61,3 +61,37 @@ def test_generate_node_cypher_skips_invalid_date_values():
     # Invalid date should not be passed to Neo4j's date() function
     assert "hearing_date" not in params
     assert "hearing_date" not in query
+
+
+def test_check_node_isolation_ignores_shared_catalog_connections():
+    """
+    Case-unique nodes often connect to shared/catalog nodes (e.g., Case<-[:CONTAINS]-Domain,
+    Relief-[:IS_TYPE]->ReliefType). These should NOT prevent deletion of the case-unique node.
+    """
+    schema_payload = [
+        {"label": "Case", "case_unique": True, "can_create_new": True, "properties": {"case_id": {"type": "STRING"}}},
+        {"label": "Domain", "case_unique": False, "can_create_new": False, "properties": {"domain_id": {"type": "STRING"}}},
+    ]
+
+    class _Client:
+        def execute_query(self, query, params=None):
+            # connected node is Domain (shared/catalog) and NOT in case_node_ids
+            return [{"connected": {"domain_id": "d-outside"}, "labels": ["Domain"], "props": ["domain_id"]}]
+
+    uploader = Neo4jUploader(schema_payload=schema_payload, neo4j_client=_Client())
+    assert uploader.check_node_isolation("Case", "c1", case_node_ids=set()) is True
+
+
+def test_check_node_isolation_blocks_external_case_unique_connections():
+    """If a case-unique node connects to another case-unique node outside the case, do not delete it."""
+    schema_payload = [
+        {"label": "Case", "case_unique": True, "can_create_new": True, "properties": {"case_id": {"type": "STRING"}}},
+    ]
+
+    class _Client:
+        def execute_query(self, query, params=None):
+            # connected node is another Case (case-unique) not in case_node_ids
+            return [{"connected": {"case_id": "c-external"}, "labels": ["Case"], "props": ["case_id"]}]
+
+    uploader = Neo4jUploader(schema_payload=schema_payload, neo4j_client=_Client())
+    assert uploader.check_node_isolation("Case", "c1", case_node_ids={"c1"}) is False

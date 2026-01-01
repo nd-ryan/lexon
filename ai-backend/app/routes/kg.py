@@ -1,10 +1,13 @@
 import os
 import logging
 import json
-from typing import Dict, Set, List, Any, Tuple
+import time
+from typing import Dict, Set, List, Any, Tuple, Callable, TypeVar
 import re
 from fastapi import APIRouter, HTTPException, Request, Depends
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import OperationalError, DBAPIError
+from sqlalchemy import text
 
 from app.lib.db import get_db
 from app.lib.case_repo import case_repo
@@ -16,6 +19,90 @@ from app.lib.logging_config import setup_logger
 
 logger = setup_logger("kg-route")
 router = APIRouter(prefix="/kg")
+
+T = TypeVar("T")
+
+
+def retry_postgres_operation(
+    operation: Callable[[], T],
+    operation_name: str,
+    max_retries: int = 3,
+    base_delay: float = 1.0,
+    max_delay: float = 10.0,
+) -> T:
+    """Execute a Postgres operation with exponential backoff retry on connection errors.
+    
+    Args:
+        operation: Callable that performs the Postgres operation
+        operation_name: Human-readable name for logging
+        max_retries: Maximum number of retry attempts
+        base_delay: Initial delay between retries (seconds)
+        max_delay: Maximum delay between retries (seconds)
+        
+    Returns:
+        The result of the operation
+        
+    Raises:
+        The last exception if all retries fail
+    """
+    last_error = None
+    
+    for attempt in range(max_retries + 1):
+        try:
+            return operation()
+        except (OperationalError, DBAPIError) as e:
+            last_error = e
+            error_msg = str(e).lower()
+            
+            # Check if this is a retryable error (connection timeout, connection reset, etc.)
+            retryable_errors = [
+                "could not receive data from server",
+                "connection timed out",
+                "connection reset",
+                "server closed the connection",
+                "connection refused",
+                "broken pipe",
+                "ssl connection has been closed unexpectedly",
+            ]
+            
+            is_retryable = any(err in error_msg for err in retryable_errors)
+            
+            if not is_retryable or attempt >= max_retries:
+                logger.error(f"Postgres {operation_name} failed after {attempt + 1} attempts: {e}")
+                raise
+            
+            # Calculate delay with exponential backoff
+            delay = min(base_delay * (2 ** attempt), max_delay)
+            logger.warning(
+                f"Postgres {operation_name} failed (attempt {attempt + 1}/{max_retries + 1}): {e}. "
+                f"Retrying in {delay:.1f}s..."
+            )
+            time.sleep(delay)
+    
+    # Should never reach here, but just in case
+    raise last_error if last_error else RuntimeError(f"Postgres {operation_name} failed unexpectedly")
+
+
+def ensure_postgres_connection(db: Session) -> bool:
+    """Check and refresh Postgres connection if needed.
+    
+    Returns True if connection is healthy, raises exception otherwise.
+    """
+    try:
+        # Execute a simple query to check connection health
+        db.execute(text("SELECT 1"))
+        return True
+    except (OperationalError, DBAPIError) as e:
+        logger.warning(f"Postgres connection check failed, attempting to refresh: {e}")
+        try:
+            # Try to rollback any pending transaction and get a fresh connection
+            db.rollback()
+            db.execute(text("SELECT 1"))
+            logger.info("Postgres connection refreshed successfully")
+            return True
+        except Exception as refresh_error:
+            logger.error(f"Failed to refresh Postgres connection: {refresh_error}")
+            raise
 
 
 def load_schema() -> List[Dict[str, Any]]:
@@ -268,6 +355,10 @@ def get_user_id_from_header(request: Request) -> str:
 
 @router.post("/submit")
 async def submit_to_kg(payload: dict, request: Request, db: Session = Depends(get_db), _: bool = Depends(verify_bearer)):
+    case_id = None
+    neo4j_committed = False  # Track whether Neo4j transaction was committed
+    uploaded_data = None  # Store uploaded data for Postgres save after Neo4j success
+    
     try:
         case_id = payload.get("case_id")
         if not isinstance(case_id, str) or not case_id:
@@ -301,7 +392,9 @@ async def submit_to_kg(payload: dict, request: Request, db: Session = Depends(ge
         # Use kickoff_async() since we're already in an async context (FastAPI event loop)
         result = await flow.kickoff_async()
         
-        # Upload transformed data to Neo4j
+        # ============================================================
+        # PHASE 1: Neo4j Upload (separate error handling)
+        # ============================================================
         try:
             from app.lib.neo4j_uploader import Neo4jUploader
             from app.lib.neo4j_client import neo4j_client
@@ -351,11 +444,20 @@ async def submit_to_kg(payload: dict, request: Request, db: Session = Depends(ge
                             detached_count = uploader.detach_node_from_case(label, node_id, old_case_node_ids)
                             logger.info(f"Detached case-unique node {label}:{node_id} from case ({detached_count} relationships)")
                     else:
-                        # Non-case-unique (shared) node: only detach from this case
-                        # Shared nodes are managed separately via admin interface
+                        # Non-case-unique (shared) node: detach from this case
                         old_case_node_ids = get_case_node_ids(old_nodes)
                         detached_count = uploader.detach_node_from_case(label, node_id, old_case_node_ids)
                         logger.info(f"Detached shared node {label}:{node_id} from case ({detached_count} relationships)")
+                        
+                        # After detaching, check if node is now isolated and non-preset
+                        # Non-preset isolated shared nodes should be deleted
+                        is_preset = uploader.get_node_preset(label, node_id)
+                        if not is_preset:
+                            has_connections = uploader.check_node_has_connections(label, node_id)
+                            if not has_connections:
+                                uploader.delete_node(label, node_id)
+                                logger.info(f"Deleted isolated non-preset shared node {label}:{node_id}")
+                        # Preset nodes always preserved (detach only)
             
             # Capture original temp_ids BEFORE the nodes go through the flow/upload
             # Build a map: temp_id -> (label, index within that label)
@@ -383,6 +485,26 @@ async def submit_to_kg(payload: dict, request: Request, db: Session = Depends(ge
                 new_nodes,
                 result.get("edges", [])
             )
+            
+            # *** CRITICAL: Mark Neo4j as committed ***
+            # The upload_graph_data method commits its transaction internally
+            # If we reach this point, Neo4j has the data
+            neo4j_committed = True
+            nodes_count = len(uploaded_data.get("nodes", []))
+            edges_count = len(uploaded_data.get("edges", []))
+            logger.info(f"Neo4j upload COMMITTED for case {case_id}: {nodes_count} nodes, {edges_count} edges")
+            
+        except Exception as neo4j_error:
+            logger.exception(f"Neo4j upload failed for case {case_id}")
+            db.rollback()
+            return {"success": False, "error": "Neo4j upload failed"}
+        
+        # ============================================================
+        # PHASE 2: Postgres Operations (with retry logic)
+        # ============================================================
+        try:
+            from app.lib.property_filter import prepare_for_postgres_save, add_temp_ids
+            from app.lib.neo4j_client import neo4j_client
             
             # Build mapping from old temp_ids to new UUIDs
             id_mapping: Dict[str, str] = {}
@@ -426,59 +548,79 @@ async def submit_to_kg(payload: dict, request: Request, db: Session = Depends(ge
             # Persist the *published* snapshot and log events based on "last published" -> "new published"
             cleaned = prepare_for_postgres_save(updated_data)
 
-            event_count = 0
-            if is_first_submit:
-                # First publish: treat everything as created (with existing-node skips for node-level creates).
-                created_nodes = cleaned.get("nodes", []) or []
-                created_edges = cleaned.get("edges", []) or []
-                event_count = log_published_graph_events(
-                    conn=db.connection(),
-                    case_id=case_id,
-                    user_id=user_id,
-                    created_nodes=created_nodes,
-                    updated_nodes=[],
-                    deleted_nodes=[],
-                    created_edges=created_edges,
-                    updated_edges=[],
-                    deleted_edges=[],
-                )
-                logger.info(f"Logged {event_count} create events for first KG publish of case {case_id}")
-            else:
-                created_nodes, updated_nodes, deleted_nodes, created_edges, updated_edges, deleted_edges = diff_published_graph(
-                    old_data=published_data,
-                    new_data=cleaned,
-                )
-                event_count = log_published_graph_events(
-                    conn=db.connection(),
-                    case_id=case_id,
-                    user_id=user_id,
-                    created_nodes=created_nodes,
-                    updated_nodes=updated_nodes,
-                    deleted_nodes=deleted_nodes,
-                    created_edges=created_edges,
-                    updated_edges=updated_edges,
-                    deleted_edges=deleted_edges,
-                )
-                logger.info(f"Logged {event_count} graph_events for KG publish of case {case_id}")
+            # Ensure Postgres connection is healthy before event logging
+            ensure_postgres_connection(db)
+            
+            # Log graph events with retry logic
+            def do_event_logging():
+                nonlocal is_first_submit, cleaned, published_data
+                event_count = 0
+                if is_first_submit:
+                    # First publish: treat everything as created (with existing-node skips for node-level creates).
+                    created_nodes_list = cleaned.get("nodes", []) or []
+                    created_edges_list = cleaned.get("edges", []) or []
+                    event_count = log_published_graph_events(
+                        conn=db.connection(),
+                        case_id=case_id,
+                        user_id=user_id,
+                        created_nodes=created_nodes_list,
+                        updated_nodes=[],
+                        deleted_nodes=[],
+                        created_edges=created_edges_list,
+                        updated_edges=[],
+                        deleted_edges=[],
+                    )
+                    logger.info(f"Logged {event_count} create events for first KG publish of case {case_id}")
+                else:
+                    created_nodes_diff, updated_nodes_diff, deleted_nodes_diff, created_edges_diff, updated_edges_diff, deleted_edges_diff = diff_published_graph(
+                        old_data=published_data,
+                        new_data=cleaned,
+                    )
+                    event_count = log_published_graph_events(
+                        conn=db.connection(),
+                        case_id=case_id,
+                        user_id=user_id,
+                        created_nodes=created_nodes_diff,
+                        updated_nodes=updated_nodes_diff,
+                        deleted_nodes=deleted_nodes_diff,
+                        created_edges=created_edges_diff,
+                        updated_edges=updated_edges_diff,
+                        deleted_edges=deleted_edges_diff,
+                    )
+                    logger.info(f"Logged {event_count} graph_events for KG publish of case {case_id}")
+                return event_count
+            
+            retry_postgres_operation(do_event_logging, "event logging")
             
             # Always update entity_ids for any events that used temp_ids (legacy safety)
             # This handles both first submit (edge events) and subsequent submits (new node events)
             if id_mapping:
-                events_updated = graph_events_repo.update_entity_ids_for_case(
-                    conn=db.connection(),
-                    case_id=case_id,
-                    id_mapping=id_mapping,
-                )
+                def do_update_entity_ids():
+                    return graph_events_repo.update_entity_ids_for_case(
+                        conn=db.connection(),
+                        case_id=case_id,
+                        id_mapping=id_mapping,
+                    )
+                
+                events_updated = retry_postgres_operation(do_update_entity_ids, "entity ID update")
                 if events_updated > 0:
                     logger.info(f"Updated {events_updated} graph events with new UUIDs for case {case_id}")
             
             # Save updated draft + published snapshot back to Postgres with Neo4j-generated _ids
-            case_repo.update_case(db.connection(), case_id, cleaned, user_id)
-            case_repo.set_kg_extracted(db.connection(), case_id, cleaned)
+            def do_case_update():
+                case_repo.update_case(db.connection(), case_id, cleaned, user_id)
+                case_repo.set_kg_extracted(db.connection(), case_id, cleaned)
+                case_repo.set_kg_submitted(db.connection(), case_id, user_id)
             
-            # Record KG submission metadata
-            case_repo.set_kg_submitted(db.connection(), case_id, user_id)
-            db.commit()
+            retry_postgres_operation(do_case_update, "case update")
+            
+            # Commit all Postgres changes
+            def do_commit():
+                db.commit()
+            
+            retry_postgres_operation(do_commit, "commit")
+            
+            logger.info(f"Postgres operations completed for case {case_id}")
             
             nodes_count = len(updated_data.get("nodes", []))
             edges_count = len(updated_data.get("edges", []))
@@ -529,14 +671,29 @@ async def submit_to_kg(payload: dict, request: Request, db: Session = Depends(ge
                 }
             }
             
-        except Exception as neo4j_error:
-            logger.exception(f"Neo4j upload failed for case {case_id}")
-            # Don't save to Postgres if Neo4j upload failed
+        except (OperationalError, DBAPIError) as postgres_error:
+            # Postgres-specific error after Neo4j succeeded
+            logger.exception(f"Postgres operations failed for case {case_id} (Neo4j committed={neo4j_committed})")
             db.rollback()
-            return {"success": False, "error": "Neo4j upload failed"}
+            
+            if neo4j_committed:
+                # CRITICAL: Neo4j has the data but Postgres doesn't
+                # Return partial success so user knows to retry
+                logger.error(
+                    f"PARTIAL SUCCESS for case {case_id}: Neo4j upload succeeded but Postgres failed. "
+                    "User should retry the submit to sync Postgres."
+                )
+                return {
+                    "success": False, 
+                    "error": "Postgres save failed after Neo4j upload succeeded. Please retry.",
+                    "neo4j_committed": True,
+                    "partial_success": True,
+                }
+            else:
+                return {"success": False, "error": "Database operation failed"}
             
     except Exception as e:
-        logger.exception("KG submit failed")
+        logger.exception(f"KG submit failed for case {case_id}")
         db.rollback()
         # Don't leak details to frontend; return generic 200 with success false
         return {"success": False}

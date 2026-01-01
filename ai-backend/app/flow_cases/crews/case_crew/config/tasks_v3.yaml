@@ -1,5 +1,8 @@
 phase1_extract_case_task:
   description: |
+    CASE_TEXT:
+    {CASE_TEXT}
+
     CRITICAL: Extract information ONLY from the provided case text. Do not use general knowledge, external information, or assumptions. If information is not explicitly or implicitly present in the text, do not include it.
 
     INSTRUCTIONS:
@@ -20,14 +23,14 @@ phase1_extract_case_task:
 
     EXAMPLES (illustrative, may be partial):
     {EXAMPLES_JSON}
-
-    CASE_TEXT:
-    {CASE_TEXT}
   expected_output: "JSON of properties only for the Case node"
 
 phase1_extract_proceeding_task:
   description: |
-    Analyse the document text (provided below) and extract the Proceeding information as described.
+    CASE_TEXT:
+    {CASE_TEXT}
+
+    Analyse the document text (provided above) and extract the Proceeding information as described.
 
     CRITICAL: Extract information ONLY from the provided case text. Do not use general knowledge, external information, or assumptions. If information is not explicitly or implicitly present in the text, do not include it.
 
@@ -49,14 +52,14 @@ phase1_extract_proceeding_task:
 
     EXAMPLES (illustrative, may be partial):
     {EXAMPLES_JSON}
-
-    CASE_TEXT:
-    {CASE_TEXT}
   expected_output: "JSON of properties only for the Proceeding node"
 
 phase1_extract_issue_task:
   description: |
-    Analyse the document text (provided below) and extract ALL distinct Issues.
+    CASE_TEXT:
+    {CASE_TEXT}
+
+    Analyse the document text (provided above) and extract ALL distinct Issues.
 
     CRITICAL: Extract information ONLY from the provided case text. Do not use general knowledge, external information, or assumptions. If information is not explicitly or implicitly present in the text, do not include it.
 
@@ -80,17 +83,17 @@ phase1_extract_issue_task:
 
     EXAMPLES (illustrative, may be partial):
     {EXAMPLES_JSON}
-
-    CASE_TEXT:
-    {CASE_TEXT}
   expected_output: "A JSON object { items: [ { ...properties... }, ... ] }"
 
 phase2_select_forum_task:
   description: |
+    CASE_TEXT:
+    {CASE_TEXT}
+
     Phase 2: Select the Forum (court/tribunal) where this case was heard by matching it to an entry in the provided catalog.
 
     YOUR TASK:
-    1. Read the CASE_TEXT below and identify which court/tribunal heard this case
+    1. Read the CASE_TEXT above and identify which court/tribunal heard this case
     2. Look through the CATALOGS JSON below to find the matching Forum entry
     3. Return the _idx (index number) from that catalog entry
 
@@ -119,15 +122,15 @@ phase2_select_forum_task:
     FORUM EXAMPLES (for context only):
     {FORUM_EXAMPLES_JSON}
 
-    CASE_TEXT (identify the court from here):
-    {CASE_TEXT}
-
     CATALOGS (select the forum_id from here):
     {CATALOGS_JSON}
   expected_output: "A JSON object { selected: { Forum: [forum_id] } } where forum_id is a UUID string from the catalog."
 
 phase4_ruling_per_issue_task:
   description: |
+    CASE_TEXT:
+    {CASE_TEXT}
+
     Read the document text and for each Issue, identify the Ruling (court's disposition).
     
     CRITICAL: Extract information ONLY from the provided case text. Do not use general knowledge or external information.
@@ -143,7 +146,7 @@ phase4_ruling_per_issue_task:
     {RULING_EXAMPLES_JSON}
 
     Guidance:
-    - The ISSUES_JSON above contains existing Issue nodes with their temp_id values.
+    - The ISSUES_JSON below contains existing Issue nodes with their temp_id values.
     - For each issue, create ONE unique Ruling with the court's disposition/decision on that specific issue.
     - Each ruling should have reasoning and ratio specific to that individual issue.
     - For each ruling, identify which party it favored (in_favor: plaintiff|defendant|appellant|appellee|petitioner|respondent).
@@ -157,9 +160,6 @@ phase4_ruling_per_issue_task:
     RULING SCHEMA:
     {RULING_SPEC_TEXT}
 
-    CASE_TEXT:
-    {CASE_TEXT}
-
     ISSUES_JSON:
     {ISSUES_JSON}
 
@@ -167,6 +167,9 @@ phase4_ruling_per_issue_task:
 
 phase5_arguments_per_ruling_task:
   description: |
+    CASE_TEXT:
+    {CASE_TEXT}
+
     For each Ruling, extract ALL Arguments evaluated in that ruling.
 
     CRITICAL: Extract information ONLY from the provided case text. Do not use general legal knowledge.
@@ -202,15 +205,15 @@ phase5_arguments_per_ruling_task:
     ARGUMENT SCHEMA:
     {ARGUMENT_SPEC_TEXT}
 
-    CASE_TEXT:
-    {CASE_TEXT}
-
     RULINGS_JSON:
     {RULINGS_JSON}
   expected_output: "A JSON object { results: [ { ruling_temp_id: string, arguments: [{ properties: {...} OR temp_id: string, status: string }, ...] } ] }"
 
 phase5b_disposition_task:
   description: |
+    CASE_TEXT:
+    {CASE_TEXT}
+
     For each Argument provided, extract the disposition_text which captures the judge's verbatim words on that argument.
     
     CRITICAL - DISPOSITION TEXT EXTRACTION:
@@ -236,13 +239,13 @@ phase5b_disposition_task:
     
     ARGUMENTS_JSON (contains arguments that need disposition_text):
     {ARGUMENTS_JSON}
-    
-    CASE_TEXT:
-    {CASE_TEXT}
   expected_output: "A JSON object { results: [ { argument_temp_id: string, disposition_text: string }, ... ] }"
 
 phase6_laws_per_ruling_task:
   description: |
+    CASE_TEXT:
+    {CASE_TEXT}
+
     For each Ruling, select the Law(s) from the catalog that the ruling explicitly relies upon or cites.
 
     CRITICAL: Select laws ONLY based on what is explicitly referenced in the case text. Do not use general legal knowledge.
@@ -268,9 +271,6 @@ phase6_laws_per_ruling_task:
 
     LAW CATALOG (select _idx values from here):
     {CATALOGS_JSON}
-
-    CASE_TEXT:
-    {CASE_TEXT}
   expected_output: "A JSON object { results: [ { ruling_temp_id: string, law_ids: [<integers>] } ] }"
 
 
@@ -424,6 +424,9 @@ phase8_relief_and_type_task:
 
 phase9_party_task:
   description: |
+    CASE_TEXT:
+    {CASE_TEXT}
+
     Phase 9: Identify Parties from case text and deduplicate against existing Party catalog; output roles for Case relationships.
 
     CRITICAL: Extract parties ONLY from the provided CASE_TEXT. Do not use general knowledge or external information. Only include parties that are explicitly mentioned in the case text with their roles as stated in the text.
@@ -435,7 +438,7 @@ phase9_party_task:
     {PARTY_EXAMPLES_JSON}
 
     Inputs provided in instructions as JSON blocks:
-    - CASE_TEXT: raw case text
+    - CASE_TEXT: raw case text (provided above)
     - CATALOGS: { "Party": [ { name, type }, ... ] }
 
     Steps:
@@ -452,9 +455,6 @@ phase9_party_task:
     - Extract ONLY parties mentioned in the case text, not from general knowledge.
     - ONLY use the five enumerated type values and six enumerated role values listed above - no exceptions.
 
-    CASE_TEXT:
-    {CASE_TEXT}
-
     CATALOGS:
     {CATALOGS_JSON}
   expected_output: "A JSON object { parties: [...], case_roles: [...] }."
@@ -462,6 +462,9 @@ phase9_party_task:
 
 phase9_select_domain_task:
   description: |
+    CASE_TEXT:
+    {CASE_TEXT}
+
     Phase 9: Select ONE Domain from the provided catalog based on the case text.
     
     CRITICAL: Base your selection ONLY on the provided CASE_TEXT. Do not use general knowledge. Select the domain that best fits the subject matter of the case.
@@ -473,7 +476,7 @@ phase9_select_domain_task:
     {DOMAIN_EXAMPLES_JSON}
     
     Inputs:
-    - CASE_TEXT: raw case text
+    - CASE_TEXT: raw case text (provided above)
     - CATALOGS: { "Domain": [ { _idx, name, ...}, ... ] }
     
     Steps:
@@ -494,9 +497,6 @@ phase9_select_domain_task:
     {"_idx": 2, "name": "Criminal Law"}
     
     And the case is about antitrust violations, return: { "selected": { "Domain": [0] } }
-    
-    CASE_TEXT:
-    {CASE_TEXT}
     
     CATALOGS:
     {CATALOGS_JSON}

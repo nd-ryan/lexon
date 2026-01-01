@@ -4,7 +4,9 @@
 
 Lexon has **three user-facing delete entrypoints** that affect nodes and/or cases. They are intentionally aligned around a shared principle:
 
-- **Shared nodes** (`case_unique: false`) are generally **preserved** in Neo4j; “delete” usually means **detach** relationships to a case (or to many cases).
+- **Shared nodes** (`case_unique: false`) have different behavior based on the **preset** flag:
+  - **Preset nodes** (`preset: true`): canonical, stable nodes defined by legal experts. Always **preserved** in Neo4j (detach-only), except admin can force-delete orphaned preset nodes.
+  - **Non-preset nodes** (no `preset` property): can be **deleted** from Neo4j when isolated/orphaned from any delete source.
 - **Case-unique nodes** (`case_unique: true`) are generally **owned by a single case** and may be **deleted** from Neo4j, but we use an **isolation check** as a safety guard where applicable.
 
 This doc describes **what each entrypoint does**, which APIs are called, and what happens in **Postgres vs Neo4j**.
@@ -14,6 +16,7 @@ This doc describes **what each entrypoint does**, which APIs are called, and wha
 - **Detach**: delete only the relationships connecting a node to nodes that belong to a specific case (or set of cases). The node itself remains in Neo4j.
 - **Delete**: `DETACH DELETE` the node in Neo4j (removes the node and all its relationships).
 - **Case membership (authoritative)**: computed from Postgres `cases.extracted` JSON (nodes/edges), not from Neo4j traversal.
+- **Preset node**: a shared node with `preset: true` property. These are canonical nodes uploaded by legal experts and receive special protection from auto-deletion.
 
 ## 1) Admin: Delete Shared Node (`/admin/shared-nodes`)
 
@@ -25,11 +28,13 @@ Admin opens the shared nodes admin page and clicks “Delete”.
 - **Next.js API**: `/api/admin/shared-nodes/[label]/[nodeId]` (DELETE)
 - **Backend**: `/api/ai/shared-nodes/{label}/{node_id}` (DELETE)
 
-### Neo4j behavior (current)
+### Neo4j behavior
 The backend first computes which cases reference this shared node (from Postgres extracted data), then applies:
 
 - **If referenced by ≥1 case**: detach from those cases and **preserve** the node in Neo4j.
-- **If referenced by 0 cases (orphaned)**: **delete** the node from Neo4j.
+- **If orphaned (0 case references)**:
+  - **Non-preset nodes**: **delete** from Neo4j automatically.
+  - **Preset nodes**: **preserve** in Neo4j (unless `force_delete=true` is passed).
 - **`min_per_case` constraint**: can block detaching from some cases; supports `force_partial=true` to detach only where safe.
 
 ### Postgres behavior (current)
@@ -48,9 +53,12 @@ This makes the detachment “real” in the **authoritative case membership** mo
 - Detachment/deletion uses the same Neo4j primitives as KG flows via `Neo4jUploader`:
   - `detach_node_from_case(...)`
   - `delete_node(...)`
+  - `get_node_preset(...)` / `set_node_preset(...)` for preset status
 - Response includes flags:
-  - `nodePreserved: true` when the node had any case references
+  - `nodePreserved: true` when the node had any case references or is a preset orphan
+  - `isPreset: true` when the node is a preset node
   - `catalogNodePreserved: true` (back-compat) when `can_create_new: false`
+- Admin can toggle preset status via `PATCH /{label}/{node_id}/preset`
 
 See also: `docs/ADMIN_SHARED_NODE_DELETION_POLICY.md`.
 
@@ -74,12 +82,15 @@ Case deletion only performs Neo4j cleanup if the case has been submitted to KG:
 
 - **If `kg_submitted_at` is null**: **no Neo4j cleanup** runs (the case never wrote to KG).
 - **If `kg_submitted_at` is set**: Neo4j cleanup runs per node in the case graph:
-  - **`is_existing: true`**: detach from this case, preserve node (shared / reused)
+  - **`is_existing: true`**: detach from this case; if non-preset and now isolated, delete from Neo4j
   - **`case_unique: true`**: delete only if isolated to this case; otherwise detach (defensive safety)
-  - **`case_unique: false`**: detach from this case, preserve node
+  - **`case_unique: false`**: detach from this case; if non-preset and now isolated, delete from Neo4j. Preset nodes are always preserved.
 
 ### Why the isolation check matters
-Even “case-unique” nodes can theoretically end up with external connections (unexpected graph state, reuse edge-case, manual changes). In that case, deleting the case should not delete globally connected KG data.
+Even “case-unique” nodes can theoretically end up connected to other cases (unexpected graph state, reuse edge-case, manual changes).
+
+- Connections from a case-unique node to **shared/catalog** nodes (e.g. `Domain`, `ReliefType`, `Doctrine`) are **expected** and do **not** block deletion of the case-unique node.
+- We only treat it as an “external connection” when the node connects to a **case-unique** node that is **not** part of the case being deleted.
 
 ## 3) User: Delete Nodes in Case Editor (`/cases/[id]`)
 
@@ -159,14 +170,35 @@ Submit calls:
 The backend compares the case graph previously stored in Postgres vs the newly produced graph and identifies **deleted nodes** (“in old but not in new”). For each deleted node:
 
 - **`case_unique: true`**: delete from Neo4j only if isolated; otherwise detach.
-- **`case_unique: false`**: detach from the case (shared nodes preserved; admin handles global cleanup).
+- **`case_unique: false`**: detach from the case; if non-preset and now isolated, delete from Neo4j. Preset nodes are always preserved.
+
+**Isolation definition (important):**
+- Connections to shared/catalog nodes do **not** make a case-unique node “not isolated”.
+- Only connections to **case-unique nodes outside the case** will force detachment instead of deletion.
 
 ## Summary Matrix
 
-| Entry point | Scope | Shared (`case_unique:false`) | Case-unique (`case_unique:true`) | Notes |
-| --- | --- | --- | --- | --- |
-| Admin shared-nodes delete | Across cases referencing a shared node | Detach from all referencing cases; delete only if orphaned | N/A (labels rejected) | Enforces `min_per_case` and supports partial detach |
-| Delete case | Per-case | Detach (preserve) when KG-submitted | Delete if isolated; else detach | Neo4j cleanup runs only when `kg_submitted_at` is set |
-| Editor delete + Submit | Per-case | Detach (preserve) | Delete if isolated; else detach | Save is Postgres-only; Submit performs Neo4j sync |
+### Non-preset shared nodes (`case_unique: false`, no `preset` property)
 
-Last Updated: December 17, 2025
+| Entry point | Connected to Cases | Isolated/Orphaned |
+|-------------|-------------------|-------------------|
+| Admin shared-nodes delete | Detach, preserve | Delete from Neo4j |
+| Delete case | Detach; then delete if isolated | Delete from Neo4j |
+| Editor delete + Submit | Detach; then delete if isolated | Delete from Neo4j |
+
+### Preset shared nodes (`case_unique: false`, `preset: true`)
+
+| Entry point | Connected to Cases | Isolated/Orphaned |
+|-------------|-------------------|-------------------|
+| Admin shared-nodes delete | Detach, preserve | Preserve (can force-delete) |
+| Delete case | Detach, preserve | Preserve |
+| Editor delete + Submit | Detach, preserve | Preserve |
+
+### Case-unique nodes (`case_unique: true`)
+
+| Entry point | Isolated | Has External Connections |
+|-------------|----------|--------------------------|
+| Delete case | Delete from Neo4j | Detach (defensive safety) |
+| Editor delete + Submit | Delete from Neo4j | Detach (defensive safety) |
+
+Last Updated: December 31, 2025

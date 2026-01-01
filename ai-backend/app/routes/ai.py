@@ -19,7 +19,7 @@ from app.models.search import (
 
 
 @router.get("/schema")
-async def get_schema():
+def get_schema():
     """Return schema from static file if present; fall back to MCP.
 
     Returns a JSON payload: { success: bool, schema?: Any, error?: str }
@@ -50,7 +50,7 @@ async def get_ui_config():
 
 
 @router.get("/display-overrides")
-async def get_display_overrides():
+def get_display_overrides():
     """Return display overrides derived from schema_v3.json."""
     try:
         from app.lib.schema_runtime import derive_display_overrides_from_schema
@@ -62,7 +62,7 @@ async def get_display_overrides():
 
 
 @router.get("/property-mappings")
-async def get_property_mappings():
+def get_property_mappings():
     """Return minimal property mappings derived from schema_v3.json."""
     try:
         from app.lib.schema_runtime import derive_simple_mappings_from_schema
@@ -73,7 +73,7 @@ async def get_property_mappings():
         raise HTTPException(status_code=500, detail="Failed to derive property mappings")
 
 @router.get("/catalog/{label}")
-async def get_catalog_nodes(label: str):
+def get_catalog_nodes(label: str):
     """Fetch all nodes of a specific label from Neo4j catalog.
     
     Used for selecting existing catalog nodes (where case_unique=false).
@@ -193,7 +193,7 @@ async def get_catalog_nodes(label: str):
         return {"success": True, "nodes": [], "warning": "Catalog unavailable"}
 
 @router.get("/node/enriched")
-async def get_enriched_node(label: str, id_value: str):
+def get_enriched_node(label: str, id_value: str):
     """Fetch a single enriched node by label and id_value.
 
     Tries all configured id properties to match id_value and returns the enriched node map

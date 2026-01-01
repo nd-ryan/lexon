@@ -24,6 +24,7 @@ interface SharedNode {
   isOrphaned: boolean
   caseConnectionCount?: number
   graphConnectionCount?: number
+  isPreset?: boolean
 }
 
 interface ConnectedCase {
@@ -204,6 +205,34 @@ export default function SharedNodesPage() {
     setModal({ type: 'delete', node, detail, loading: false })
   }
   
+  // Handle preset toggle
+  const handleTogglePreset = async (node: SharedNode) => {
+    const newPresetValue = !node.isPreset
+    try {
+      const res = await fetch(`/api/admin/shared-nodes/${node.label}/${node.id}/preset`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ preset: newPresetValue }),
+      })
+      const data = await res.json()
+      
+      if (data.success) {
+        // Update the node in the local state
+        setNodes(prevNodes => 
+          prevNodes.map(n => 
+            n.label === node.label && n.id === node.id 
+              ? { ...n, isPreset: newPresetValue }
+              : n
+          )
+        )
+      } else {
+        setError(data.error || 'Failed to update preset status')
+      }
+    } catch {
+      setError('Failed to update preset status')
+    }
+  }
+  
   // Handle edit submit
   const handleEditSubmit = async () => {
     if (modal.type !== 'edit' || !modal.node) return
@@ -258,14 +287,14 @@ export default function SharedNodesPage() {
   }
   
   // Handle delete submit
-  const handleDeleteSubmit = async (forcePartial: boolean = false) => {
+  const handleDeleteSubmit = async (forcePartial: boolean = false, forceDelete: boolean = false) => {
     if (modal.type !== 'delete' || !modal.node) return
     
     setModal({ ...modal, loading: true })
     setActionResult(null)
     
     try {
-      const url = `/api/admin/shared-nodes/${modal.node.label}/${modal.node.id}?force_partial=${forcePartial}`
+      const url = `/api/admin/shared-nodes/${modal.node.label}/${modal.node.id}?force_partial=${forcePartial}&force_delete=${forceDelete}`
       const res = await fetch(url, { method: 'DELETE' })
       const data = await res.json()
       
@@ -280,13 +309,16 @@ export default function SharedNodesPage() {
         }
         
         const hasCaseConnections = modal.detail && modal.detail.connectedCases.length > 0
+        const wasPresetPreserved = data.nodePreserved && data.isPreset
         setActionResult({ 
           success: true, 
           message: data.partial 
             ? `Node partially detached. ${data.message}` 
-            : hasCaseConnections
-              ? 'Node detached from all cases (preserved in Knowledge Graph)'
-              : 'Orphaned node deleted from Knowledge Graph'
+            : wasPresetPreserved
+              ? 'Preset node preserved in Knowledge Graph'
+              : hasCaseConnections
+                ? 'Node detached from all cases (preserved in Knowledge Graph)'
+                : 'Node deleted from Knowledge Graph'
         })
         
         // Refresh the list after a short delay
@@ -416,6 +448,7 @@ export default function SharedNodesPage() {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Case Connections</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Preset</th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
                 </tr>
               </thead>
@@ -447,7 +480,21 @@ export default function SharedNodesPage() {
                         </span>
                       )}
                     </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      {node.isPreset ? (
+                        <span className="px-2 py-1 bg-purple-100 text-purple-800 rounded text-xs font-medium">
+                          Preset
+                        </span>
+                      ) : null}
+                    </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm">
+                      <button
+                        onClick={() => handleTogglePreset(node)}
+                        className="text-purple-600 hover:text-purple-800 mr-3"
+                        title={node.isPreset ? 'Remove preset flag' : 'Mark as preset'}
+                      >
+                        {node.isPreset ? 'Unset Preset' : 'Set Preset'}
+                      </button>
                       <button
                         onClick={() => openEditModal(node)}
                         className="text-blue-600 hover:text-blue-800 mr-3"
@@ -640,25 +687,36 @@ export default function SharedNodesPage() {
                 </div>
               ) : (
                 <>
-                  {/* Warning message - different for catalog vs regular nodes */}
+                  {/* Warning message - different based on connection status and preset flag */}
                   {(() => {
                     const hasConnections = modal.detail && modal.detail.connectedCases.length > 0
+                    const isPreset = modal.node.isPreset
                     
-                    return (
-                      <div className={`border rounded p-4 mb-4 ${hasConnections ? 'bg-blue-50 border-blue-200' : 'bg-red-50 border-red-200'}`}>
-                        <p className={`text-sm ${hasConnections ? 'text-blue-800' : 'text-red-800'}`}>
-                          {hasConnections ? (
-                            <>
-                              <strong>ℹ️ Detach from Cases:</strong> This node will be <strong>detached from all connected cases</strong> but <strong>preserved in the Knowledge Graph</strong>.
-                            </>
-                          ) : (
-                            <>
-                              <strong>⚠️ Orphaned Node:</strong> This orphaned node will be <strong>permanently deleted</strong> from the Knowledge Graph.
-                            </>
-                          )}
-                        </p>
-                      </div>
-                    );
+                    if (hasConnections) {
+                      return (
+                        <div className="border rounded p-4 mb-4 bg-blue-50 border-blue-200">
+                          <p className="text-sm text-blue-800">
+                            <strong>ℹ️ Detach from Cases:</strong> This node will be <strong>detached from all connected cases</strong> but <strong>preserved in the Knowledge Graph</strong>.
+                          </p>
+                        </div>
+                      )
+                    } else if (isPreset) {
+                      return (
+                        <div className="border rounded p-4 mb-4 bg-purple-50 border-purple-200">
+                          <p className="text-sm text-purple-800">
+                            <strong>🔒 Preset Node:</strong> This is a <strong>preset node</strong> (canonical data from legal experts). It will be <strong>preserved in the Knowledge Graph</strong> unless you explicitly force delete it.
+                          </p>
+                        </div>
+                      )
+                    } else {
+                      return (
+                        <div className="border rounded p-4 mb-4 bg-red-50 border-red-200">
+                          <p className="text-sm text-red-800">
+                            <strong>⚠️ Orphaned Node:</strong> This orphaned node will be <strong>permanently deleted</strong> from the Knowledge Graph.
+                          </p>
+                        </div>
+                      )
+                    }
                   })()}
                   
                   {/* Connected Cases */}
@@ -712,16 +770,39 @@ export default function SharedNodesPage() {
               >
                 Cancel
               </button>
-              <button
-                onClick={() => handleDeleteSubmit(false)}
-                disabled={modal.loading}
-                className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50 flex items-center gap-2"
-              >
-                {modal.loading && (
-                  <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full"></div>
-                )}
-                {modal.detail && modal.detail.connectedCases.length > 0 ? 'Detach from Cases' : 'Delete Node'}
-              </button>
+              {(() => {
+                const hasConnections = modal.detail && modal.detail.connectedCases.length > 0
+                const isPreset = modal.node.isPreset
+                const isOrphanedPreset = !hasConnections && isPreset
+                
+                if (isOrphanedPreset) {
+                  return (
+                    <button
+                      onClick={() => handleDeleteSubmit(false, true)}
+                      disabled={modal.loading}
+                      className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-50 flex items-center gap-2"
+                    >
+                      {modal.loading && (
+                        <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full"></div>
+                      )}
+                      Force Delete Preset Node
+                    </button>
+                  )
+                }
+                
+                return (
+                  <button
+                    onClick={() => handleDeleteSubmit(false, false)}
+                    disabled={modal.loading}
+                    className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50 flex items-center gap-2"
+                  >
+                    {modal.loading && (
+                      <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full"></div>
+                    )}
+                    {hasConnections ? 'Detach from Cases' : 'Delete Node'}
+                  </button>
+                )
+              })()}
             </div>
           </div>
         </div>

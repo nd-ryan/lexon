@@ -422,6 +422,8 @@ def list_shared_nodes(
                 # Expose Neo4j relationship count for debugging/visibility
                 "graphConnectionCount": graph_conn_count,
                 "isOrphaned": is_orphaned,
+                # Preset status - canonical nodes defined by legal experts
+                "isPreset": node.get("preset") is True,
             }
             nodes.append(node_data)
     
@@ -474,6 +476,7 @@ def get_shared_node(label: str, node_id: str, db: Session = Depends(get_db)):
             "properties": node,
             "connectionCount": conn_count,
             "isOrphaned": conn_count == 0,
+            "isPreset": node.get("preset") is True,
         },
         "connectedCases": connected_cases,
         "minPerCase": get_min_per_case(schema, label),
@@ -580,6 +583,60 @@ def update_shared_node(
     }
 
 
+class SetPresetRequest(BaseModel):
+    preset: bool
+
+
+@router.patch("/{label}/{node_id}/preset")
+def set_node_preset(
+    label: str,
+    node_id: str,
+    body: SetPresetRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Set or unset the preset flag on a shared node.
+    
+    Preset nodes are canonical, stable nodes defined by legal experts.
+    They receive special treatment during deletion:
+    - Preset nodes are never auto-deleted when orphaned (only admin can force-delete)
+    - Non-preset nodes can be deleted when orphaned from any delete source
+    """
+    schema = load_schema()
+    shared_labels = get_shared_labels(schema)
+    
+    if label not in shared_labels:
+        raise HTTPException(400, f"Label '{label}' is not a shared node type")
+    
+    id_prop = get_id_property(label)
+    user_id = get_user_id(request)
+    
+    # Check if node exists
+    check_query = f"""
+        MATCH (n:{label} {{{id_prop}: $node_id}})
+        RETURN n
+    """
+    check_result = neo4j_client.execute_query(check_query, {"node_id": node_id})
+    if not check_result:
+        raise HTTPException(404, "Node not found")
+    
+    # Use the uploader to set the preset property
+    uploader = Neo4jUploader(schema, neo4j_client)
+    success = uploader.set_node_preset(label, node_id, body.preset)
+    
+    if not success:
+        raise HTTPException(500, "Failed to update preset status")
+    
+    logger.info(f"Set preset={body.preset} for {label}:{node_id} by {user_id}")
+    
+    return {
+        "success": True,
+        "label": label,
+        "nodeId": node_id,
+        "preset": body.preset,
+    }
+
+
 class DeleteNodeRequest(BaseModel):
     force_partial: bool = False  # If true, delete from cases where min_per_case allows
 
@@ -589,7 +646,8 @@ def delete_shared_node(
     label: str, 
     node_id: str, 
     request: Request,
-    force_partial: bool = Query(False), 
+    force_partial: bool = Query(False),
+    force_delete: bool = Query(False, description="Force deletion of preset orphaned nodes"),
     db: Session = Depends(get_db),
 ):
     """Delete a shared node from the Knowledge Graph.
@@ -598,7 +656,9 @@ def delete_shared_node(
     1. Check min_per_case constraints for connected cases (via Postgres)
     2. If constraints violated and force_partial=False, return error with details
     3. If force_partial=True, delete only from cases where constraint allows
-    4. If node becomes orphaned or constraints allow, delete the node
+    4. For orphaned nodes:
+       - Non-preset nodes: auto-delete from Neo4j
+       - Preset nodes: preserve unless force_delete=True
     """
     schema = load_schema()
     shared_labels = get_shared_labels(schema)
@@ -824,8 +884,24 @@ def delete_shared_node(
             resp["catalogNodePreserved"] = True
         return resp
     
+    # Orphaned node deletion logic
+    # Check if node is preset (canonical node defined by legal experts)
+    is_preset = node_props.get("preset") is True
+    
+    if is_preset and not force_delete:
+        # Preset orphaned nodes are preserved unless force_delete=True
+        logger.info(f"Preserved preset orphaned node {label}:{node_id} (force_delete=False)")
+        return {
+            "success": True,
+            "partial": False,
+            "nodePreserved": True,
+            "isPreset": True,
+            "message": "Preset node preserved in Knowledge Graph (use force_delete=true to permanently delete)",
+            "deletedFromCases": [],
+        }
+    
     # Full deletion - delete the node and all its relationships
-    # This is only for non-catalog nodes OR orphaned catalog nodes
+    # This is for non-preset orphaned nodes OR preset nodes with force_delete=True
     uploader.delete_node(label, node_id)
     
     # Log delete events for all affected cases (if any)
@@ -847,7 +923,7 @@ def delete_shared_node(
                     logger.error(f"Failed to log delete event for case {case['case_id']}: {e}")
             conn.commit()
     
-    node_type = "catalog" if is_catalog_node else "shared"
+    node_type = "preset" if is_preset else ("catalog" if is_catalog_node else "shared")
     logger.info(f"Deleted orphaned {node_type} node {label}:{node_id} by {user_id} ({events_logged} events logged)")
     
     return {

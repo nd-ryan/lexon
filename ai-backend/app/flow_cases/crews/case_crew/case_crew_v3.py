@@ -23,7 +23,7 @@ class CaseCrew:
     - Phase 5: Arguments per Ruling
       → uses phase1_extract_agent + phase5_arguments_per_ruling_task
     - Phase 6: Laws per Ruling
-      → uses phase1_extract_agent + phase6_laws_per_ruling_task
+      → uses phase6_law_agent + phase6_laws_per_ruling_task
     - Phase 7: Concepts (Doctrine/Policy/FactPattern)
       → uses phase1_extract_agent + phase7_argument_concepts_task
     - Phase 8: Relief and ReliefType
@@ -38,6 +38,7 @@ class CaseCrew:
 
     # LLM model configuration
     LLM_MODEL = "gpt-4.1"
+    LLM_MODEL_MINI = "gpt-4.1-mini"
     LLM_TEMPERATURE = 0
 
     agents_config = 'config/agents_v3.yaml'
@@ -206,7 +207,7 @@ class CaseCrew:
         task_spec['description'] = desc
         return Task(
             config=task_spec,
-            agent=self.phase1_extract_agent(),
+            agent=self.phase6_law_agent(),
         )
 
     def phase7_argument_concepts_task(self, output_model: Type[BaseModel]) -> Task:
@@ -254,9 +255,19 @@ class CaseCrew:
         )
 
     @agent
+    def phase6_law_agent(self) -> Agent:
+        """Agent for Phase 6: selecting Laws from catalog (uses mini model)"""
+        llm = LLM(model=self.LLM_MODEL_MINI, temperature=self.LLM_TEMPERATURE)
+        return Agent(
+            config=self.agents_config['phase6_law_agent'],  # type: ignore[index]
+            tools=[],
+            llm=llm
+        )
+
+    @agent
     def phase2_select_forum_agent(self) -> Agent:
-        """Agent for Phase 2: selecting Forum from catalog based on case text"""
-        llm = LLM(model=self.LLM_MODEL, temperature=self.LLM_TEMPERATURE)
+        """Agent for Phase 2: selecting Forum from catalog based on case text (uses mini model)"""
+        llm = LLM(model=self.LLM_MODEL_MINI, temperature=self.LLM_TEMPERATURE)
         return Agent(
             config=self.agents_config['phase5_select_existing_agent'],  # type: ignore[index]
             tools=[],
@@ -306,8 +317,8 @@ class CaseCrew:
 
     @agent
     def phase9_domain_agent(self) -> Agent:
-        """Agent for Phase 9: selecting Domain from catalog or options"""
-        llm = LLM(model=self.LLM_MODEL, temperature=self.LLM_TEMPERATURE)
+        """Agent for Phase 9: selecting Domain from catalog or options (uses mini model)"""
+        llm = LLM(model=self.LLM_MODEL_MINI, temperature=self.LLM_TEMPERATURE)
         return Agent(
             config=self.agents_config['phase9_domain_agent'],  # type: ignore[index]
             tools=[],

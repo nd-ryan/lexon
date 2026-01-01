@@ -1086,3 +1086,283 @@ class TestDeleteSharedNodeEndpoint:
         assert "c1" in captured_case_node_ids
         assert "p1" in captured_case_node_ids
         assert "i1" in captured_case_node_ids
+
+
+# ============================================================================
+# Preset Node Tests
+# ============================================================================
+
+class TestPresetNodeBehavior:
+    """Tests for preset node functionality."""
+    
+    @pytest.mark.asyncio
+    async def test_list_nodes_returns_is_preset(self, async_client, api_key_header, monkeypatch, sample_schema):
+        """Should return isPreset field in node list."""
+        monkeypatch.setattr("app.routes.shared_nodes.load_schema", lambda: sample_schema)
+        
+        # Mock Neo4j response with preset node
+        mock_results = [
+            {"n": {"doctrine_id": "d1", "name": "Test Doctrine", "preset": True}, "connectionCount": 5}
+        ]
+        monkeypatch.setattr(
+            "app.routes.shared_nodes.neo4j_client.execute_query",
+            lambda q, p=None: mock_results
+        )
+        
+        response = await async_client.get(
+            "/api/ai/shared-nodes?label=Doctrine",
+            headers=api_key_header
+        )
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert len(data["nodes"]) == 1
+        assert data["nodes"][0]["isPreset"] is True
+    
+    @pytest.mark.asyncio
+    async def test_list_nodes_returns_is_preset_false(self, async_client, api_key_header, monkeypatch, sample_schema):
+        """Should return isPreset=False for non-preset nodes."""
+        monkeypatch.setattr("app.routes.shared_nodes.load_schema", lambda: sample_schema)
+        
+        # Mock Neo4j response without preset property
+        mock_results = [
+            {"n": {"doctrine_id": "d1", "name": "Test Doctrine"}, "connectionCount": 5}
+        ]
+        monkeypatch.setattr(
+            "app.routes.shared_nodes.neo4j_client.execute_query",
+            lambda q, p=None: mock_results
+        )
+        
+        response = await async_client.get(
+            "/api/ai/shared-nodes?label=Doctrine",
+            headers=api_key_header
+        )
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["nodes"][0]["isPreset"] is False
+    
+    @pytest.mark.asyncio
+    async def test_get_node_returns_is_preset(self, async_client, api_key_header, monkeypatch, sample_schema):
+        """Should return isPreset field in single node response."""
+        monkeypatch.setattr("app.routes.shared_nodes.load_schema", lambda: sample_schema)
+        
+        monkeypatch.setattr(
+            "app.routes.shared_nodes.neo4j_client.execute_query",
+            lambda q, p=None: [{"n": {"doctrine_id": "d1", "name": "Test", "preset": True}, "connectionCount": 3}]
+        )
+        
+        monkeypatch.setattr(
+            "app.routes.shared_nodes.find_cases_containing_node",
+            lambda db, nid, label: []
+        )
+        
+        response = await async_client.get(
+            "/api/ai/shared-nodes/Doctrine/d1",
+            headers=api_key_header
+        )
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["node"]["isPreset"] is True
+    
+    @pytest.mark.asyncio
+    async def test_orphaned_preset_node_preserved(self, async_client, api_key_header, user_id_header, monkeypatch, sample_schema):
+        """Orphaned preset nodes should be preserved (not deleted) by default."""
+        monkeypatch.setattr("app.routes.shared_nodes.load_schema", lambda: sample_schema)
+        
+        neo4j_queries = []
+        def mock_execute(query, params=None):
+            neo4j_queries.append({"query": query, "params": params})
+            if "RETURN n" in query:
+                return [{"n": {"doctrine_id": "d1", "name": "Preset Doctrine", "preset": True}}]
+            return []
+        
+        monkeypatch.setattr("app.routes.shared_nodes.neo4j_client.execute_query", mock_execute)
+        
+        # Mock empty cases (orphaned node)
+        monkeypatch.setattr(
+            "app.routes.shared_nodes.find_cases_containing_node",
+            lambda db, nid, label: []
+        )
+        
+        headers = {**api_key_header, **user_id_header}
+        response = await async_client.delete(
+            "/api/ai/shared-nodes/Doctrine/d1",
+            headers=headers
+        )
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["nodePreserved"] is True
+        assert data["isPreset"] is True
+        assert "preserved" in data["message"].lower()
+        
+        # Verify no DETACH DELETE was executed
+        delete_queries = [q for q in neo4j_queries if "DETACH DELETE" in q["query"]]
+        assert len(delete_queries) == 0, "Preset orphaned node should not be deleted"
+    
+    @pytest.mark.asyncio
+    async def test_orphaned_preset_node_force_deleted(self, async_client, api_key_header, user_id_header, monkeypatch, sample_schema):
+        """Orphaned preset nodes can be force-deleted with force_delete=true."""
+        monkeypatch.setattr("app.routes.shared_nodes.load_schema", lambda: sample_schema)
+        
+        neo4j_queries = []
+        def mock_execute(query, params=None):
+            neo4j_queries.append({"query": query, "params": params})
+            if "RETURN n" in query:
+                return [{"n": {"doctrine_id": "d1", "name": "Preset Doctrine", "preset": True}}]
+            elif "DETACH DELETE" in query:
+                return [{"deleted": 1}]
+            return []
+        
+        monkeypatch.setattr("app.routes.shared_nodes.neo4j_client.execute_query", mock_execute)
+        
+        # Mock empty cases (orphaned node)
+        monkeypatch.setattr(
+            "app.routes.shared_nodes.find_cases_containing_node",
+            lambda db, nid, label: []
+        )
+        
+        headers = {**api_key_header, **user_id_header}
+        response = await async_client.delete(
+            "/api/ai/shared-nodes/Doctrine/d1?force_delete=true",
+            headers=headers
+        )
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data.get("nodePreserved") is not True
+        assert "deleted successfully" in data["message"]
+        
+        # Verify DETACH DELETE was executed
+        delete_queries = [q for q in neo4j_queries if "DETACH DELETE" in q["query"]]
+        assert len(delete_queries) == 1, "Preset orphaned node should be deleted with force_delete=true"
+    
+    @pytest.mark.asyncio
+    async def test_orphaned_non_preset_node_auto_deleted(self, async_client, api_key_header, user_id_header, monkeypatch, sample_schema):
+        """Orphaned non-preset nodes should be auto-deleted."""
+        monkeypatch.setattr("app.routes.shared_nodes.load_schema", lambda: sample_schema)
+        
+        neo4j_queries = []
+        def mock_execute(query, params=None):
+            neo4j_queries.append({"query": query, "params": params})
+            if "RETURN n" in query:
+                # No preset property
+                return [{"n": {"doctrine_id": "d1", "name": "Non-Preset Doctrine"}}]
+            elif "DETACH DELETE" in query:
+                return [{"deleted": 1}]
+            return []
+        
+        monkeypatch.setattr("app.routes.shared_nodes.neo4j_client.execute_query", mock_execute)
+        
+        # Mock empty cases (orphaned node)
+        monkeypatch.setattr(
+            "app.routes.shared_nodes.find_cases_containing_node",
+            lambda db, nid, label: []
+        )
+        
+        headers = {**api_key_header, **user_id_header}
+        response = await async_client.delete(
+            "/api/ai/shared-nodes/Doctrine/d1",
+            headers=headers
+        )
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert "deleted successfully" in data["message"]
+        
+        # Verify DETACH DELETE was executed
+        delete_queries = [q for q in neo4j_queries if "DETACH DELETE" in q["query"]]
+        assert len(delete_queries) == 1, "Non-preset orphaned node should be auto-deleted"
+
+
+class TestPresetToggleEndpoint:
+    """Tests for PATCH /api/ai/shared-nodes/{label}/{node_id}/preset endpoint."""
+    
+    @pytest.mark.asyncio
+    async def test_set_preset_true(self, async_client, api_key_header, user_id_header, monkeypatch, sample_schema):
+        """Should set preset=true on a node."""
+        monkeypatch.setattr("app.routes.shared_nodes.load_schema", lambda: sample_schema)
+        
+        neo4j_queries = []
+        def mock_execute(query, params=None):
+            neo4j_queries.append({"query": query, "params": params})
+            if "RETURN n" in query:
+                return [{"n": {"doctrine_id": "d1", "name": "Test"}}]
+            elif "SET n.preset = true" in query:
+                return [{"id": "d1"}]
+            return []
+        
+        monkeypatch.setattr("app.routes.shared_nodes.neo4j_client.execute_query", mock_execute)
+        
+        headers = {**api_key_header, **user_id_header}
+        response = await async_client.patch(
+            "/api/ai/shared-nodes/Doctrine/d1/preset",
+            headers=headers,
+            json={"preset": True}
+        )
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["preset"] is True
+        
+        # Verify SET query was executed
+        set_queries = [q for q in neo4j_queries if "SET n.preset = true" in q["query"]]
+        assert len(set_queries) == 1
+    
+    @pytest.mark.asyncio
+    async def test_set_preset_false(self, async_client, api_key_header, user_id_header, monkeypatch, sample_schema):
+        """Should remove preset property from a node."""
+        monkeypatch.setattr("app.routes.shared_nodes.load_schema", lambda: sample_schema)
+        
+        neo4j_queries = []
+        def mock_execute(query, params=None):
+            neo4j_queries.append({"query": query, "params": params})
+            if "RETURN n" in query:
+                return [{"n": {"doctrine_id": "d1", "name": "Test", "preset": True}}]
+            elif "REMOVE n.preset" in query:
+                return [{"id": "d1"}]
+            return []
+        
+        monkeypatch.setattr("app.routes.shared_nodes.neo4j_client.execute_query", mock_execute)
+        
+        headers = {**api_key_header, **user_id_header}
+        response = await async_client.patch(
+            "/api/ai/shared-nodes/Doctrine/d1/preset",
+            headers=headers,
+            json={"preset": False}
+        )
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["preset"] is False
+        
+        # Verify REMOVE query was executed
+        remove_queries = [q for q in neo4j_queries if "REMOVE n.preset" in q["query"]]
+        assert len(remove_queries) == 1
+    
+    @pytest.mark.asyncio
+    async def test_toggle_preset_404_for_missing_node(self, async_client, api_key_header, user_id_header, monkeypatch, sample_schema):
+        """Should return 404 when node not found."""
+        monkeypatch.setattr("app.routes.shared_nodes.load_schema", lambda: sample_schema)
+        
+        monkeypatch.setattr(
+            "app.routes.shared_nodes.neo4j_client.execute_query",
+            lambda q, p=None: []  # Empty result
+        )
+        
+        headers = {**api_key_header, **user_id_header}
+        response = await async_client.patch(
+            "/api/ai/shared-nodes/Doctrine/nonexistent/preset",
+            headers=headers,
+            json={"preset": True}
+        )
+        
+        assert response.status_code == 404

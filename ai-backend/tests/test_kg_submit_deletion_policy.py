@@ -128,7 +128,7 @@ async def test_kg_submit_deleted_case_unique_isolated_deleted(
     def mock_execute(query, params=None):
         executed.append({"query": query, "params": params or {}})
         # Isolation check sees no external connections => isolated
-        if "RETURN connected, keys(connected) as props" in query:
+        if "RETURN connected, labels(connected) as labels, keys(connected) as props" in query:
             return []
         return []
 

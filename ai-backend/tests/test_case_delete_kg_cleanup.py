@@ -107,7 +107,7 @@ async def test_delete_case_detaches_is_existing_and_shared_nodes(
     assert len(delete_doctrine) == 0
 
     # Isolation checks may run for case-unique nodes like Case; ensure we didn't run isolation checks for shared nodes.
-    isolation_queries = [q for q in executed if "RETURN connected, keys(connected) as props" in q["query"]]
+    isolation_queries = [q for q in executed if "RETURN connected, labels(connected) as labels, keys(connected) as props" in q["query"]]
     assert all((q["params"] or {}).get("node_id") == "c-kg-1" for q in isolation_queries)
 
 
@@ -174,9 +174,9 @@ async def test_delete_case_case_unique_external_connections_detach_only(
         executed.append({"query": query, "params": params or {}})
 
         # check_node_isolation query (returns connected + props)
-        if "RETURN connected, keys(connected) as props" in query:
-            # External connection: connected node's *_id is NOT in the case_node_ids set
-            return [{"connected": {"party_id": "p-external"}, "props": ["party_id"]}]
+        if "RETURN connected, labels(connected) as labels, keys(connected) as props" in query:
+            # External connection: connected node is case-unique and NOT in case_node_ids
+            return [{"connected": {"case_id": "c-external"}, "labels": ["Case"], "props": ["case_id"]}]
 
         # detach_node_from_case query
         if "DELETE r" in query and "deleted_count" in query:
@@ -242,7 +242,7 @@ async def test_delete_case_case_unique_isolated_deleted(
         executed.append({"query": query, "params": params or {}})
 
         # Isolation check sees no external connections (returns empty set) => isolated
-        if "RETURN connected, keys(connected) as props" in query:
+        if "RETURN connected, labels(connected) as labels, keys(connected) as props" in query:
             return []
 
         return []

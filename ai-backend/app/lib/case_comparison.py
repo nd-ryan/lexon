@@ -377,8 +377,10 @@ def _compare_properties(
     differences = []
     skip_fields = skip_fields or []
     
-    # Fields to always skip (internal/auto-generated)
-    always_skip = {"temp_id", "is_existing", "status", "source"}
+    # Fields to always skip (internal/auto-generated or Neo4j-only)
+    # - temp_id, is_existing, status, source: internal tracking fields
+    # - preset: Neo4j-only flag for canonical nodes (not stored in Postgres)
+    always_skip = {"temp_id", "is_existing", "status", "source", "preset"}
     skip_set = set(skip_fields) | always_skip
     
     # Also skip embedding fields
