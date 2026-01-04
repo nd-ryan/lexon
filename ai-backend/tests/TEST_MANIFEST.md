@@ -4,7 +4,7 @@
 
 This document provides a centralized reference for all backend tests, organized by test file and category.
 
-**Total Tests:** 115  
+**Total Tests:** 135  
 **Test Framework:** pytest with async support  
 **Coverage Areas:** Case extraction flow (V3), shared nodes management, preset node behavior, graph event logging, Neo4j uploader helpers, optional Neo4j/Search integration checks, API security  
 **Pass Rate:** 100% ✅
@@ -429,4 +429,4 @@ def test_inserts_event_record(self):
 - **Schema Changes:** Update `SAMPLE_SCHEMA` in `conftest.py`
 - **New Endpoints:** Add new test classes following existing patterns
 
-Last Updated: December 16, 2025
+Last Updated: December 31, 2025

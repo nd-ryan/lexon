@@ -527,18 +527,24 @@ def compare_case_postgres_neo4j(
         from app.lib.comparison_repo import comparison_repo
         
         summary = comparison_result.get("summary", {})
-        nodes_diff = summary.get("nodes_only_in_postgres", 0) + summary.get("nodes_only_in_neo4j", 0) + summary.get("nodes_with_differences", 0)
-        edges_diff = summary.get("edges_only_in_postgres", 0) + summary.get("edges_only_in_neo4j", 0) + summary.get("edges_with_differences", 0)
-        embeddings_validation = comparison_result.get("embeddings_validation", {})
+        nodes_summary = summary.get("nodes", {})
+        edges_summary = summary.get("edges", {})
+        nodes_diff = nodes_summary.get("only_postgres", 0) + nodes_summary.get("only_neo4j", 0) + nodes_summary.get("differ", 0)
+        edges_diff = edges_summary.get("only_postgres", 0) + edges_summary.get("only_neo4j", 0) + edges_summary.get("differ", 0)
+        embeddings_validation = summary.get("embeddings", {})
         embeddings_missing = embeddings_validation.get("total_missing", 0)
+        required_validation = summary.get("required_properties", {})
+        required_missing = required_validation.get("total_missing", 0)
         
         comparison_repo.save_comparison(
             conn=db.connection(),
             case_id=postgres_case_id,
             all_match=comparison_result.get("all_match", False),
+            needs_completion=comparison_result.get("needs_completion", False),
             nodes_differ_count=nodes_diff,
             edges_differ_count=edges_diff,
             embeddings_missing_count=embeddings_missing,
+            required_missing_count=required_missing,
             postgres_updated_at=postgres_record.get("updated_at"),
             kg_submitted_at=postgres_record.get("kg_submitted_at"),
             details=comparison_result,

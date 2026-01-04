@@ -170,7 +170,8 @@ CREATE (:Doctrine {
   name:                   row.name,
   name_embedding:         [],
   description:            row.description,
-  description_embedding:  []
+  description_embedding:  [],
+  preset:                 true
 });
 
 
@@ -381,7 +382,8 @@ CREATE (:FactPattern {
   name:                     row.name,
   name_embedding:           [],
   description:              row.description,
-  description_embedding:    []
+  description_embedding:    [],
+  preset:                   true
 });
 
 
@@ -517,7 +519,8 @@ CREATE (:Policy {
   name:               row.name,
   name_embedding:     [],
   description:        row.description,
-  description_embedding: []
+  description_embedding: [],
+  preset:             true
 });
 
 
@@ -720,7 +723,8 @@ CREATE (:Law {
   text_embedding:  [],
   type:            row.type,
   enactment_date:  row.enactment_date,
-  citation:        row.citation
+  citation:        row.citation,
+  preset:          true
 });
 
 
@@ -746,7 +750,8 @@ UNWIND [
 CREATE (:Jurisdiction {
   jurisdiction_upload_code: row.code,
   jurisdiction_id:          randomUUID(),
-  name:                     row.name
+  name:                     row.name,
+  preset:                   true
 });
 
 
@@ -873,7 +878,8 @@ CREATE (f:Forum {
   forum_id:          randomUUID(),
   name:              row.name,
   name_embedding:    [],
-  type:              row.type
+  type:              row.type,
+  preset:            true
 })
 WITH f, row
 MATCH (j:Jurisdiction {jurisdiction_upload_code: row.jcode})
@@ -900,7 +906,8 @@ UNWIND [
 CREATE (:ReliefType {
   relief_type_upload_code: row.code,
   relief_type_id:          randomUUID(),
-  type:                    row.type
+  type:                    row.type,
+  preset:                  true
 });
 
 
@@ -916,5 +923,6 @@ UNWIND [
 CREATE (:Domain {
   domain_upload_code: row.code,
   domain_id:          randomUUID(),
-  name:               row.name
+  name:               row.name,
+  preset:             true
 });

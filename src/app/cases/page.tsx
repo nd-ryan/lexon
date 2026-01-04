@@ -6,7 +6,7 @@ import { useAppStore } from '@/lib/store/appStore';
 import { DocumentDownloadButton } from '@/components/cases/DocumentDownloadButton';
 import { isAdminEmail } from '@/lib/admin';
 
-type ComparisonStatus = 'all' | 'issues' | 'synced' | 'pending' | 'not_checked' | 'not_in_kg';
+type ComparisonStatus = 'all' | 'issues' | 'synced' | 'pending' | 'not_checked' | 'not_in_kg' | 'needs_completion';
 
 interface BatchProgress {
   completed: number;
@@ -93,6 +93,7 @@ export default function CasesListPage() {
       pending: 0,
       not_checked: 0,
       not_in_kg: 0,
+      needs_completion: 0,
     };
     
     items.forEach((item: any) => {
@@ -234,6 +235,16 @@ export default function CasesListPage() {
         return (
           <span className="text-xs text-green-600">✓ Synced</span>
         );
+      case 'needs_completion':
+        return (
+          <Link
+            href={`/cases/${item.id}/neo4j`}
+            className="text-xs text-orange-500 hover:text-orange-600 hover:underline"
+            onClick={(e) => e.stopPropagation()}
+          >
+            📝 {comparison?.required_missing_count || ''} required fields missing
+          </Link>
+        );
       case 'issues':
         const issues: string[] = [];
         if (comparison?.nodes_differ_count) issues.push(`${comparison.nodes_differ_count} fields`);
@@ -308,6 +319,7 @@ export default function CasesListPage() {
             {[
               { key: 'all' as ComparisonStatus, label: 'All' },
               { key: 'issues' as ComparisonStatus, label: '⚠ Issues', color: 'text-amber-600' },
+              { key: 'needs_completion' as ComparisonStatus, label: '📝 Needs completion', color: 'text-orange-500' },
               { key: 'synced' as ComparisonStatus, label: '✓ Synced', color: 'text-green-600' },
               { key: 'pending' as ComparisonStatus, label: 'Pending', color: 'text-blue-500' },
               { key: 'not_checked' as ComparisonStatus, label: 'Not checked', color: 'text-gray-400' },

@@ -80,6 +80,7 @@ def ensure_case_comparisons_table(engine: Engine) -> None:
     """Create the case_comparisons table for storing comparison results."""
     ddl = text(
         """
+        -- Create base table if it doesn't exist (without new columns for backwards compat)
         CREATE TABLE IF NOT EXISTS case_comparisons (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           case_id UUID NOT NULL UNIQUE REFERENCES cases(id) ON DELETE CASCADE,
@@ -93,8 +94,21 @@ def ensure_case_comparisons_table(engine: Engine) -> None:
           details JSONB
         );
 
+        -- Add columns if they don't exist (for existing databases)
+        DO $$ 
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'case_comparisons' AND column_name = 'needs_completion') THEN
+                ALTER TABLE case_comparisons ADD COLUMN needs_completion BOOLEAN DEFAULT FALSE;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'case_comparisons' AND column_name = 'required_missing_count') THEN
+                ALTER TABLE case_comparisons ADD COLUMN required_missing_count INTEGER DEFAULT 0;
+            END IF;
+        END $$;
+
+        -- Create indexes (after columns are guaranteed to exist)
         CREATE INDEX IF NOT EXISTS idx_case_comparisons_case_id ON case_comparisons(case_id);
         CREATE INDEX IF NOT EXISTS idx_case_comparisons_all_match ON case_comparisons(all_match);
+        CREATE INDEX IF NOT EXISTS idx_case_comparisons_needs_completion ON case_comparisons(needs_completion);
         """
     )
     with engine.begin() as conn:

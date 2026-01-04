@@ -233,7 +233,7 @@ class CaseCrew:
             output_pydantic=output_model
         )
 
-    def phase8_relief_and_type_task(self) -> Task:
+    def phase8_relief_and_type_task(self, output_model: Type[BaseModel]) -> Task:
         """
         Generate Relief nodes and assign ReliefType from catalog (Phase 8).
         
@@ -252,12 +252,13 @@ class CaseCrew:
         return Task(
             config=task_spec,
             agent=self.phase1_extract_agent(),
+            output_pydantic=output_model
         )
 
     @agent
     def phase6_law_agent(self) -> Agent:
-        """Agent for Phase 6: selecting Laws from catalog (uses mini model)"""
-        llm = LLM(model=self.LLM_MODEL_MINI, temperature=self.LLM_TEMPERATURE)
+        """Agent for Phase 6: selecting Laws from catalog (uses full model)"""
+        llm = LLM(model=self.LLM_MODEL, temperature=self.LLM_TEMPERATURE)
         return Agent(
             config=self.agents_config['phase6_law_agent'],  # type: ignore[index]
             tools=[],
@@ -266,8 +267,8 @@ class CaseCrew:
 
     @agent
     def phase2_select_forum_agent(self) -> Agent:
-        """Agent for Phase 2: selecting Forum from catalog based on case text (uses mini model)"""
-        llm = LLM(model=self.LLM_MODEL_MINI, temperature=self.LLM_TEMPERATURE)
+        """Agent for Phase 2: selecting Forum from catalog based on case text (uses full model)"""
+        llm = LLM(model=self.LLM_MODEL, temperature=self.LLM_TEMPERATURE)
         return Agent(
             config=self.agents_config['phase5_select_existing_agent'],  # type: ignore[index]
             tools=[],
@@ -317,8 +318,8 @@ class CaseCrew:
 
     @agent
     def phase9_domain_agent(self) -> Agent:
-        """Agent for Phase 9: selecting Domain from catalog or options (uses mini model)"""
-        llm = LLM(model=self.LLM_MODEL_MINI, temperature=self.LLM_TEMPERATURE)
+        """Agent for Phase 9: selecting Domain from catalog or options (uses full model)"""
+        llm = LLM(model=self.LLM_MODEL, temperature=self.LLM_TEMPERATURE)
         return Agent(
             config=self.agents_config['phase9_domain_agent'],  # type: ignore[index]
             tools=[],

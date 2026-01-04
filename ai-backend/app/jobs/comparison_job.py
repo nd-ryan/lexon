@@ -195,23 +195,32 @@ def compare_single_case(case_id: str, force: bool = False) -> Optional[dict]:
         
         # Extract summary counts
         summary = result.get("summary", {})
-        nodes_diff = summary.get("nodes_only_in_postgres", 0) + summary.get("nodes_only_in_neo4j", 0) + summary.get("nodes_with_differences", 0)
-        edges_diff = summary.get("edges_only_in_postgres", 0) + summary.get("edges_only_in_neo4j", 0) + summary.get("edges_with_differences", 0)
+        nodes_summary = summary.get("nodes", {})
+        edges_summary = summary.get("edges", {})
+        nodes_diff = nodes_summary.get("only_postgres", 0) + nodes_summary.get("only_neo4j", 0) + nodes_summary.get("differ", 0)
+        edges_diff = edges_summary.get("only_postgres", 0) + edges_summary.get("only_neo4j", 0) + edges_summary.get("differ", 0)
         
         # Get embedding validation results
-        embeddings_validation = result.get("embeddings_validation", {})
+        embeddings_validation = summary.get("embeddings", {})
         embeddings_missing = embeddings_validation.get("total_missing", 0)
         
+        # Get required properties validation results
+        required_validation = summary.get("required_properties", {})
+        required_missing = required_validation.get("total_missing", 0)
+        
         all_match = result.get("all_match", False)
+        needs_completion = result.get("needs_completion", False)
         
         # Save comparison result
         comparison_repo.save_comparison(
             conn=conn,
             case_id=case_id,
             all_match=all_match,
+            needs_completion=needs_completion,
             nodes_differ_count=nodes_diff,
             edges_differ_count=edges_diff,
             embeddings_missing_count=embeddings_missing,
+            required_missing_count=required_missing,
             postgres_updated_at=updated_at,
             kg_submitted_at=kg_submitted_at,
             details=result,
@@ -219,15 +228,17 @@ def compare_single_case(case_id: str, force: bool = False) -> Optional[dict]:
         
         db.commit()
         
-        logger.info(f"Comparison for case {case_id} completed: all_match={all_match}, nodes_diff={nodes_diff}, edges_diff={edges_diff}, embeddings_missing={embeddings_missing}")
+        logger.info(f"Comparison for case {case_id} completed: all_match={all_match}, needs_completion={needs_completion}, nodes_diff={nodes_diff}, edges_diff={edges_diff}, embeddings_missing={embeddings_missing}, required_missing={required_missing}")
         
         # Return the result directly (don't re-query after commit closes connection)
         return {
             "case_id": case_id,
             "all_match": all_match,
+            "needs_completion": needs_completion,
             "nodes_differ_count": nodes_diff,
             "edges_differ_count": edges_diff,
             "embeddings_missing_count": embeddings_missing,
+            "required_missing_count": required_missing,
             "details": result,
         }
         

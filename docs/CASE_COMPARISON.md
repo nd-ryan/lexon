@@ -41,7 +41,7 @@ Edges are matched by composite key:
 Properties are compared with normalization:
 - Empty strings treated as `null`
 - Embedding arrays (large float arrays) are skipped
-- Internal fields are skipped: `temp_id`, `is_existing`, `status`, `source`
+- Internal fields are skipped: `temp_id`, `is_existing`, `status`, `source`, `preset`
 - Fields ending in `_embedding` are skipped
 
 ### Type normalization
@@ -104,6 +104,37 @@ The comparison validates that Neo4j has embedding values for all properties that
 
 **Note:** Embedding values are NOT returned (they're too large). The check only verifies presence via `IS NOT NULL`.
 
+### Required properties validation
+
+The comparison validates that all required properties (as defined in `schema_v3.json`) are present in the extracted data. This identifies cases that uploaded successfully but are incomplete and need manual completion.
+
+**How it works:**
+1. Schema defines which properties are required via `"required": true` in the `ui` object
+2. For each node, check that all required properties have non-empty values
+3. Missing required properties are reported in `summary.required_properties`
+
+**Required properties per label (derived from schema):**
+
+| Label | Required properties |
+|-------|---------------------|
+| Case | name, citation, type, summary, status, outcome, court_level |
+| Proceeding | stage, decided_date |
+| Issue | label, text, type |
+| Forum | name, type |
+| Jurisdiction | name |
+| Domain | name |
+| Party | name, type |
+| Ruling | label, type, reasoning, ratio, summary |
+| Doctrine | name, description |
+| Policy | name, description |
+| Argument | label, text, disposition_text, raised_by |
+| Relief | description |
+| ReliefType | type |
+| Law | name, text, type, citation |
+| FactPattern | name, description |
+
+**Use case:** The AI extraction process may leave some required properties empty (intentionally, to avoid hallucination). The comparison flags these cases as "needs completion" so admins can manually fill in the missing data.
+
 ---
 
 ## Comparison statuses
@@ -125,6 +156,7 @@ The comparison validates that Neo4j has embedding values for all properties that
   "postgres_case_id": "uuid",
   "neo4j_case_id": "uuid",
   "all_match": false,
+  "needs_completion": true,
   "summary": {
     "nodes": {
       "total_postgres": 15,
@@ -151,6 +183,24 @@ The comparison validates that Neo4j has embedding values for all properties that
         "ReliefType": 1
       },
       "labels": ["Domain", "Forum", "Jurisdiction", "ReliefType"]
+    },
+    "required_properties": {
+      "total_expected": 45,
+      "total_present": 43,
+      "total_missing": 2,
+      "all_present": false,
+      "missing": [
+        {
+          "node_id": "ruling-123",
+          "label": "Ruling",
+          "property": "ratio"
+        },
+        {
+          "node_id": "argument-456",
+          "label": "Argument",
+          "property": "disposition_text"
+        }
+      ]
     },
     "embeddings": {
       "total_expected": 12,
@@ -217,6 +267,16 @@ The comparison validates that Neo4j has embedding values for all properties that
 - Returns set of label strings for catalog-only nodes
 - Derives from schema: `case_unique=false` AND `can_create_new=false`
 - Used to filter out nodes that are intentionally not stored in Postgres
+
+**`get_required_properties_config(schema=None)`**
+- Returns dict of `{label: [required_prop_names...]}` for properties that must have values
+- Derives from schema: `ui.required=true`
+- Excludes internal fields (`*_id`, `*_embedding`, `*_upload_code`)
+
+**`check_missing_required_properties(nodes, schema=None)`**
+- Validates that all required properties have non-empty values
+- Returns summary with missing required properties list
+- Used to identify cases that need manual completion
 
 **`get_embedding_config(schema=None)`**
 - Returns dict of `{label: [prop_names...]}` for properties that should have embeddings
@@ -296,8 +356,9 @@ Admins can run comparisons across all cases from the case list page:
 | `not_in_kg` | Never submitted to KG | Gray "Not in KG" |
 | `pending` | Postgres updated after last KG submit | Blue "Pending sync" |
 | `not_checked` | In KG but comparison never run | Gray "Not checked" |
-| `synced` | Comparison passed (`all_match=true`) | Green "✓ Synced" |
-| `issues` | Comparison found differences | Amber "⚠ X fields, Y embeddings" |
+| `synced` | Comparison passed (`all_match=true`, no missing required) | Green "✓ Synced" |
+| `needs_completion` | Synced correctly but missing required properties | Orange "📝 X required fields missing" |
+| `issues` | Comparison found sync differences | Amber "⚠ X fields, Y embeddings" |
 
 **Smart Staleness Detection:**
 
@@ -393,8 +454,10 @@ Content-Type: application/json
 - **Performance**: Comparison is O(n) where n = total nodes + edges
 - **Embeddings excluded from property comparison**: Large embedding arrays are automatically excluded from property diffs
 - **Embedding validation**: Checks that Neo4j has embedding values (without returning the values)
+- **Required properties validation**: Checks that all required properties have non-empty values (identifies incomplete extractions)
 - **String normalization**: Empty strings are treated as null for comparison
 - **Type normalization**: Neo4j date/time objects are converted to ISO strings to match Postgres format
 - **Catalog nodes**: Automatically derived from schema and excluded from comparison (reported separately)
 - **Order-independent**: Node/edge order doesn't affect comparison results
+- **Needs completion status**: Cases that sync correctly but have missing required properties show "📝 Needs completion" instead of "⚠ Issues"
 

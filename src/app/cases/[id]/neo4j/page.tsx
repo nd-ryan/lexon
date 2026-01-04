@@ -68,7 +68,7 @@ export default function Neo4jCaseViewPage() {
     kg_submitted_at?: string
   } | null>(null)
   const [loadingCachedComparison, setLoadingCachedComparison] = useState(false)
-  const [syncStatus, setSyncStatus] = useState<'synced' | 'issues' | 'pending' | 'not_checked' | 'not_in_kg' | undefined>(undefined)
+  const [syncStatus, setSyncStatus] = useState<'synced' | 'issues' | 'pending' | 'not_checked' | 'not_in_kg' | 'needs_completion' | undefined>(undefined)
 
   // Protect route
   useEffect(() => {
@@ -218,6 +218,8 @@ export default function Neo4jCaseViewPage() {
           setSyncStatus('not_checked')
         } else if (data.all_match) {
           setSyncStatus('synced')
+        } else if (data.needs_completion) {
+          setSyncStatus('needs_completion')
         } else {
           setSyncStatus('issues')
         }
@@ -226,6 +228,7 @@ export default function Neo4jCaseViewPage() {
         if (data.exists && data.details) {
           setComparisonData({
             all_match: data.all_match,
+            needs_completion: data.needs_completion,
             summary: data.details.summary,
             node_comparisons: data.details.node_comparisons || [],
             edge_comparisons: data.details.edge_comparisons || [],
@@ -482,6 +485,8 @@ export default function Neo4jCaseViewPage() {
       // Update sync status based on fresh results
       if (data.all_match) {
         setSyncStatus('synced')
+      } else if (data.needs_completion) {
+        setSyncStatus('needs_completion')
       } else {
         setSyncStatus('issues')
       }

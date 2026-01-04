@@ -191,15 +191,16 @@ async def get_upload_progress(job_id: str):
 def list_cases(
     limit: int = 50, 
     offset: int = 0, 
-    comparison_status: Optional[str] = Query(None, description="Filter by comparison status: issues|synced|pending|not_checked|not_in_kg"),
+    comparison_status: Optional[str] = Query(None, description="Filter by comparison status: issues|synced|pending|not_checked|not_in_kg|needs_completion"),
     db: Session = Depends(get_db)
 ):
     """
     List cases with optional comparison status filter.
     
     Comparison status values:
-    - issues: Cases where comparison found differences
-    - synced: Cases where comparison passed (all_match=true)
+    - issues: Cases where comparison found differences (sync issues)
+    - needs_completion: Cases synced correctly but missing required properties
+    - synced: Cases where comparison passed (all_match=true, no missing required)
     - pending: Cases with unsaved changes (updated_at > kg_submitted_at)
     - not_checked: Cases in KG but no comparison run yet
     - not_in_kg: Cases not yet submitted to KG
@@ -233,6 +234,9 @@ def list_cases(
             status = "not_checked"
         elif comparison.get("all_match"):
             status = "synced"
+        elif comparison.get("needs_completion"):
+            # Synced correctly but missing required properties
+            status = "needs_completion"
         else:
             status = "issues"
         
@@ -240,9 +244,11 @@ def list_cases(
         item["comparison_status"] = status
         item["comparison"] = {
             "all_match": comparison.get("all_match") if comparison else None,
+            "needs_completion": comparison.get("needs_completion") if comparison else None,
             "nodes_differ_count": comparison.get("nodes_differ_count", 0) if comparison else 0,
             "edges_differ_count": comparison.get("edges_differ_count", 0) if comparison else 0,
             "embeddings_missing_count": comparison.get("embeddings_missing_count", 0) if comparison else 0,
+            "required_missing_count": comparison.get("required_missing_count", 0) if comparison else 0,
             "compared_at": comparison.get("compared_at") if comparison else None,
         } if comparison else None
         

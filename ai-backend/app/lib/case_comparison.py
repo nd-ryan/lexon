@@ -19,9 +19,13 @@ Catalog nodes:
 """
 
 import json
+import logging
 import os
 from typing import Any, Dict, List, Optional, Set, Tuple
 from enum import Enum
+
+
+logger = logging.getLogger(__name__)
 
 
 def _load_schema() -> List[Dict[str, Any]]:
@@ -62,6 +66,145 @@ def get_catalog_node_labels(schema: Optional[List[Dict[str, Any]]] = None) -> Se
             catalog_labels.add(label)
     
     return catalog_labels
+
+
+def get_required_properties_config(schema: Optional[List[Dict[str, Any]]] = None) -> Dict[str, List[str]]:
+    """Get which properties are required per label.
+    
+    Required properties are indicated by `"required": true` in the `ui` object.
+    This is used to check if extracted data is complete (needs manual completion).
+    
+    Args:
+        schema: Optional schema list. If not provided, loads from schema_v3.json.
+        
+    Returns:
+        Dict of { label: [required_prop_names...] }
+    """
+    if schema is None:
+        schema = _load_schema()
+    
+    config: Dict[str, List[str]] = {}
+    
+    for node_def in schema:
+        if not isinstance(node_def, dict):
+            continue
+        label = node_def.get("label")
+        if not isinstance(label, str) or not label.strip():
+            continue
+        props = node_def.get("properties") or {}
+        if not isinstance(props, dict):
+            continue
+        
+        required_props: List[str] = []
+        for prop_name, meta in props.items():
+            if not isinstance(prop_name, str):
+                continue
+            if not isinstance(meta, dict):
+                continue
+            # Skip hidden/internal fields
+            if prop_name.endswith("_embedding") or prop_name.endswith("_id") or prop_name.endswith("_upload_code"):
+                continue
+            # Check if required in UI (use truthiness, not identity)
+            ui = meta.get("ui") or {}
+            if ui.get("required"):
+                required_props.append(prop_name)
+        
+        if required_props:
+            config[label] = sorted(required_props)
+    
+    return config
+
+
+def check_missing_required_properties(
+    nodes: List[Dict[str, Any]],
+    schema: Optional[List[Dict[str, Any]]] = None
+) -> Dict[str, Any]:
+    """Check which required properties are missing from nodes.
+    
+    This identifies nodes that uploaded successfully but are incomplete,
+    requiring manual completion by an admin.
+    
+    Args:
+        nodes: List of node dicts from the case (with label and properties)
+        schema: Optional schema list
+        
+    Returns:
+        Dict with:
+        - total_expected: number of required property instances expected
+        - total_present: number of required properties that have values
+        - total_missing: number of required properties missing
+        - all_present: True if no missing required properties
+        - missing: list of {node_id, label, property} for missing required props
+    """
+    required_config = get_required_properties_config(schema)
+    logger.debug(f"Required properties config: {required_config}")
+    
+    if not required_config:
+        return {
+            "total_expected": 0,
+            "total_present": 0,
+            "total_missing": 0,
+            "all_present": True,
+            "missing": []
+        }
+    
+    missing_required: List[Dict[str, str]] = []
+    total_expected = 0
+    total_present = 0
+    
+    for node in nodes:
+        label = node.get("label")
+        if not label or label not in required_config:
+            continue
+        
+        required_props = required_config.get(label, [])
+        if not required_props:
+            continue
+        
+        # Get node identifier for reporting
+        props = node.get("properties", {})
+        node_id = node.get("temp_id")
+        if not node_id:
+            for key, val in props.items():
+                if key.endswith("_id") and val:
+                    node_id = str(val)
+                    break
+        if not node_id:
+            node_id = f"unknown-{label}"
+        
+        # Check each required property
+        for prop in required_props:
+            total_expected += 1
+            value = props.get(prop)
+            # Check if value is present and non-empty
+            is_present = False
+            if value is not None:
+                if isinstance(value, str):
+                    # String must be non-empty after stripping whitespace
+                    is_present = bool(value.strip())
+                else:
+                    # Non-string values (int, bool, list, etc.) are present if not None
+                    is_present = True
+            
+            if is_present:
+                total_present += 1
+            else:
+                logger.debug(f"Missing required property: {label}.{prop} (node_id={node_id}, value={value!r})")
+                missing_required.append({
+                    "node_id": str(node_id),
+                    "label": label,
+                    "property": prop
+                })
+    
+    logger.info(f"Required properties check: {total_expected} expected, {total_present} present, {len(missing_required)} missing")
+    
+    return {
+        "total_expected": total_expected,
+        "total_present": total_present,
+        "total_missing": len(missing_required),
+        "all_present": len(missing_required) == 0,
+        "missing": missing_required
+    }
 
 
 def get_embedding_config(schema: Optional[List[Dict[str, Any]]] = None) -> Dict[str, List[str]]:
@@ -601,7 +744,11 @@ def compare_case_data(
     if neo4j_client is not None:
         embeddings_result = check_neo4j_embeddings(neo4j_client, neo_nodes_filtered, schema)
     
-    # Overall status (includes embedding check if performed)
+    # Check for missing required properties in both Postgres and Neo4j data
+    # We check Postgres data since that's the source of truth for what was extracted
+    required_result = check_missing_required_properties(pg_nodes, schema)
+    
+    # Overall status (includes embedding check and required properties check if performed)
     all_match = (
         node_stats["differ"] == 0 and
         node_stats["only_postgres"] == 0 and
@@ -609,7 +756,19 @@ def compare_case_data(
         edge_stats["differ"] == 0 and
         edge_stats["only_postgres"] == 0 and
         edge_stats["only_neo4j"] == 0 and
-        (embeddings_result is None or embeddings_result.get("all_present", True))
+        (embeddings_result is None or embeddings_result.get("all_present", True)) and
+        required_result.get("all_present", True)
+    )
+    
+    # Separate flag for "needs completion" - case synced correctly but has missing required props
+    needs_completion = (
+        node_stats["differ"] == 0 and
+        node_stats["only_postgres"] == 0 and
+        node_stats["only_neo4j"] == 0 and
+        edge_stats["differ"] == 0 and
+        edge_stats["only_postgres"] == 0 and
+        edge_stats["only_neo4j"] == 0 and
+        not required_result.get("all_present", True)
     )
     
     # Build catalog nodes summary by label
@@ -620,6 +779,7 @@ def compare_case_data(
     
     result: Dict[str, Any] = {
         "all_match": all_match,
+        "needs_completion": needs_completion,
         "summary": {
             "nodes": node_stats,
             "edges": edge_stats,
@@ -627,7 +787,8 @@ def compare_case_data(
                 "total": len(catalog_nodes_skipped),
                 "by_label": catalog_summary,
                 "labels": sorted(catalog_labels)
-            }
+            },
+            "required_properties": required_result
         },
         "node_comparisons": node_comparisons,
         "edge_comparisons": edge_comparisons

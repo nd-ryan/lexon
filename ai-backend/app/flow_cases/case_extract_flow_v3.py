@@ -450,7 +450,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             return inst.model_dump(exclude_none=False)
         except Exception as e:
             logger.warning(f"Failed to validate relationship properties for {source_label}-[{rel_label}]: {e}")
-            # Fallback: return simple filtered dict
+            # Fallback: return simple filtered dict (validation failed but we still create the edge)
             return {k: v for k, v in props.items() if isinstance(k, str) and v is not None}
 
     @listen(phase0_kickoff)
@@ -1339,7 +1339,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                     'RulingPerIssueResult',
                     issue_temp_id=(str, ...),
                     ruling=(ruling_model, ...),  # Required - each issue must have its own ruling
-                    in_favor=(Optional[str], None),
+                    in_favor=(str, ...),  # Required - SETS relationship property
                 )
                 ruling_batch_response = create_model(
                     'RulingPerIssueBatchResponse',
@@ -1570,7 +1570,7 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                     'ArgumentWithStatus',
                     temp_id=(Optional[str], None),
                     properties=(Optional[argument_model], None),
-                    status=(Optional[str], None),
+                    status=(str, ...),  # Required - EVALUATED_IN relationship property
                 )
                 ruling_arguments_result = create_model(
                     'RulingArgumentsResult',
@@ -2644,9 +2644,20 @@ class CaseExtractFlow(Flow[CaseExtractState]):
                 replacements=replacements,
             )
             
-            # TODO: Create appropriate task in case_crew_v3.py for phase8_relief_and_type
-            # Expected response format: { "results": [{"ruling_temp_id": str, "relief": {properties}, "relief_status": str, "relief_type_id": str}] }
-            task = crew.phase8_relief_and_type_task()
+            # Create Pydantic output model for Phase 8 with relief_status as required
+            relief_result = create_model(
+                'ReliefResult',
+                ruling_temp_id=(str, ...),
+                relief=(relief_model, ...) if relief_model else (Dict[str, Any], ...),
+                relief_status=(str, ...),  # Required - RESULTS_IN relationship property
+                relief_type_id=(Optional[int], None),  # Optional - index into catalog
+            )
+            relief_batch_response = create_model(
+                'ReliefBatchResponse',
+                results=(List[relief_result], ...),
+            )
+            
+            task = crew.phase8_relief_and_type_task(relief_batch_response)
             single_crew = Crew(
                 agents=[crew.phase1_extract_agent()],
                 tasks=[task],
@@ -2657,8 +2668,13 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             nodes_before = len(self.state.nodes_accumulated or [])
             result = single_crew.kickoff()
 
-            # Parse result
-            data = self.parse_crew_result(result)
+            # Parse result from Pydantic model
+            if hasattr(result, 'pydantic'):
+                data = result.pydantic.model_dump() if hasattr(result.pydantic, 'model_dump') else result.pydantic
+            elif hasattr(result, 'model_dump'):
+                data = result.model_dump()
+            else:
+                data = self.parse_crew_result(result)
             results_list = data.get("results") if isinstance(data, dict) else None
             if not isinstance(results_list, list):
                 results_list = []

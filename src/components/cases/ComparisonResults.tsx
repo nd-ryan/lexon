@@ -58,6 +58,13 @@ interface ComparisonSummary {
     by_label: Record<string, number>
     labels: string[]
   }
+  required_properties?: {
+    total_expected: number
+    total_present: number
+    total_missing: number
+    all_present: boolean
+    missing: EmbeddingMissing[]  // Same structure as embeddings missing
+  }
   embeddings?: {
     total_expected: number
     total_present: number
@@ -77,13 +84,14 @@ interface CachedComparisonInfo {
   kg_submitted_at?: string
 }
 
-type SyncStatus = 'synced' | 'issues' | 'pending' | 'not_checked' | 'not_in_kg'
+type SyncStatus = 'synced' | 'issues' | 'pending' | 'not_checked' | 'not_in_kg' | 'needs_completion'
 
 interface ComparisonResultsProps {
   loading: boolean
   error: string | null
   data: {
     all_match: boolean
+    needs_completion?: boolean
     summary: ComparisonSummary
     node_comparisons: NodeComparison[]
     edge_comparisons: EdgeComparison[]
@@ -268,6 +276,44 @@ function SummaryStats({ summary }: { summary: ComparisonSummary }) {
         </div>
       )}
       
+      {/* Required properties validation */}
+      {summary.required_properties && (
+        <div className={`border rounded p-3 ${summary.required_properties.all_present ? 'bg-green-50 border-green-200' : 'bg-orange-50 border-orange-200'}`}>
+          <div className="font-medium text-sm mb-2 flex items-center gap-2">
+            <span className={summary.required_properties.all_present ? 'text-green-600' : 'text-orange-600'}>
+              {summary.required_properties.all_present ? '✓' : '📝'}
+            </span>
+            <span className={summary.required_properties.all_present ? 'text-green-800' : 'text-orange-800'}>
+              Required Properties {!summary.required_properties.all_present && '(Needs Manual Completion)'}
+            </span>
+          </div>
+          <div className="text-xs">
+            <div className="grid grid-cols-3 gap-2 mb-2">
+              <div>Expected: {summary.required_properties.total_expected}</div>
+              <div className="text-green-600">Present: {summary.required_properties.total_present}</div>
+              <div className={summary.required_properties.total_missing > 0 ? 'text-orange-600 font-medium' : ''}>
+                Missing: {summary.required_properties.total_missing}
+              </div>
+            </div>
+            {summary.required_properties.missing.length > 0 && (
+              <div className="mt-3 border-t border-orange-200 pt-3">
+                <div className="font-medium text-orange-700 mb-2">Missing required fields:</div>
+                <div className="max-h-64 overflow-y-auto space-y-1">
+                  {summary.required_properties.missing.map((m, idx) => (
+                    <div key={idx} className="flex items-center gap-2 text-orange-800 bg-orange-100 px-2 py-1 rounded">
+                      <span className="font-medium">{m.label}</span>
+                      <span className="text-orange-500">→</span>
+                      <span className="font-mono">{m.property}</span>
+                      <span className="text-orange-400 text-[10px] ml-auto">({m.node_id.substring(0, 12)}...)</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Embeddings validation */}
       {summary.embeddings && (
         <div className={`border rounded p-3 ${summary.embeddings.all_present ? 'bg-green-50 border-green-200' : 'bg-amber-50 border-amber-200'}`}>
@@ -325,12 +371,14 @@ function SyncStatusBanner({
   syncStatus, 
   source, 
   cachedInfo,
-  allMatch 
+  allMatch,
+  needsCompletion 
 }: { 
   syncStatus?: SyncStatus
   source?: ComparisonSource
   cachedInfo?: CachedComparisonInfo
   allMatch?: boolean
+  needsCompletion?: boolean
 }) {
   // Pending sync: postgres was updated after KG submit, so mismatch is expected
   if (syncStatus === 'pending') {
@@ -362,6 +410,34 @@ function SyncStatusBanner({
               This case has not been submitted to the Knowledge Graph yet.
             </p>
           </div>
+        </div>
+      </div>
+    )
+  }
+  
+  // Needs completion: data synced but missing required properties
+  if (syncStatus === 'needs_completion' || needsCompletion) {
+    const timeAgo = cachedInfo?.compared_at ? formatRelativeTime(cachedInfo.compared_at) : null
+    const isStale = cachedInfo?.is_stale
+    
+    return (
+      <div className="p-3 rounded mb-4 bg-orange-50 border border-orange-200">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-lg text-orange-600">📝</span>
+            <div>
+              <span className="font-medium text-orange-800">Needs manual completion</span>
+              <p className="text-xs text-orange-600 mt-0.5">
+                Data synced correctly but some required properties are missing. 
+                Edit the case to fill in the missing fields.
+              </p>
+            </div>
+          </div>
+          {timeAgo && (
+            <span className={`text-xs ${isStale ? 'text-orange-600' : 'text-gray-500'}`}>
+              {isStale && '⚠ Stale — '}Checked {timeAgo}
+            </span>
+          )}
         </div>
       </div>
     )
@@ -462,6 +538,7 @@ export function ComparisonResults({
         source={source}
         cachedInfo={cachedInfo}
         allMatch={data?.all_match}
+        needsCompletion={data?.needs_completion}
       />
       
       {data && (
