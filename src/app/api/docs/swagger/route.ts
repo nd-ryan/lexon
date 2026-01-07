@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth/next'
 import { authOptions } from '@/lib/auth'
 
 const AI_BACKEND_URL = process.env.AI_BACKEND_URL || 'http://localhost:8000'
-const EXTERNAL_API_KEY = process.env.EXTERNAL_API_KEY
+const LEXON_API_KEY = process.env.LEXON_API_KEY
 
 /**
  * GET /api/docs/swagger
@@ -20,11 +20,11 @@ export async function GET() {
 
   // Fetch OpenAPI spec
   let spec = {}
-  if (EXTERNAL_API_KEY) {
+  if (LEXON_API_KEY) {
     try {
       const response = await fetch(`${AI_BACKEND_URL}/external/v1/openapi.json`, {
         headers: {
-          'Authorization': `Bearer ${EXTERNAL_API_KEY}`,
+          'Authorization': `Bearer ${LEXON_API_KEY}`,
         },
         cache: 'no-store',
       })

@@ -30,18 +30,18 @@ bearer_scheme = HTTPBearer(auto_error=False)
 # If requests bypass Cloudflare, they won't have this header
 LEXON_EDGE_SECRET = os.environ.get("LEXON_EDGE_SECRET")
 
-# External API keys - comma-separated list for rotation support
+# Lexon API keys - comma-separated list for rotation support
 # Example: "key_client_abc123,key_client_xyz789"
-_raw_keys = os.environ.get("EXTERNAL_API_KEYS", "")
-EXTERNAL_API_KEYS = [k.strip() for k in _raw_keys.split(",") if k.strip()]
+_raw_keys = os.environ.get("LEXON_API_KEYS", "")
+LEXON_API_KEYS = [k.strip() for k in _raw_keys.split(",") if k.strip()]
 
 # Backward compatibility: also check single key if list is empty
-_single_key = os.environ.get("EXTERNAL_API_KEY")
-if not EXTERNAL_API_KEYS and _single_key:
-    EXTERNAL_API_KEYS = [_single_key]
+_single_key = os.environ.get("LEXON_API_KEY")
+if not LEXON_API_KEYS and _single_key:
+    LEXON_API_KEYS = [_single_key]
 
-if not EXTERNAL_API_KEYS:
-    print("Warning: No external API keys configured. External API will reject all requests.")
+if not LEXON_API_KEYS:
+    print("Warning: No Lexon API keys configured. External API will reject all requests.")
 
 if not LEXON_EDGE_SECRET:
     print("Warning: LEXON_EDGE_SECRET not set. Edge secret validation will be skipped (not recommended for production).")
@@ -141,7 +141,7 @@ async def require_external_api_key(
     # Get request_id from header (set by middleware) or generate one
     request_id = request.headers.get(REQUEST_ID_HEADER) or generate_request_id()
     
-    if not EXTERNAL_API_KEYS:
+    if not LEXON_API_KEYS:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
@@ -164,7 +164,7 @@ async def require_external_api_key(
             },
         )
     
-    if api_key not in EXTERNAL_API_KEYS:
+    if api_key not in LEXON_API_KEYS:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={

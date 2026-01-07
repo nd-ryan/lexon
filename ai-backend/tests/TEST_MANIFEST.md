@@ -338,8 +338,8 @@ Tests mapping of temporary node IDs to permanent Neo4j UUIDs.
 - **test_openapi_with_valid_auth_returns_spec** - /openapi.json returns valid spec with auth
 
 #### `TestMultiKeyRotation` (2 tests)
-- **test_first_key_works** - First key in EXTERNAL_API_KEYS accepted
-- **test_second_key_works** - Second key in EXTERNAL_API_KEYS accepted
+- **test_first_key_works** - First key in LEXON_API_KEYS accepted
+- **test_second_key_works** - Second key in LEXON_API_KEYS accepted
 
 #### `TestRequestValidation` (3 tests)
 - **test_extra_fields_rejected** - Unknown fields in request body rejected

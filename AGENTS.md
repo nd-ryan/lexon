@@ -31,12 +31,16 @@ From `ai-backend/`:
 - `AI_BACKEND_URL` (e.g. `http://localhost:8000`)
 - `NEXTAUTH_SECRET`
 - `FASTAPI_API_KEY` (used by Next.js to call protected backend routes)
+- `LEXON_API_KEY` (used by Next.js to fetch OpenAPI spec for docs pages)
 - `DATABASE_URL` (Prisma/Postgres; required for auth/session features)
 
 ### Backend (`ai-backend/.env`)
 
 - `JWT_SECRET` (must match frontend)
 - `FASTAPI_API_KEY`
+- `LEXON_API_KEYS` (comma-separated list of valid external API keys, e.g. `key1,key2`)
+- `LEXON_API_KEY` (single key fallback if `LEXON_API_KEYS` is empty)
+- `LEXON_EDGE_SECRET` (edge-to-origin secret for Cloudflare validation)
 - `REDIS_URL`
 - `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD`
 - `OPENAI_API_KEY`

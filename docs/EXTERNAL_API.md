@@ -120,6 +120,16 @@ X-API-Key: your_api_key_here
 
 Your API key will be provided by Lexon. Keep it secure and do not expose it in client-side code.
 
+**Environment Variable:** We recommend storing your key as `LEXON_API_KEY` in your environment:
+
+```bash
+# Single key
+export LEXON_API_KEY="your_api_key_here"
+
+# Or multiple keys for rotation (backend only)
+export LEXON_API_KEYS="key1,key2"
+```
+
 **Note:** The `/health` and `/version` endpoints do not require authentication and return minimal, non-sensitive information only (status/timestamp and version/name respectively).
 
 ## Rate Limits

@@ -6,8 +6,8 @@ import { authOptions } from '@/lib/auth'
 const AI_BACKEND_URL = process.env.AI_BACKEND_URL || 'http://localhost:8000'
 const OPENAPI_ENDPOINT = '/external/v1/openapi.json'
 
-// Use external API key to authenticate with the backend
-const EXTERNAL_API_KEY = process.env.EXTERNAL_API_KEY
+// Use Lexon API key to authenticate with the backend
+const LEXON_API_KEY = process.env.LEXON_API_KEY
 
 // Request timeout in milliseconds
 const FETCH_TIMEOUT_MS = 10000
@@ -33,8 +33,8 @@ export async function GET() {
     )
   }
 
-  if (!EXTERNAL_API_KEY) {
-    console.error('EXTERNAL_API_KEY not configured')
+  if (!LEXON_API_KEY) {
+    console.error('LEXON_API_KEY not configured')
     return NextResponse.json(
       { error: 'Service configuration error' },
       { status: 500 }
@@ -48,7 +48,7 @@ export async function GET() {
     const response = await fetch(`${AI_BACKEND_URL}${OPENAPI_ENDPOINT}`, {
       headers: {
         'Accept': 'application/json',
-        'Authorization': `Bearer ${EXTERNAL_API_KEY}`,
+        'Authorization': `Bearer ${LEXON_API_KEY}`,
       },
       cache: 'no-store',
       signal: controller.signal,

@@ -24,7 +24,7 @@ async def isolation_client(monkeypatch):
     """
     # Set up test API keys
     monkeypatch.setenv("FASTAPI_API_KEY", "internal-test-key-12345")
-    monkeypatch.setenv("EXTERNAL_API_KEYS", "external-test-key-abcde,external-test-key-fghij")
+    monkeypatch.setenv("LEXON_API_KEYS", "external-test-key-abcde,external-test-key-fghij")
     monkeypatch.setenv("LEXON_EDGE_SECRET", "edge-secret-xyz")
     
     # Import after setting env vars so they're picked up
@@ -108,7 +108,7 @@ class TestInternalCannotAccessExternal:
             },
             json={"query": "test query"}
         )
-        # External routes use EXTERNAL_API_KEYS, so internal key should fail
+        # External routes use LEXON_API_KEYS, so internal key should fail
         assert response.status_code == 401
 
 
@@ -212,7 +212,7 @@ class TestMultiKeyRotation:
     
     @pytest.mark.asyncio
     async def test_first_key_works(self, isolation_client, monkeypatch):
-        """First key in EXTERNAL_API_KEYS should be accepted."""
+        """First key in LEXON_API_KEYS should be accepted."""
         # Mock run_query_flow to avoid actual execution
         async def mock_run_query_flow(query):
             return {"enriched_nodes": []}
@@ -231,7 +231,7 @@ class TestMultiKeyRotation:
     
     @pytest.mark.asyncio
     async def test_second_key_works(self, isolation_client, monkeypatch):
-        """Second key in EXTERNAL_API_KEYS should also be accepted."""
+        """Second key in LEXON_API_KEYS should also be accepted."""
         async def mock_run_query_flow(query):
             return {"enriched_nodes": []}
         
