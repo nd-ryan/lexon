@@ -13,7 +13,9 @@
     "relationships": {
       "CONTAINS": {
         "target": "Case",
-        "cardinality": "one-to-many"
+        "cardinality": "one-to-one",
+        "required": true,
+        "min": 1
       }
     }
   },
@@ -38,7 +40,9 @@
     "relationships": {
       "HAS_PROCEEDING": {
         "target": "Proceeding",
-        "cardinality": "one-to-many"
+        "cardinality": "one-to-one",
+        "required": true,
+        "min": 1
       }
     }
   },
@@ -60,19 +64,27 @@
     "relationships": {
       "HEARD_IN": {
         "target": "Forum",
-        "cardinality": "one-to-one"
+        "cardinality": "one-to-one",
+        "required": true,
+        "min": 1
       },
       "RESULTS_IN": {
         "target": "Ruling",
-        "cardinality": "one-to-many"
+        "cardinality": "one-to-many",
+        "required": true,
+        "min": 1
       },
       "ADDRESSES": {
         "target": "Issue",
-        "cardinality": "one-to-many"
+        "cardinality": "one-to-many",
+        "required": true,
+        "min": 1
       },
       "INVOLVES": {
         "target": "Party",
         "cardinality": "one-to-many",
+        "required": true,
+        "min": 1,
         "properties": {
           "role": { "type": "STRING", "ui": { "order": 1, "input": "select", "options": ["plaintiff", "defendant", "appellant", "appellee", "petitioner", "respondent"], "label": "Role", "required": true } }
         }
@@ -95,15 +107,18 @@
     "relationships": {
       "RELATES_TO_DOCTRINE": {
         "target": "Doctrine",
-        "cardinality": "many-to-many"
+        "cardinality": "many-to-many",
+        "required": false
       },
       "RELATES_TO_POLICY": {
         "target": "Policy",
-        "cardinality": "many-to-many"
+        "cardinality": "many-to-many",
+        "required": false
       },
       "RELATES_TO_FACTPATTERN": {
         "target": "FactPattern",
-        "cardinality": "many-to-many"
+        "cardinality": "many-to-many",
+        "required": false
       }
     }
   },
@@ -122,7 +137,9 @@
     "relationships": {
       "PART_OF": {
         "target": "Jurisdiction",
-        "cardinality": "many-to-one"
+        "cardinality": "one-to-one",
+        "required": true,
+        "min": 1
       }
     }
   },
@@ -172,6 +189,8 @@
       "SETS": {
         "target": "Issue",
         "cardinality": "one-to-one",
+        "required": true,
+        "min": 1,
         "properties": {
           "in_favor": { "type": "STRING", "ui": { "order": 1, "input": "select", "options": ["plaintiff", "defendant", "appellant", "appellee", "petitioner", "respondent"], "label": "In Favor", "required": true } }
         }
@@ -179,17 +198,15 @@
       "RESULTS_IN": {
         "target": "Relief",
         "cardinality": "one-to-many",
+        "required": false,
         "properties": {
           "relief_status": { "type": "STRING", "ui": { "order": 1, "input": "select", "options": ["granted", "denied", "partially granted"], "label": "Relief Status", "required": true } }
         }
       },
-      "RELIES_ON_LAW":{
+      "RELIES_ON_LAW": {
         "target": "Law",
-        "cardinality": "many-to-many"
-      },
-      "MODIFIES": {
-        "target": "Ruling",
-        "cardinality": "many-to-many"
+        "cardinality": "many-to-many",
+        "required": false
       }
     }
   },
@@ -240,21 +257,28 @@
       "EVALUATED_IN": {
         "target": "Ruling",
         "cardinality": "many-to-many",
+        "required": true,
+        "min": 1,
+        "inverse_required": true,
+        "inverse_min": 1,
         "properties": {
           "status": { "type": "STRING", "ui": { "order": 1, "input": "select", "options": ["Accepted", "Rejected"], "label": "Status", "required": true } }
         }
       },
       "RELATES_TO_DOCTRINE": {
         "target": "Doctrine",
-        "cardinality": "many-to-many"
+        "cardinality": "many-to-many",
+        "required": false
       },
       "RELATES_TO_POLICY": {
         "target": "Policy",
-        "cardinality": "many-to-many"
+        "cardinality": "many-to-many",
+        "required": false
       },
       "RELATES_TO_FACTPATTERN": {
         "target": "FactPattern",
-        "cardinality": "many-to-many"
+        "cardinality": "many-to-many",
+        "required": false
       }
     }
   },
@@ -262,7 +286,7 @@
     "label": "Relief",
     "case_unique": true,
     "can_create_new": true,
-    "min_per_case": 1,
+    "min_per_case": 0,
     "properties": {
       "relief_upload_code": { "type": "STRING", "ui": { "hidden": true } },
       "relief_id": { "type": "STRING", "ui": { "hidden": true } },
@@ -272,7 +296,9 @@
     "relationships": {
       "IS_TYPE": {
         "target": "ReliefType",
-        "cardinality": "many-to-one"
+        "cardinality": "many-to-one",
+        "required": true,
+        "min": 1
       }
     }
   },
@@ -280,7 +306,7 @@
     "label": "ReliefType",
     "case_unique": false,
     "can_create_new": false,
-    "min_per_case": 1,
+    "min_per_case": 0,
     "properties": {
       "relief_type_upload_code": { "type": "STRING", "ui": { "hidden": true } },
       "relief_type_id": { "type": "STRING", "ui": { "hidden": true } },

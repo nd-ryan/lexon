@@ -197,16 +197,28 @@ def compare_single_case(case_id: str, force: bool = False) -> Optional[dict]:
         summary = result.get("summary", {})
         nodes_summary = summary.get("nodes", {})
         edges_summary = summary.get("edges", {})
+        # New structure: summary has sync, postgres_integrity, neo4j_integrity sections
+        sync_section = summary.get("sync", {})
+        nodes_summary = sync_section.get("nodes", {})
+        edges_summary = sync_section.get("edges", {})
+        
         nodes_diff = nodes_summary.get("only_postgres", 0) + nodes_summary.get("only_neo4j", 0) + nodes_summary.get("differ", 0)
         edges_diff = edges_summary.get("only_postgres", 0) + edges_summary.get("only_neo4j", 0) + edges_summary.get("differ", 0)
         
-        # Get embedding validation results
-        embeddings_validation = summary.get("embeddings", {})
+        # Get Neo4j integrity validation results (what matters for the KG)
+        neo4j_integrity = summary.get("neo4j_integrity", {})
+        embeddings_validation = neo4j_integrity.get("embeddings", {}) or {}
         embeddings_missing = embeddings_validation.get("total_missing", 0)
         
-        # Get required properties validation results
-        required_validation = summary.get("required_properties", {})
-        required_missing = required_validation.get("total_missing", 0)
+        # Count total missing required items from Neo4j integrity (properties + relationships + rel props)
+        neo4j_required_props = neo4j_integrity.get("required_properties", {})
+        neo4j_required_rels = neo4j_integrity.get("required_relationships", {})
+        neo4j_rel_props = neo4j_integrity.get("relationship_properties", {})
+        required_missing = (
+            neo4j_required_props.get("total_missing", 0) +
+            neo4j_required_rels.get("total_missing", 0) +
+            neo4j_rel_props.get("total_missing", 0)
+        )
         
         all_match = result.get("all_match", False)
         needs_completion = result.get("needs_completion", False)

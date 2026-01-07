@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field, create_model, field_validator
 from typing import Dict, Any, List, Optional
 from .crews.case_crew.case_crew_v3 import CaseCrew
 from .tools.io_tools import read_document, fetch_schema_v3
-from app.lib.schema_runtime import prune_ui_schema_for_llm, build_property_models, validate_case_graph, render_spec_text, build_relationship_property_models, get_relationship_label_for_edge, get_all_assigned_relationship_labels
+from app.lib.schema_runtime import prune_ui_schema_for_llm, build_property_models, validate_case_graph, render_spec_text, build_relationship_property_models, get_relationship_label_for_edge, get_all_assigned_relationship_labels, validate_required_relationships
 from app.models.case_graph import CaseGraph
 from app.lib.logging_config import setup_logger
 from app.lib.neo4j_client import neo4j_client
@@ -3019,6 +3019,19 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             logger.warning(f"Phase 10 (Validation): found {len(errors)} errors")
             logger.warning(f"Phase 10 (Validation): first 5 errors: {errors[:5]}")
             logger.info(f"Validation: cleaned output has {len(cleaned.get('nodes', []))} nodes, {len(cleaned.get('edges', []))} edges")
+        
+        # Check for missing required relationships (non-blocking warnings)
+        schema_full = self.state.schema_full
+        if schema_full:
+            rel_warnings = validate_required_relationships(
+                cleaned.get("nodes", []),
+                cleaned.get("edges", []),
+                schema_full
+            )
+            if rel_warnings:
+                logger.warning(f"Phase 10 (Validation): {len(rel_warnings)} required relationship warnings")
+                for w in rel_warnings[:10]:
+                    logger.warning(f"  - {w}")
         
         if not errors:
             try:

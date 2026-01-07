@@ -938,6 +938,138 @@ def _validate_cardinality(
     return errors
 
 
+def validate_required_relationships(
+    nodes: List[Dict[str, Any]],
+    edges: List[Dict[str, Any]],
+    schema: List[Dict[str, Any]]
+) -> List[str]:
+    """Validate that required relationships exist for all nodes.
+    
+    Returns a list of warning messages (not errors) for missing required relationships.
+    These are non-blocking - the extraction can still proceed.
+    
+    Checks both:
+    - Outgoing required relationships (required: true on relationship definition)
+    - Incoming required relationships (inverse_required: true on relationship definition)
+    
+    Args:
+        nodes: List of node dicts (with temp_id, label)
+        edges: List of edge dicts (with from, to, label)
+        schema: Schema list from schema_v3.json
+        
+    Returns:
+        List of warning strings for missing required relationships
+    """
+    warnings: List[str] = []
+    
+    # Build config from schema
+    outgoing_reqs: Dict[str, List[Dict[str, Any]]] = {}  # label -> [{rel, target, min}, ...]
+    incoming_reqs: Dict[str, List[Dict[str, Any]]] = {}  # label -> [{rel, source, min}, ...]
+    
+    for node_def in schema:
+        if not isinstance(node_def, dict):
+            continue
+        source_label = node_def.get("label")
+        if not isinstance(source_label, str):
+            continue
+        
+        relationships = node_def.get("relationships") or {}
+        if not isinstance(relationships, dict):
+            continue
+        
+        for rel_name, rel_def in relationships.items():
+            if not isinstance(rel_def, dict):
+                continue
+            
+            target_label = rel_def.get("target")
+            if not isinstance(target_label, str):
+                continue
+            
+            # Check outgoing required
+            if rel_def.get("required"):
+                min_count = rel_def.get("min", 1)
+                if source_label not in outgoing_reqs:
+                    outgoing_reqs[source_label] = []
+                outgoing_reqs[source_label].append({
+                    "rel": rel_name,
+                    "target": target_label,
+                    "min": min_count
+                })
+            
+            # Check inverse required
+            if rel_def.get("inverse_required"):
+                inverse_min = rel_def.get("inverse_min", 1)
+                if target_label not in incoming_reqs:
+                    incoming_reqs[target_label] = []
+                incoming_reqs[target_label].append({
+                    "rel": rel_name,
+                    "source": source_label,
+                    "min": inverse_min
+                })
+    
+    if not outgoing_reqs and not incoming_reqs:
+        return warnings
+    
+    # Build node lookup
+    nodes_by_label: Dict[str, List[str]] = {}
+    for node in nodes:
+        temp_id = node.get("temp_id")
+        label = node.get("label")
+        if temp_id and label:
+            if label not in nodes_by_label:
+                nodes_by_label[label] = []
+            nodes_by_label[label].append(temp_id)
+    
+    # Count edges
+    outgoing_edges: Dict[str, Dict[str, int]] = {}  # node_id -> {rel_label: count}
+    incoming_edges: Dict[str, Dict[str, int]] = {}  # node_id -> {rel_label: count}
+    
+    for edge in edges:
+        from_id = edge.get("from")
+        to_id = edge.get("to")
+        rel_label = edge.get("label")
+        
+        if from_id and rel_label:
+            if from_id not in outgoing_edges:
+                outgoing_edges[from_id] = {}
+            outgoing_edges[from_id][rel_label] = outgoing_edges[from_id].get(rel_label, 0) + 1
+        
+        if to_id and rel_label:
+            if to_id not in incoming_edges:
+                incoming_edges[to_id] = {}
+            incoming_edges[to_id][rel_label] = incoming_edges[to_id].get(rel_label, 0) + 1
+    
+    # Check outgoing requirements
+    for source_label, reqs in outgoing_reqs.items():
+        node_ids = nodes_by_label.get(source_label, [])
+        for node_id in node_ids:
+            for req in reqs:
+                rel_name = req["rel"]
+                min_count = req["min"]
+                actual = outgoing_edges.get(node_id, {}).get(rel_name, 0)
+                if actual < min_count:
+                    warnings.append(
+                        f"Missing required relationship: {source_label} '{node_id}' needs "
+                        f"{min_count} outgoing {rel_name} edge(s), has {actual}"
+                    )
+    
+    # Check incoming requirements
+    for target_label, reqs in incoming_reqs.items():
+        node_ids = nodes_by_label.get(target_label, [])
+        for node_id in node_ids:
+            for req in reqs:
+                rel_name = req["rel"]
+                min_count = req["min"]
+                actual = incoming_edges.get(node_id, {}).get(rel_name, 0)
+                if actual < min_count:
+                    warnings.append(
+                        f"Missing required relationship: {target_label} '{node_id}' needs "
+                        f"{min_count} incoming {rel_name} edge(s), has {actual}"
+                    )
+    
+    return warnings
+
+
 def render_spec_text(spec: Dict[str, Any]) -> str:
     """Render a compact, LLM-friendly text for inclusion in prompts.
 

@@ -36,34 +36,67 @@ interface EmbeddingMissing {
   property: string
 }
 
-interface ComparisonSummary {
-  nodes: {
-    total_postgres: number
-    total_neo4j: number
-    match: number
-    differ: number
-    only_postgres: number
-    only_neo4j: number
-  }
-  edges: {
-    total_postgres: number
-    total_neo4j: number
-    match: number
-    differ: number
-    only_postgres: number
-    only_neo4j: number
-  }
-  catalog_nodes_skipped?: {
-    total: number
-    by_label: Record<string, number>
-    labels: string[]
-  }
+interface MissingRelationship {
+  node_id: string
+  label: string
+  relationship: string
+  direction: 'outgoing' | 'incoming'
+  expected_min: number
+  actual_count: number
+}
+
+interface MissingRelationshipProperty {
+  edge_id: string
+  relationship: string
+  property: string
+  from_id: string
+  to_id: string
+}
+
+interface CardinalityViolation {
+  source_id: string
+  source_label: string
+  relationship: string
+  issue: 'source_multiple' | 'target_multiple'
+  details: string
+}
+
+interface NodeStats {
+  total_postgres: number
+  total_neo4j: number
+  match: number
+  differ: number
+  only_postgres: number
+  only_neo4j: number
+}
+
+interface IntegrityChecks {
+  all_valid: boolean
   required_properties?: {
     total_expected: number
     total_present: number
     total_missing: number
     all_present: boolean
-    missing: EmbeddingMissing[]  // Same structure as embeddings missing
+    missing: EmbeddingMissing[]
+  }
+  required_relationships?: {
+    total_expected: number
+    total_present: number
+    total_missing: number
+    all_present: boolean
+    missing: MissingRelationship[]
+  }
+  relationship_properties?: {
+    total_expected: number
+    total_present: number
+    total_missing: number
+    all_present: boolean
+    missing: MissingRelationshipProperty[]
+  }
+  cardinality?: {
+    total_violations: number
+    all_valid: boolean
+    violations: CardinalityViolation[]
   }
   embeddings?: {
     total_expected: number
@@ -71,7 +104,25 @@ interface ComparisonSummary {
     total_missing: number
     all_present: boolean
     missing: EmbeddingMissing[]
+  } | null
+}
+
+interface ComparisonSummary {
+  // Sync status (Postgres ↔ Neo4j)
+  sync: {
+    all_synced: boolean
+    nodes: NodeStats
+    edges: NodeStats
+    catalog_nodes_skipped?: {
+      total: number
+      by_label: Record<string, number>
+      labels: string[]
+    }
   }
+  // Postgres integrity (source data - what admin edits)
+  postgres_integrity: IntegrityChecks
+  // Neo4j integrity (knowledge graph - the goal)
+  neo4j_integrity: IntegrityChecks
 }
 
 type ComparisonSource = 'fresh' | 'cached' | null
@@ -224,130 +275,251 @@ function ComparisonItem({
   )
 }
 
-function SummaryStats({ summary }: { summary: ComparisonSummary }) {
-  const catalogSkipped = summary.catalog_nodes_skipped
+// Helper component for integrity check details
+function IntegritySection({ 
+  title, 
+  integrity, 
+  colorScheme = 'orange',
+  showEmbeddings = false
+}: { 
+  title: string
+  integrity: IntegrityChecks
+  colorScheme?: 'orange' | 'purple'
+  showEmbeddings?: boolean
+}) {
+  const colors = colorScheme === 'orange' 
+    ? { bg: 'bg-orange-50', border: 'border-orange-200', text: 'text-orange-800', accent: 'text-orange-600', item: 'bg-orange-100' }
+    : { bg: 'bg-purple-50', border: 'border-purple-200', text: 'text-purple-800', accent: 'text-purple-600', item: 'bg-purple-100' }
+  
+  const isValid = integrity.all_valid
+
+  return (
+    <div className={`border rounded p-3 ${isValid ? 'bg-green-50 border-green-200' : `${colors.bg} ${colors.border}`}`}>
+      <div className="font-medium text-sm mb-3 flex items-center gap-2">
+        <span className={isValid ? 'text-green-600' : colors.accent}>
+          {isValid ? '✓' : '⚠️'}
+        </span>
+        <span className={isValid ? 'text-green-800' : colors.text}>
+          {title} {!isValid && '(Issues Found)'}
+        </span>
+      </div>
+      
+      <div className="space-y-3 text-xs">
+        {/* Required Properties */}
+        {integrity.required_properties && (
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <span className={integrity.required_properties.all_present ? 'text-green-600' : colors.accent}>
+                {integrity.required_properties.all_present ? '✓' : '○'}
+              </span>
+              <span>Required Properties: {integrity.required_properties.total_present}/{integrity.required_properties.total_expected}</span>
+            </div>
+            {integrity.required_properties.missing.length > 0 && (
+              <div className="ml-5 max-h-24 overflow-y-auto space-y-1">
+                {integrity.required_properties.missing.map((m, idx) => (
+                  <div key={idx} className={`${colors.item} ${colors.text} px-2 py-0.5 rounded text-[11px]`}>
+                    {m.label}.{m.property}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Required Relationships */}
+        {integrity.required_relationships && (
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <span className={integrity.required_relationships.all_present ? 'text-green-600' : colors.accent}>
+                {integrity.required_relationships.all_present ? '✓' : '○'}
+              </span>
+              <span>Required Relationships: {integrity.required_relationships.total_present}/{integrity.required_relationships.total_expected}</span>
+            </div>
+            {integrity.required_relationships.missing.length > 0 && (
+              <div className="ml-5 max-h-24 overflow-y-auto space-y-1">
+                {integrity.required_relationships.missing.map((m, idx) => (
+                  <div key={idx} className={`${colors.item} ${colors.text} px-2 py-0.5 rounded text-[11px]`}>
+                    {m.label} {m.direction === 'outgoing' ? '→' : '←'} {m.relationship}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Relationship Properties */}
+        {integrity.relationship_properties && (
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <span className={integrity.relationship_properties.all_present ? 'text-green-600' : colors.accent}>
+                {integrity.relationship_properties.all_present ? '✓' : '○'}
+              </span>
+              <span>Relationship Properties: {integrity.relationship_properties.total_present}/{integrity.relationship_properties.total_expected}</span>
+            </div>
+            {integrity.relationship_properties.missing.length > 0 && (
+              <div className="ml-5 max-h-24 overflow-y-auto space-y-1">
+                {integrity.relationship_properties.missing.map((m, idx) => (
+                  <div key={idx} className={`${colors.item} ${colors.text} px-2 py-0.5 rounded text-[11px]`}>
+                    {m.relationship}.{m.property}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Cardinality */}
+        {integrity.cardinality && (
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <span className={integrity.cardinality.all_valid ? 'text-green-600' : 'text-red-600'}>
+                {integrity.cardinality.all_valid ? '✓' : '○'}
+              </span>
+              <span>Cardinality: {integrity.cardinality.all_valid ? 'Valid' : `${integrity.cardinality.total_violations} violation(s)`}</span>
+            </div>
+            {integrity.cardinality.violations.length > 0 && (
+              <div className="ml-5 max-h-24 overflow-y-auto space-y-1">
+                {integrity.cardinality.violations.map((v, idx) => (
+                  <div key={idx} className="bg-red-100 text-red-800 px-2 py-0.5 rounded text-[11px]">
+                    {v.source_label}→{v.relationship}: {v.details}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Embeddings (Neo4j only) */}
+        {showEmbeddings && integrity.embeddings && (
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <span className={integrity.embeddings.all_present ? 'text-green-600' : 'text-amber-600'}>
+                {integrity.embeddings.all_present ? '✓' : '○'}
+              </span>
+              <span>Embeddings: {integrity.embeddings.total_present}/{integrity.embeddings.total_expected}</span>
+            </div>
+            {integrity.embeddings.missing.length > 0 && (
+              <div className="ml-5 max-h-24 overflow-y-auto space-y-1">
+                {integrity.embeddings.missing.map((m, idx) => (
+                  <div key={idx} className="bg-amber-100 text-amber-800 px-2 py-0.5 rounded text-[11px]">
+                    {m.label}.{m.property}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// Migrate old summary format to new three-part structure
+function migrateSummary(summary: any): ComparisonSummary {
+  // If already has new structure, return as-is
+  if (summary.sync && summary.postgres_integrity && summary.neo4j_integrity) {
+    return summary as ComparisonSummary
+  }
+  
+  // Migrate old flat structure to new nested structure
+  const nodes = summary.nodes || { total_postgres: 0, total_neo4j: 0, match: 0, differ: 0, only_postgres: 0, only_neo4j: 0 }
+  const edges = summary.edges || { total_postgres: 0, total_neo4j: 0, match: 0, differ: 0, only_postgres: 0, only_neo4j: 0 }
+  
+  const all_synced = nodes.differ === 0 && nodes.only_postgres === 0 && nodes.only_neo4j === 0 &&
+                     edges.differ === 0 && edges.only_postgres === 0 && edges.only_neo4j === 0
+  
+  const integrityChecks: IntegrityChecks = {
+    all_valid: (summary.required_properties?.all_present ?? true) &&
+               (summary.required_relationships?.all_present ?? true) &&
+               (summary.relationship_properties?.all_present ?? true) &&
+               (summary.cardinality?.all_valid ?? true),
+    required_properties: summary.required_properties,
+    required_relationships: summary.required_relationships,
+    relationship_properties: summary.relationship_properties,
+    cardinality: summary.cardinality,
+    embeddings: summary.embeddings,
+  }
+  
+  return {
+    sync: {
+      all_synced,
+      nodes,
+      edges,
+      catalog_nodes_skipped: summary.catalog_nodes_skipped,
+    },
+    postgres_integrity: integrityChecks,
+    neo4j_integrity: integrityChecks,
+  }
+}
+
+function SummaryStats({ summary: rawSummary }: { summary: ComparisonSummary }) {
+  const summary = migrateSummary(rawSummary)
+  const { sync, postgres_integrity, neo4j_integrity } = summary
+  const catalogSkipped = sync.catalog_nodes_skipped
   
   return (
     <div className="space-y-4 mb-4">
-      <div className="grid grid-cols-2 gap-4">
-        <div className="border rounded p-3">
-          <div className="font-medium text-sm mb-2">Nodes</div>
-          <div className="grid grid-cols-2 gap-2 text-xs">
-            <div>Postgres: {summary.nodes.total_postgres}</div>
-            <div>Neo4j: {summary.nodes.total_neo4j}</div>
-            <div className="text-green-600">Match: {summary.nodes.match}</div>
-            <div className="text-amber-600">Differ: {summary.nodes.differ}</div>
-            <div className="text-blue-600">Only PG: {summary.nodes.only_postgres}</div>
-            <div className="text-purple-600">Only Neo4j: {summary.nodes.only_neo4j}</div>
-          </div>
+      {/* SYNC STATUS */}
+      <div className={`border rounded p-3 ${sync.all_synced ? 'bg-green-50 border-green-200' : 'bg-amber-50 border-amber-200'}`}>
+        <div className="font-medium text-sm mb-3 flex items-center gap-2">
+          <span className={sync.all_synced ? 'text-green-600' : 'text-amber-600'}>
+            {sync.all_synced ? '✓' : '⚠'}
+          </span>
+          <span className={sync.all_synced ? 'text-green-800' : 'text-amber-800'}>
+            Sync Status (Postgres ↔ Neo4j) {!sync.all_synced && '- Re-submit to KG'}
+          </span>
         </div>
-        <div className="border rounded p-3">
-          <div className="font-medium text-sm mb-2">Edges</div>
-          <div className="grid grid-cols-2 gap-2 text-xs">
-            <div>Postgres: {summary.edges.total_postgres}</div>
-            <div>Neo4j: {summary.edges.total_neo4j}</div>
-            <div className="text-green-600">Match: {summary.edges.match}</div>
-            <div className="text-amber-600">Differ: {summary.edges.differ}</div>
-            <div className="text-blue-600">Only PG: {summary.edges.only_postgres}</div>
-            <div className="text-purple-600">Only Neo4j: {summary.edges.only_neo4j}</div>
-          </div>
-        </div>
-      </div>
-      
-      {/* Catalog nodes info */}
-      {catalogSkipped && catalogSkipped.total > 0 && (
-        <div className="border rounded p-3 bg-gray-50">
-          <div className="font-medium text-sm mb-2 text-gray-700">
-            Catalog Nodes (skipped from comparison)
-          </div>
-          <div className="text-xs text-gray-600">
-            <p className="mb-1">
-              {catalogSkipped.total} catalog node{catalogSkipped.total !== 1 ? 's' : ''} exist only in Neo4j by design 
-              (shared/immutable entities not stored in Postgres).
-            </p>
-            <div className="flex flex-wrap gap-2 mt-2">
-              {Object.entries(catalogSkipped.by_label).map(([label, count]) => (
-                <span key={label} className="px-2 py-0.5 bg-gray-200 rounded text-gray-700">
-                  {label}: {count}
-                </span>
-              ))}
+        
+        <div className="grid grid-cols-2 gap-4">
+          <div className="text-xs">
+            <div className="font-medium mb-1">Nodes</div>
+            <div className="grid grid-cols-2 gap-1">
+              <div>Postgres: {sync.nodes.total_postgres}</div>
+              <div>Neo4j: {sync.nodes.total_neo4j}</div>
+              <div className="text-green-600">Match: {sync.nodes.match}</div>
+              <div className={sync.nodes.differ > 0 ? 'text-amber-600 font-medium' : ''}>Differ: {sync.nodes.differ}</div>
+              <div className={sync.nodes.only_postgres > 0 ? 'text-blue-600' : ''}>Only PG: {sync.nodes.only_postgres}</div>
+              <div className={sync.nodes.only_neo4j > 0 ? 'text-purple-600' : ''}>Only Neo4j: {sync.nodes.only_neo4j}</div>
             </div>
-          </div>
-        </div>
-      )}
-      
-      {/* Required properties validation */}
-      {summary.required_properties && (
-        <div className={`border rounded p-3 ${summary.required_properties.all_present ? 'bg-green-50 border-green-200' : 'bg-orange-50 border-orange-200'}`}>
-          <div className="font-medium text-sm mb-2 flex items-center gap-2">
-            <span className={summary.required_properties.all_present ? 'text-green-600' : 'text-orange-600'}>
-              {summary.required_properties.all_present ? '✓' : '📝'}
-            </span>
-            <span className={summary.required_properties.all_present ? 'text-green-800' : 'text-orange-800'}>
-              Required Properties {!summary.required_properties.all_present && '(Needs Manual Completion)'}
-            </span>
           </div>
           <div className="text-xs">
-            <div className="grid grid-cols-3 gap-2 mb-2">
-              <div>Expected: {summary.required_properties.total_expected}</div>
-              <div className="text-green-600">Present: {summary.required_properties.total_present}</div>
-              <div className={summary.required_properties.total_missing > 0 ? 'text-orange-600 font-medium' : ''}>
-                Missing: {summary.required_properties.total_missing}
-              </div>
+            <div className="font-medium mb-1">Edges</div>
+            <div className="grid grid-cols-2 gap-1">
+              <div>Postgres: {sync.edges.total_postgres}</div>
+              <div>Neo4j: {sync.edges.total_neo4j}</div>
+              <div className="text-green-600">Match: {sync.edges.match}</div>
+              <div className={sync.edges.differ > 0 ? 'text-amber-600 font-medium' : ''}>Differ: {sync.edges.differ}</div>
+              <div className={sync.edges.only_postgres > 0 ? 'text-blue-600' : ''}>Only PG: {sync.edges.only_postgres}</div>
+              <div className={sync.edges.only_neo4j > 0 ? 'text-purple-600' : ''}>Only Neo4j: {sync.edges.only_neo4j}</div>
             </div>
-            {summary.required_properties.missing.length > 0 && (
-              <div className="mt-3 border-t border-orange-200 pt-3">
-                <div className="font-medium text-orange-700 mb-2">Missing required fields:</div>
-                <div className="max-h-64 overflow-y-auto space-y-1">
-                  {summary.required_properties.missing.map((m, idx) => (
-                    <div key={idx} className="flex items-center gap-2 text-orange-800 bg-orange-100 px-2 py-1 rounded">
-                      <span className="font-medium">{m.label}</span>
-                      <span className="text-orange-500">→</span>
-                      <span className="font-mono">{m.property}</span>
-                      <span className="text-orange-400 text-[10px] ml-auto">({m.node_id.substring(0, 12)}...)</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
         </div>
-      )}
 
-      {/* Embeddings validation */}
-      {summary.embeddings && (
-        <div className={`border rounded p-3 ${summary.embeddings.all_present ? 'bg-green-50 border-green-200' : 'bg-amber-50 border-amber-200'}`}>
-          <div className="font-medium text-sm mb-2 flex items-center gap-2">
-            <span className={summary.embeddings.all_present ? 'text-green-600' : 'text-amber-600'}>
-              {summary.embeddings.all_present ? '✓' : '⚠'}
-            </span>
-            <span className={summary.embeddings.all_present ? 'text-green-800' : 'text-amber-800'}>
-              Neo4j Embeddings
-            </span>
+        {/* Catalog nodes info */}
+        {catalogSkipped && catalogSkipped.total > 0 && (
+          <div className="mt-3 pt-3 border-t border-gray-200 text-xs text-gray-600">
+            <span className="font-medium">Catalog nodes skipped:</span>{' '}
+            {Object.entries(catalogSkipped.by_label).map(([label, count]) => (
+              <span key={label} className="ml-2">{label}: {count}</span>
+            ))}
           </div>
-          <div className="text-xs">
-            <div className="grid grid-cols-3 gap-2 mb-2">
-              <div>Expected: {summary.embeddings.total_expected}</div>
-              <div className="text-green-600">Present: {summary.embeddings.total_present}</div>
-              <div className={summary.embeddings.total_missing > 0 ? 'text-amber-600' : ''}>
-                Missing: {summary.embeddings.total_missing}
-              </div>
-            </div>
-            {summary.embeddings.missing.length > 0 && (
-              <div className="mt-2">
-                <div className="font-medium text-amber-700 mb-1">Missing embeddings:</div>
-                <div className="max-h-32 overflow-y-auto">
-                  {summary.embeddings.missing.map((m, idx) => (
-                    <div key={idx} className="text-amber-800 py-0.5">
-                      {m.label}.{m.property} (node: {m.node_id.substring(0, 8)}...)
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+        )}
+      </div>
+
+      {/* POSTGRES INTEGRITY */}
+      <IntegritySection
+        title="Postgres Integrity (Source Data)"
+        integrity={postgres_integrity}
+        colorScheme="orange"
+      />
+
+      {/* NEO4J INTEGRITY */}
+      <IntegritySection
+        title="Neo4j Integrity (Knowledge Graph)"
+        integrity={neo4j_integrity}
+        colorScheme="purple"
+        showEmbeddings={true}
+      />
     </div>
   )
 }

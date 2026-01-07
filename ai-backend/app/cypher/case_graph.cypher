@@ -11,6 +11,8 @@ CALL (c) {
   CALL (p) {
     WITH p
     OPTIONAL MATCH (p)-[inv:INVOLVES]->(party:Party)
+    WITH inv, party
+    WHERE party IS NOT NULL
     RETURN collect(DISTINCT {
       role: inv.role,
       party: apoc.map.removeKeys(properties(party), [k IN keys(party) WHERE k ENDS WITH "_embedding"])

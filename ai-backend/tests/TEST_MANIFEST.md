@@ -4,7 +4,7 @@
 
 This document provides a centralized reference for all backend tests, organized by test file and category.
 
-**Total Tests:** 135  
+**Total Tests:** 151  
 **Test Framework:** pytest with async support  
 **Coverage Areas:** Case extraction flow (V3), shared nodes management, preset node behavior, graph event logging, Neo4j uploader helpers, optional Neo4j/Search integration checks, API security  
 **Pass Rate:** 100% ✅
@@ -311,7 +311,47 @@ Tests mapping of temporary node IDs to permanent Neo4j UUIDs.
 
 ---
 
-## 11. Integration Tests (optional / external dependencies)
+## 11. `test_external_api_isolation.py` - External API Security (16 tests)
+
+**Purpose:** Validates security isolation of the external API from internal routes.
+
+**What it covers:**
+
+#### `TestExternalCannotAccessInternal` (2 tests)
+- **test_external_key_rejected_on_internal_route** - External API key rejected on /api/ai/* routes
+- **test_external_key_rejected_on_internal_v1_route** - External API key rejected on /api/v1/* routes
+
+#### `TestInternalCannotAccessExternal` (1 test)
+- **test_internal_key_rejected_on_external_route** - Internal FASTAPI_API_KEY rejected on /external/v1/*
+
+#### `TestEdgeSecretRequired` (2 tests)
+- **test_missing_edge_secret_rejected** - Requests without X-Lexon-Edge header rejected
+- **test_wrong_edge_secret_rejected** - Requests with wrong edge secret rejected
+
+#### `TestHealthAndVersionNoAuth` (2 tests)
+- **test_health_no_auth_required** - /health endpoint works without auth
+- **test_version_no_auth_required** - /version endpoint works without auth
+
+#### `TestOpenAPISpecRequiresAuth` (3 tests) ✨NEW
+- **test_openapi_without_auth_rejected** - /openapi.json requires authentication
+- **test_openapi_with_wrong_key_rejected** - /openapi.json rejects invalid API key
+- **test_openapi_with_valid_auth_returns_spec** - /openapi.json returns valid spec with auth
+
+#### `TestMultiKeyRotation` (2 tests)
+- **test_first_key_works** - First key in EXTERNAL_API_KEYS accepted
+- **test_second_key_works** - Second key in EXTERNAL_API_KEYS accepted
+
+#### `TestRequestValidation` (3 tests)
+- **test_extra_fields_rejected** - Unknown fields in request body rejected
+- **test_query_too_long_rejected** - Query > 2000 chars rejected
+- **test_empty_query_rejected** - Empty query rejected
+
+#### `TestQueryLogging` (1 test)
+- **test_query_content_not_in_logs** - Sensitive query content never appears in logs
+
+---
+
+## 12. Integration Tests (optional / external dependencies)
 
 These are marked with `@pytest.mark.integration` and are **skipped** unless required environment variables are present.
 

@@ -6,11 +6,32 @@ This module provides reusable logic for comparing case data between Postgres and
 
 ## Purpose
 
-The comparison module is designed for:
+The comparison module provides **three-part validation**:
 
-1. **Admin validation**: On-demand comparison from the Neo4j case view page
-2. **Upload validation**: Automatic validation during KG upload (future use)
-3. **Data integrity checks**: Verifying sync between data stores
+1. **Sync Validation**: Ensures Neo4j correctly mirrors Postgres data
+2. **Postgres Integrity**: Validates source data completeness (what admin can edit)
+3. **Neo4j Integrity**: Validates knowledge graph completeness (the actual goal)
+
+This design provides defense in depth - even if sync appears to work, the Neo4j integrity check confirms the KG actually has valid data.
+
+---
+
+## Three-Part Validation Architecture
+
+| Validation | Question | Admin Action |
+|------------|----------|--------------|
+| **Sync** | Does Neo4j match Postgres? | Re-submit to KG |
+| **Postgres Integrity** | Is source data complete? | Fix in case editor |
+| **Neo4j Integrity** | Is the KG complete & valid? | Confirms fix worked |
+
+### Scenarios
+
+| Postgres | Sync | Neo4j | What it means | Admin action |
+|----------|------|-------|---------------|--------------|
+| Valid | Synced | Valid | Perfect! | None |
+| Invalid | Synced | Invalid | Source issue | Fix in editor, re-submit |
+| Valid | Out of sync | Invalid | Sync failed | Re-submit to KG |
+| Invalid | Out of sync | Invalid | Both issues | Fix in editor, re-submit |
 
 ---
 
@@ -135,6 +156,78 @@ The comparison validates that all required properties (as defined in `schema_v3.
 
 **Use case:** The AI extraction process may leave some required properties empty (intentionally, to avoid hallucination). The comparison flags these cases as "needs completion" so admins can manually fill in the missing data.
 
+### Required relationships validation
+
+The comparison validates that all required relationships (as defined in `schema_v3.json`) exist. This identifies nodes that are missing expected connections.
+
+**Schema fields for relationships:**
+
+| Field | Meaning |
+|-------|---------|
+| `required` | Source node must have at least one outgoing relationship of this type |
+| `min` | Minimum count of outgoing edges required (default: 1) |
+| `inverse_required` | Target node must have at least one incoming relationship of this type |
+| `inverse_min` | Minimum count of incoming edges required on target (default: 1) |
+
+**Example from schema:**
+
+```json
+"Argument": {
+  "relationships": {
+    "EVALUATED_IN": {
+      "target": "Ruling",
+      "cardinality": "many-to-many",
+      "required": true,           // Argument must have outgoing EVALUATED_IN
+      "min": 1,
+      "inverse_required": true,   // Ruling must have incoming EVALUATED_IN
+      "inverse_min": 1
+    }
+  }
+}
+```
+
+**How it works:**
+1. Parse schema for relationships with `required: true` (outgoing) and `inverse_required: true` (incoming)
+2. For each node, count its outgoing/incoming edges of each required type
+3. Flag if count < `min` or count < `inverse_min`
+
+### Relationship properties validation
+
+The comparison validates that required properties on relationships have values.
+
+**How it works:**
+1. Schema defines relationship properties with `ui.required: true`
+2. For each edge with required properties, check they have non-empty values
+3. Missing relationship properties are reported in `summary.relationship_properties`
+
+**Example relationship with required property:**
+
+```json
+"INVOLVES": {
+  "target": "Party",
+  "properties": {
+    "role": { "type": "STRING", "ui": { "required": true, ... } }
+  }
+}
+```
+
+### Cardinality validation
+
+The comparison validates that relationship cardinality constraints are respected.
+
+**Cardinality types:**
+
+| Type | Source constraint | Target constraint |
+|------|------------------|-------------------|
+| `one-to-one` | At most 1 outgoing edge | Each target referenced at most once |
+| `one-to-many` | No limit | Each target referenced at most once |
+| `many-to-one` | At most 1 outgoing edge | No limit |
+| `many-to-many` | No limit | No limit |
+
+**Violations reported:**
+- `source_multiple`: Source has more outgoing edges than allowed
+- `target_multiple`: Target referenced by more sources than allowed
+
 ---
 
 ## Comparison statuses
@@ -158,62 +251,104 @@ The comparison validates that all required properties (as defined in `schema_v3.
   "all_match": false,
   "needs_completion": true,
   "summary": {
-    "nodes": {
-      "total_postgres": 15,
-      "total_neo4j": 15,
-      "match": 14,
-      "differ": 1,
-      "only_postgres": 0,
-      "only_neo4j": 0
-    },
-    "edges": {
-      "total_postgres": 20,
-      "total_neo4j": 20,
-      "match": 18,
-      "differ": 2,
-      "only_postgres": 0,
-      "only_neo4j": 0
-    },
-    "catalog_nodes_skipped": {
-      "total": 4,
-      "by_label": {
-        "Domain": 1,
-        "Forum": 1,
-        "Jurisdiction": 1,
-        "ReliefType": 1
+    "sync": {
+      "all_synced": true,
+      "nodes": {
+        "total_postgres": 15,
+        "total_neo4j": 15,
+        "match": 15,
+        "differ": 0,
+        "only_postgres": 0,
+        "only_neo4j": 0
       },
-      "labels": ["Domain", "Forum", "Jurisdiction", "ReliefType"]
+      "edges": {
+        "total_postgres": 20,
+        "total_neo4j": 20,
+        "match": 20,
+        "differ": 0,
+        "only_postgres": 0,
+        "only_neo4j": 0
+      },
+      "catalog_nodes_skipped": {
+        "total": 4,
+        "by_label": { "Domain": 1, "Forum": 1, "Jurisdiction": 1, "ReliefType": 1 },
+        "labels": ["Domain", "Forum", "Jurisdiction", "ReliefType"]
+      }
     },
-    "required_properties": {
-      "total_expected": 45,
-      "total_present": 43,
-      "total_missing": 2,
-      "all_present": false,
-      "missing": [
-        {
-          "node_id": "ruling-123",
-          "label": "Ruling",
-          "property": "ratio"
-        },
-        {
-          "node_id": "argument-456",
-          "label": "Argument",
-          "property": "disposition_text"
-        }
-      ]
+    "postgres_integrity": {
+      "all_valid": false,
+      "required_properties": {
+        "total_expected": 45,
+        "total_present": 43,
+        "total_missing": 2,
+        "all_present": false,
+        "missing": [
+          { "node_id": "ruling-123", "label": "Ruling", "property": "ratio" }
+        ]
+      },
+      "required_relationships": {
+        "total_expected": 10,
+        "total_present": 9,
+        "total_missing": 1,
+        "all_present": false,
+        "missing": [
+          { "node_id": "ruling-789", "label": "Ruling", "relationship": "SETS", "direction": "outgoing", "expected_min": 1, "actual_count": 0 }
+        ]
+      },
+      "relationship_properties": {
+        "total_expected": 5,
+        "total_present": 5,
+        "total_missing": 0,
+        "all_present": true,
+        "missing": []
+      },
+      "cardinality": {
+        "total_violations": 0,
+        "all_valid": true,
+        "violations": []
+      }
     },
-    "embeddings": {
-      "total_expected": 12,
-      "total_present": 11,
-      "total_missing": 1,
-      "all_present": false,
-      "missing": [
-        {
-          "node_id": "ruling-123",
-          "label": "Ruling",
-          "property": "ratio"
-        }
-      ]
+    "neo4j_integrity": {
+      "all_valid": false,
+      "required_properties": {
+        "total_expected": 45,
+        "total_present": 43,
+        "total_missing": 2,
+        "all_present": false,
+        "missing": [
+          { "node_id": "ruling-123", "label": "Ruling", "property": "ratio" }
+        ]
+      },
+      "required_relationships": {
+        "total_expected": 10,
+        "total_present": 9,
+        "total_missing": 1,
+        "all_present": false,
+        "missing": [
+          { "node_id": "ruling-789", "label": "Ruling", "relationship": "SETS", "direction": "outgoing", "expected_min": 1, "actual_count": 0 }
+        ]
+      },
+      "relationship_properties": {
+        "total_expected": 5,
+        "total_present": 5,
+        "total_missing": 0,
+        "all_present": true,
+        "missing": []
+      },
+      "cardinality": {
+        "total_violations": 0,
+        "all_valid": true,
+        "violations": []
+      },
+      "embeddings": {
+        "total_expected": 12,
+        "total_present": 11,
+        "total_missing": 1,
+        "all_present": false,
+        "missing": [
+          { "node_id": "ruling-123", "label": "Ruling", "property": "ratio" }
+        ]
+      }
     }
   },
   "node_comparisons": [
@@ -277,6 +412,26 @@ The comparison validates that all required properties (as defined in `schema_v3.
 - Validates that all required properties have non-empty values
 - Returns summary with missing required properties list
 - Used to identify cases that need manual completion
+
+**`get_required_relationships_config(schema=None)`**
+- Returns config for required relationships: `{outgoing: {...}, incoming: {...}}`
+- Parses `required`, `min`, `inverse_required`, `inverse_min` from schema
+- Used to identify nodes missing required connections
+
+**`check_missing_required_relationships(nodes, edges, schema=None)`**
+- Validates that required relationships exist for all nodes
+- Checks both outgoing (`required: true`) and incoming (`inverse_required: true`)
+- Returns summary with missing relationships list
+
+**`check_relationship_properties(edges, nodes, schema=None)`**
+- Validates that required properties on relationships have values
+- Parses relationship properties with `ui.required: true` from schema
+- Returns summary with missing relationship properties list
+
+**`check_cardinality_violations(nodes, edges, schema=None)`**
+- Validates cardinality constraints on relationships
+- Checks one-to-one, one-to-many, many-to-one constraints
+- Returns summary with violation details
 
 **`get_embedding_config(schema=None)`**
 - Returns dict of `{label: [prop_names...]}` for properties that should have embeddings
@@ -451,13 +606,19 @@ Content-Type: application/json
 
 ## Notes
 
+- **Three-part validation**: The comparison provides sync check, Postgres integrity, AND Neo4j integrity (defense in depth)
 - **Performance**: Comparison is O(n) where n = total nodes + edges
 - **Embeddings excluded from property comparison**: Large embedding arrays are automatically excluded from property diffs
 - **Embedding validation**: Checks that Neo4j has embedding values (without returning the values)
 - **Required properties validation**: Checks that all required properties have non-empty values (identifies incomplete extractions)
+- **Required relationships validation**: Checks that required relationships exist (schema fields: `required`, `min`, `inverse_required`, `inverse_min`)
+- **Relationship properties validation**: Checks that required properties on relationships have values
+- **Cardinality validation**: Checks that relationship cardinality constraints (one-to-one, one-to-many, etc.) are respected
 - **String normalization**: Empty strings are treated as null for comparison
 - **Type normalization**: Neo4j date/time objects are converted to ISO strings to match Postgres format
 - **Catalog nodes**: Automatically derived from schema and excluded from comparison (reported separately)
 - **Order-independent**: Node/edge order doesn't affect comparison results
-- **Needs completion status**: Cases that sync correctly but have missing required properties show "📝 Needs completion" instead of "⚠ Issues"
+- **Needs completion status**: Cases where Neo4j integrity has issues show "📝 Needs completion"
+- **Extraction flow warnings**: During extraction (Phase 10), missing required relationships are logged as non-blocking warnings
+- **Neo4j integrity as source of truth**: The `needs_completion` flag is based on Neo4j integrity, not Postgres - confirming the KG actually has valid data
 

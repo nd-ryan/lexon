@@ -146,19 +146,6 @@ export default function BulkUploadPage() {
     }
   }
 
-  const retryEmbeddings = async (index: number) => {
-    const caseStatus = caseStatuses[index]
-    if (!caseStatus.caseId) return
-
-    updateCaseStatus(index, {
-      currentMessage: 'Retrying embedding generation...',
-      embeddingsComplete: undefined,
-      missingEmbeddingsCount: undefined
-    })
-
-    await processKGUpload(index, caseStatus.caseId)
-  }
-
   const processSingleCase = async (index: number): Promise<boolean> => {
     const file = files[index]
     
@@ -372,17 +359,7 @@ export default function BulkUploadPage() {
                       <span className="text-sm text-green-600 whitespace-nowrap">✅ Complete</span>
                     )}
                     {caseStatus.status === 'completed' && caseStatus.embeddingsComplete === false && (
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm text-amber-600 whitespace-nowrap">⚠️ Missing embeddings</span>
-                        {!processing && (
-                          <button
-                            onClick={() => retryEmbeddings(idx)}
-                            className="text-xs bg-amber-100 hover:bg-amber-200 text-amber-800 px-2 py-1 rounded"
-                          >
-                            Retry
-                          </button>
-                        )}
-                      </div>
+                      <span className="text-sm text-amber-600 whitespace-nowrap">⚠️ Missing embeddings</span>
                     )}
                     {caseStatus.status === 'failed' && (
                       <span className="text-sm text-red-600 whitespace-nowrap">❌ Failed</span>

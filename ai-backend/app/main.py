@@ -1,5 +1,8 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 from app.routes.ai import router as ai_router, streaming_router
 from app.routes.cases import router as cases_router
 from app.routes.kg import router as kg_router
@@ -10,6 +13,7 @@ from app.routes.comparisons import router as comparisons_router
 from app.routes.query import router as query_router
 from app.routes.chat import router as chat_router
 from app.routes.eval import router as eval_router
+from app.routes.external import external_app, limiter
 from app.lib.logging_config import configure_root_logging, setup_logger, setup_clean_file_logging
 from app.lib.db import engine
 from app.lib.schema import ensure_all_tables
@@ -24,6 +28,11 @@ warnings.filterwarnings("ignore", message=".*PydanticDeprecatedSince.*")
 warnings.filterwarnings("ignore", message=".*Using extra keyword arguments.*")
 
 load_dotenv()
+
+# Environment detection for docs visibility
+# In production, internal docs are disabled to prevent schema enumeration
+ENV = os.getenv("ENV", "development").lower()
+IS_PRODUCTION = ENV == "production"
 
 # Set up logging with proper real-time output and clean file logging
 configure_root_logging()
@@ -47,7 +56,20 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown (optional)
 
-app = FastAPI(title="CrewAI Backend", version="1.0.0", lifespan=lifespan)
+# In production, disable internal docs to prevent schema enumeration
+# Docs are available via authenticated Next.js pages instead
+app = FastAPI(
+    title="CrewAI Backend",
+    version="1.0.0",
+    lifespan=lifespan,
+    docs_url=None if IS_PRODUCTION else "/docs",
+    redoc_url=None if IS_PRODUCTION else "/redoc",
+    openapi_url=None if IS_PRODUCTION else "/openapi.json",
+)
+
+# Configure rate limiter for external API
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Configure CORS for Next.js frontend
 app.add_middleware(
@@ -75,11 +97,17 @@ app.include_router(query_router, prefix="/api/v1", tags=["Query"])
 app.include_router(chat_router, prefix="/api/v1", tags=["Chat"])
 app.include_router(eval_router, prefix="/api/v1", tags=["Evaluation"])
 
+# External API - mounted as sub-application
+# Docs UI disabled; OpenAPI spec requires authentication
+# Access docs via authenticated Next.js pages at /admin/api-docs
+app.mount("/external/v1", external_app)
+
 """Startup handled via lifespan above; deprecated on_event removed."""
 
 @app.get("/")
 async def root():
-    return {"message": "CrewAI Backend is running!"}
+    # Minimal response - no environment info or docs links in production
+    return {"status": "ok"}
 
 @app.get("/health")
 async def health_check():
