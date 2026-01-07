@@ -6,13 +6,55 @@ This document describes the Lexon External API for third-party client integratio
 
 The External API provides programmatic access to Lexon's legal knowledge graph. It allows you to execute natural language queries and receive structured data about legal cases, doctrines, issues, rulings, and more.
 
+## Quick mental model (Lexon has *two* API “surfaces”)
+
+The most important thing to know is that Lexon has:
+
+- **External API (for customers / third parties)**: lives on **`api.lexon.law`** and is what this document describes.
+- **Internal API (for the Lexon web app + admins)**: used by the Lexon product itself and **is not for external clients**.
+
+These two surfaces intentionally use **different routes and different API keys**.
+
+### Which hostname should I use?
+
+- **If you’re building an integration** (your server talking to Lexon): use **`https://api.lexon.law`**
+- **If you’re using the Lexon web app / staff docs pages**: you’ll be on **`https://lexon.law`**
+
+### Why do I sometimes see `/v1/...` and sometimes `/external/v1/...`?
+
+- **What external clients should call (production):** `https://api.lexon.law/v1/...`
+- **What the backend implements internally:** the external API is mounted at `.../external/v1/...`
+
+In production, the edge (e.g., Cloudflare) rewrites:
+
+- `https://api.lexon.law/v1/*` → `https://<origin>/external/v1/*`
+
+So **external clients should always use `/v1`**, even though the Python backend internally uses `/external/v1`.
+
+### Which API key goes where?
+
+- **External API key** (provided to customers): used on `api.lexon.law` external endpoints.
+  - Accepted headers:
+    - `Authorization: Bearer <external_key>`
+    - `X-API-Key: <external_key>`
+- **Internal API key** (`FASTAPI_API_KEY`): used only by the Lexon app/server to call internal endpoints like `/api/ai/*` and `/api/v1/*`.
+  - Accepted header:
+    - `X-API-Key: <internal_key>`
+
+### What happens if I use the wrong key or wrong endpoint?
+
+- **External key → internal endpoint** (example: `GET https://api.lexon.law/api/ai/shared-nodes`): typically **401 Unauthorized**
+- **Internal key → external endpoint** (example: `POST https://api.lexon.law/v1/query`): typically **401 Unauthorized**
+
+This is by design: external clients should not be able to call internal routes even if they guess URLs.
+
 ## Important: Server-to-Server Only
 
 **This API is intended for server-to-server use only.**
 
 - Do not call this API from browsers or client-side code
 - Do not expose your API key in frontend applications
-- CORS is not enabled for `/external` endpoints
+- Do not rely on CORS as a security boundary. This service is protected primarily by API key auth and (in production) an edge-to-origin secret check.
 
 ## Interactive Documentation
 
@@ -29,12 +71,16 @@ For local development:
 - ReDoc: `http://localhost:3000/api/docs/redoc`
 - OpenAPI JSON: `http://localhost:3000/api/docs/openapi`
 
+**Note:** These documentation pages are served by the **Next.js app** on `lexon.law` and proxy the external API OpenAPI spec server-side.
+
+**Note (common confusion):** Swagger/ReDoc UIs are “views” of the OpenAPI schema. They may not always display the correct production hostname unless the schema explicitly sets it. When in doubt, use the **Base URL** in this document (`https://api.lexon.law/v1`).
+
 ### External Clients
 
 The OpenAPI specification is available via authenticated request:
 
 ```bash
-curl "https://api.lexon.com/external/v1/openapi.json" \
+curl "https://api.lexon.law/v1/openapi.json" \
   -H "Authorization: Bearer your_api_key_here"
 ```
 
@@ -43,7 +89,15 @@ This spec can be imported directly into Postman, Insomnia, or code generators.
 ## Base URL
 
 ```
-https://api.lexon.com/external/v1
+https://api.lexon.law/v1
+```
+
+**Implementation note:** The FastAPI service is mounted at `/external/v1/*` in the backend app. Production traffic is routed via `api.lexon.law` and rewritten so that `/v1/*` maps to the backend’s `/external/v1/*`.
+
+For local development (running the FastAPI backend directly on port 8000):
+
+```
+http://localhost:8000/external/v1
 ```
 
 ## Data Handling and Privacy
@@ -104,7 +158,10 @@ Since query text is sent to OpenAI, we recommend:
 
 ## Authentication
 
-All requests to `/query` must include an API key.
+All requests to the authenticated endpoints **under the Base URL** must include an API key:
+
+- `POST https://api.lexon.law/v1/query`
+- `GET https://api.lexon.law/v1/openapi.json`
 
 ### Preferred: Authorization Header
 
@@ -117,6 +174,12 @@ Authorization: Bearer your_api_key_here
 ```
 X-API-Key: your_api_key_here
 ```
+
+### Production edge enforcement (Cloudflare)
+
+In production, the backend can require an **edge-to-origin secret** (`LEXON_EDGE_SECRET`) which is expected to be injected by Lexon’s edge (e.g. Cloudflare). If you attempt to call the origin directly (bypassing the edge), you may receive **HTTP 403** even with a valid API key.
+
+You should **not** set this edge header yourself as an external client; instead, ensure you are calling the Lexon-provided public base URL.
 
 Your API key will be provided by Lexon. Keep it secure and do not expose it in client-side code.
 
@@ -142,7 +205,7 @@ Exceeding the limit returns HTTP 429 with a `Retry-After` header.
 
 ### Rate Limit Response Headers
 
-All responses include rate limit information:
+`POST /query` responses include rate limit information:
 
 | Header | Description |
 |--------|-------------|
@@ -157,17 +220,22 @@ On 429 responses:
 | `Retry-After` | Seconds to wait before retrying |
 | `X-RateLimit-Remaining` | Will be "0" |
 
+**Important (current implementation detail):** Rate limiting is currently keyed off the `X-API-Key` header. If you authenticate using **only** `Authorization: Bearer ...` (without also sending `X-API-Key`), rate limiting may fall back to an IP-based key (depending on deployment topology).
+
 ## Request Limits
 
 | Limit | Value |
 |-------|-------|
 | Max query length | 2,000 characters |
-| Max request body | 64 KB total JSON payload (query + any other fields) |
 | Request timeout | 30 seconds |
+
+**Note:** The FastAPI app enforces max query length and request validation. It does **not** currently enforce a fixed maximum request body size at the application layer; upstream proxies/load balancers may impose their own limits.
 
 ## Request ID
 
-Every response includes an `X-Request-ID` header containing a unique identifier for the request. This ID is also included in the response body as `request_id`.
+Every response includes an `X-Request-ID` header containing a unique identifier for the request.
+
+`POST /query` responses include this ID in the response body as `request_id`. Many error responses also include a `request_id` in the JSON body, but some (notably edge-secret 403s) may not.
 
 **Important:** The request ID is generated before validation, so even 422 validation errors will include a valid `request_id`. Always include this ID when contacting support.
 
@@ -180,17 +248,18 @@ Execute a natural language query against the knowledge graph.
 #### Request
 
 ```bash
-# Preferred: Authorization header
-curl -X POST "https://api.lexon.com/external/v1/query" \
+# Recommended: send BOTH headers (auth works with either; rate limiting is keyed off X-API-Key)
+curl -X POST "https://api.lexon.law/v1/query" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer your_api_key_here" \
+  -H "X-API-Key: your_api_key_here" \
   -d '{
     "query": "What doctrines apply to platform monopolies in antitrust law?",
     "limit": 50
   }'
 
-# Alternative: X-API-Key header
-curl -X POST "https://api.lexon.com/external/v1/query" \
+# Alternative: X-API-Key header only
+curl -X POST "https://api.lexon.law/v1/query" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your_api_key_here" \
   -d '{
@@ -263,7 +332,7 @@ Each node in `enriched_nodes` contains:
 Health check endpoint. Unauthenticated; returns minimal info only.
 
 ```bash
-curl "https://api.lexon.com/external/v1/health"
+curl "https://api.lexon.law/v1/health"
 ```
 
 **Response:**
@@ -271,7 +340,7 @@ curl "https://api.lexon.com/external/v1/health"
 ```json
 {
   "status": "ok",
-  "timestamp": "2025-01-05T15:30:00.000Z"
+  "timestamp": "2026-01-07T15:30:00.000000+00:00"
 }
 ```
 
@@ -280,14 +349,14 @@ curl "https://api.lexon.com/external/v1/health"
 API version information. Unauthenticated; returns minimal info only.
 
 ```bash
-curl "https://api.lexon.com/external/v1/version"
+curl "https://api.lexon.law/v1/version"
 ```
 
 **Response:**
 
 ```json
 {
-  "version": "1.1.0",
+  "version": "1.2.0",
   "api": "Lexon External API"
 }
 ```
@@ -299,7 +368,7 @@ curl "https://api.lexon.com/external/v1/version"
 OpenAPI specification. **Requires authentication.**
 
 ```bash
-curl "https://api.lexon.com/external/v1/openapi.json" \
+curl "https://api.lexon.law/v1/openapi.json" \
   -H "Authorization: Bearer your_api_key_here"
 ```
 
@@ -314,7 +383,15 @@ Use cases:
 
 ## Error Responses
 
-All errors follow a consistent format and always include `request_id`:
+### Body shapes (current implementation)
+
+Every response includes an `X-Request-ID` header.
+
+Some responses also include `request_id` in the JSON body, but **not all error bodies are identical** (due to FastAPI’s default `HTTPException` serialization).
+
+### Standard error body (used by 422 validation, 429 rate limit, and unexpected 500 internal_error)
+
+These errors follow a consistent top-level format and include `request_id`:
 
 ```json
 {
@@ -338,16 +415,42 @@ Validation errors include additional details:
 }
 ```
 
+### FastAPI HTTPException wrapper (commonly used by auth + query failures)
+
+Some errors are returned as:
+
+```json
+{
+  "detail": {
+    "request_id": "550e8400-e29b-41d4-a716-446655440000",
+    "error": "unauthorized",
+    "message": "Invalid API key"
+  }
+}
+```
+
+### Edge-secret failures (403)
+
+If edge validation is enabled and the request bypasses the edge, the 403 body may be:
+
+```json
+{
+  "detail": "Forbidden"
+}
+```
+
+In all cases, prefer the `X-Request-ID` header when correlating failures with Lexon support.
+
 ### Error Codes
 
 | HTTP Status | Error Code | Description |
 |-------------|------------|-------------|
 | 401 | `unauthorized` | API key is missing or invalid |
-| 403 | `forbidden` | Request rejected (origin validation failed) |
+| 403 | (unstructured) | Request rejected (origin validation failed; body may be `{"detail":"Forbidden"}`) |
 | 422 | `validation_error` | Invalid request body (see `details` for specifics) |
 | 429 | `rate_limit_exceeded` | Too many requests. Check `Retry-After` header. |
-| 500 | `query_failed` | Internal error processing the query |
-| 500 | `internal_error` | Unexpected server error |
+| 500 | `query_failed` | Error processing the query (may be wrapped under `detail`) |
+| 500 | `internal_error` | Unexpected server error (top-level error response) |
 | 503 | `service_unavailable` | External API is not configured |
 | 504 | `timeout` | Query exceeded 30 second timeout |
 
@@ -391,6 +494,13 @@ The knowledge graph contains the following node types:
 | `Proceeding` | Court proceeding | `proceeding_id`, `court`, `date` |
 | `Party` | Party to a case | `party_id`, `name`, `role` |
 | `FactPattern` | Factual pattern | `fact_pattern_id`, `description` |
+| `Argument` | Legal argument | `argument_id`, `text` |
+| `Relief` | Requested/awarded relief | `relief_id`, `type`, `description` |
+| `Policy` | Policy consideration | `policy_id`, `text` |
+| `Forum` | Forum | `forum_id`, `name` |
+| `Jurisdiction` | Jurisdiction | `jurisdiction_id`, `name` |
+| `ReliefType` | Relief type | `relief_type_id`, `name` |
+| `Domain` | Domain/category | `domain_id`, `name` |
 
 ## Query Flow
 
@@ -422,7 +532,7 @@ When you submit a query, it goes through a multi-stage pipeline:
 
 7. **Implement proper retry logic**: Follow the [Retry Guidance](#retry-guidance) for each error type
 
-8. **Use Authorization: Bearer**: Prefer `Authorization: Bearer <key>` over `X-API-Key` for standard OAuth2 compatibility
+8. **Send `X-API-Key` (even if you also send Authorization)**: Authentication supports either header, but rate limiting is currently keyed off `X-API-Key`.
 
 ## Code Examples
 
@@ -433,7 +543,7 @@ import requests
 import time
 
 API_KEY = "your_api_key_here"
-BASE_URL = "https://api.lexon.com/external/v1"
+BASE_URL = "https://api.lexon.law/v1"
 MAX_RETRIES = 3
 
 def query_lexon(query: str, limit: int = 50) -> dict:
@@ -453,7 +563,9 @@ def query_lexon(query: str, limit: int = 50) -> dict:
     """
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {API_KEY}",  # Preferred auth method
+        # Auth works with either header; we send both to ensure per-key rate limiting.
+        "Authorization": f"Bearer {API_KEY}",
+        "X-API-Key": API_KEY,
     }
     
     for attempt in range(MAX_RETRIES):
@@ -504,7 +616,7 @@ for node in result['enriched_nodes']:
 
 ```javascript
 const API_KEY = "your_api_key_here";
-const BASE_URL = "https://api.lexon.com/external/v1";
+const BASE_URL = "https://api.lexon.law/v1";
 const MAX_RETRIES = 3;
 
 async function sleep(ms) {
@@ -523,7 +635,9 @@ async function queryLexon(query, limit = 50) {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${API_KEY}`, // Preferred auth method
+          // Auth works with either header; we send both to ensure per-key rate limiting.
+          "Authorization": `Bearer ${API_KEY}`,
+          "X-API-Key": API_KEY,
         },
         body: JSON.stringify({ query, limit }),
         signal: controller.signal,
