@@ -87,7 +87,7 @@
               "host": ["{{base_url}}"],
               "path": ["query"]
             },
-            "description": "Execute a natural language query against the legal knowledge graph.\n\n**Request Body:**\n- `query` (string, required): Natural language query (1-2000 chars)\n- `limit` (integer, optional): Max nodes to return (1-200, default: 50)\n\n**Response:**\n- `request_id`: Unique identifier for support\n- `enriched_nodes`: Array of matching nodes\n- `total_count`: Total nodes found before limit\n- `truncated`: Whether results were truncated\n\n**Note:** Query content is NOT logged by Lexon, but IS sent to OpenAI for processing."
+            "description": "Execute a natural language query against the legal knowledge graph.\n\n**Request Body:**\n- `query` (string, required): Natural language query (1-12,000 chars)\n- `limit` (integer, optional): Max nodes to return (1-200, default: 50)\n\n**Response:**\n- `request_id`: Unique identifier for support\n- `enriched_nodes`: Array of matching nodes\n- `total_count`: Total nodes found before limit\n- `truncated`: Whether results were truncated\n\n**Note:** Query content is NOT logged by Lexon, but IS sent to OpenAI for processing."
           },
           "response": []
         },

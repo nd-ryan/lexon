@@ -226,7 +226,7 @@ On 429 responses:
 
 | Limit | Value |
 |-------|-------|
-| Max query length | 2,000 characters |
+| Max query length | 12,000 characters |
 | Request timeout | 30 seconds |
 
 **Note:** The FastAPI app enforces max query length and request validation. It does **not** currently enforce a fixed maximum request body size at the application layer; upstream proxies/load balancers may impose their own limits.
@@ -272,7 +272,7 @@ curl -X POST "https://api.lexon.law/v1/query" \
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `query` | string | Yes | - | Natural language query (1-2000 chars). **Not logged. Sent to OpenAI.** |
+| `query` | string | Yes | - | Natural language query (1-12,000 chars). **Not logged. Sent to OpenAI.** |
 | `limit` | integer | No | 50 | Maximum nodes to return (1-200) |
 
 **Note:** Unknown fields are rejected (HTTP 422).

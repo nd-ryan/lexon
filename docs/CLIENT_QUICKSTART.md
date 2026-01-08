@@ -95,7 +95,7 @@ Import `lexon-openapi.json` into Postman, Insomnia, or your preferred API tool.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `query` | string | Yes | - | Natural language query (1-2000 chars) |
+| `query` | string | Yes | - | Natural language query (1-12,000 chars) |
 | `limit` | integer | No | 50 | Max nodes to return (1-200) |
 
 ### Response

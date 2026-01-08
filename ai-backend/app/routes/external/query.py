@@ -24,12 +24,18 @@ from slowapi.util import get_remote_address
 
 from app.lib.external_auth import require_external_api_key, ExternalAuthContext
 from app.lib.logging_config import setup_logger
+from app.config.external_api import (
+    QUERY_MAX_LENGTH,
+    QUERY_RESULT_LIMIT_MAX,
+    QUERY_RESULT_LIMIT_DEFAULT,
+    RATE_LIMIT,
+    RATE_LIMIT_NUMERIC,
+    QUERY_TIMEOUT_SECONDS,
+    format_query_length_description,
+    format_rate_limit_description,
+)
 
 logger = setup_logger("external-query")
-
-# Configuration
-RATE_LIMIT = "60/minute"
-QUERY_TIMEOUT_SECONDS = 30.0
 
 # Debug flag - OFF by default. Only enable temporarily for debugging specific issues.
 # When enabled, query content will be logged. Use with extreme caution.
@@ -45,7 +51,7 @@ def get_api_key_from_header(request: Request) -> str:
 
 limiter = Limiter(key_func=get_api_key_from_header)
 
-router = APIRouter(prefix="/external/v1/query", tags=["External Query"])
+router = APIRouter(prefix="/query", tags=["External Query"])
 
 
 # Whitelist of allowed fields in response nodes
@@ -142,15 +148,15 @@ class ExternalQueryRequest(BaseModel):
             "This field is NOT logged by Lexon, but IS sent to OpenAI for processing."
         ),
         min_length=1,
-        max_length=2000,
+        max_length=QUERY_MAX_LENGTH,
         examples=["What are the antitrust implications of platform monopolies?"]
     )
     
     limit: Optional[int] = Field(
-        default=50,
+        default=QUERY_RESULT_LIMIT_DEFAULT,
         ge=1,
-        le=200,
-        description="Maximum number of nodes to return (1-200, default: 50)"
+        le=QUERY_RESULT_LIMIT_MAX,
+        description=f"Maximum number of nodes to return (1-{QUERY_RESULT_LIMIT_MAX}, default: {QUERY_RESULT_LIMIT_DEFAULT})"
     )
     
     # Reject unknown fields to prevent accidental data leakage
@@ -293,12 +299,12 @@ The query is processed through a multi-stage pipeline that:
 - Query content **IS sent to OpenAI** for processing (reasoning, planning, embedding generation)
 - See documentation for OpenAI data retention policies
 
-**Result Limits:** Use the `limit` parameter to control the number of results (1-200, default: 50).
+**Result Limits:** Use the `limit` parameter to control the number of results (1-{QUERY_RESULT_LIMIT_MAX}, default: {QUERY_RESULT_LIMIT_DEFAULT}).
 The response includes `total_count` and `truncated` to indicate if more results are available.
 
-**Rate Limits:** 60 requests per minute per API key.
+**Rate Limits:** {format_rate_limit_description()} per API key.
 
-**Timeout:** Queries that exceed 30 seconds will return a 504 error.
+**Timeout:** Queries that exceed {QUERY_TIMEOUT_SECONDS:.0f} seconds will return a 504 error.
 """,
 )
 @limiter.limit(RATE_LIMIT)
@@ -322,7 +328,7 @@ async def query(
     
     # Add headers for client debugging and rate limit visibility
     response.headers["X-Request-ID"] = request_id
-    response.headers["X-RateLimit-Limit"] = "60"
+    response.headers["X-RateLimit-Limit"] = str(RATE_LIMIT_NUMERIC)
     response.headers["X-RateLimit-Reset"] = str(int(time.time()) + 60)
     
     # SAFE LOGGING - Never log query content, only metadata
@@ -355,7 +361,7 @@ async def query(
         total_count = len(all_sanitized_nodes)
         
         # Apply limit
-        limit = body.limit or 50
+        limit = body.limit or QUERY_RESULT_LIMIT_DEFAULT
         sanitized_nodes = all_sanitized_nodes[:limit]
         truncated = total_count > limit
         

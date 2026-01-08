@@ -151,7 +151,7 @@ X-API-Key: YOUR_API_KEY`}</code></pre>
                 <td>string</td>
                 <td>Yes</td>
                 <td>-</td>
-                <td>Natural language query (1-2000 chars)</td>
+                <td>Natural language query (1-12,000 chars)</td>
               </tr>
               <tr>
                 <td><code>limit</code></td>

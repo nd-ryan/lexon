@@ -270,6 +270,8 @@ class TestRequestValidation:
     @pytest.mark.asyncio
     async def test_query_too_long_rejected(self, isolation_client):
         """Query exceeding max_length should be rejected."""
+        from app.config.external_api import QUERY_MAX_LENGTH
+        
         response = await isolation_client.post(
             "/external/v1/query",
             headers={
@@ -277,7 +279,7 @@ class TestRequestValidation:
                 "X-Lexon-Edge": "edge-secret-xyz",
             },
             json={
-                "query": "x" * 2001  # Exceeds 2000 char limit
+                "query": "x" * (QUERY_MAX_LENGTH + 1)  # Exceeds limit
             }
         )
         assert response.status_code == 422  # Validation error

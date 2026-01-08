@@ -35,7 +35,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi import Depends
 from fastapi.openapi.utils import get_openapi
 
-from .query import router as query_router, limiter, RATE_LIMIT
+from .query import router as query_router, limiter
+from app.config.external_api import RATE_LIMIT, RATE_LIMIT_NUMERIC, format_rate_limit_description
 from app.lib.external_auth import require_external_api_key, ExternalAuthContext
 
 # API version - update when making breaking changes
@@ -45,7 +46,9 @@ API_VERSION = "1.2.0"
 REQUEST_ID_HEADER = "X-Request-ID"
 
 # API description for OpenAPI docs
-API_DESCRIPTION = """
+def get_api_description() -> str:
+    """Generate API description with current config values."""
+    return f"""
 ## Lexon External API
 
 Query the Lexon legal knowledge graph to retrieve structured data about legal cases, 
@@ -85,10 +88,12 @@ The `/openapi.json` endpoint requires authentication and can be used to import t
 
 ### Rate Limits
 
-- `/query`: 60 requests per minute per API key
+- `/query`: {format_rate_limit_description()} per API key
 - Response headers include rate limit information
 - 429 responses include a `Retry-After` header
 """
+
+API_DESCRIPTION = get_api_description()
 
 # Create the external API sub-application
 # All docs endpoints are disabled - served via authenticated routes instead
@@ -99,10 +104,6 @@ external_app = FastAPI(
     docs_url=None,  # Disabled - use /admin/api-docs instead
     redoc_url=None,  # Disabled - use /admin/api-docs/redoc instead
     openapi_url=None,  # Disabled - custom authenticated route below
-    servers=[
-        {"url": "https://api.lexon.law/v1", "description": "Production"},
-        {"url": "http://localhost:8000/external/v1", "description": "Local development"},
-    ],
     contact={
         "name": "Lexon Support",
     },
@@ -192,7 +193,7 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
         headers={
             REQUEST_ID_HEADER: request_id,
             "Retry-After": retry_after,
-            "X-RateLimit-Limit": "60",
+            "X-RateLimit-Limit": str(RATE_LIMIT_NUMERIC),
             "X-RateLimit-Remaining": "0",
             "X-RateLimit-Reset": str(reset_timestamp),
         }
@@ -351,7 +352,6 @@ async def get_openapi_spec(
             routes=external_app.routes,
             contact=external_app.contact,
             license_info=external_app.license_info,
-            servers=external_app.servers,
         )
     return external_app.openapi_schema
 

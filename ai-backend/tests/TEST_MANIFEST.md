@@ -343,7 +343,7 @@ Tests mapping of temporary node IDs to permanent Neo4j UUIDs.
 
 #### `TestRequestValidation` (3 tests)
 - **test_extra_fields_rejected** - Unknown fields in request body rejected
-- **test_query_too_long_rejected** - Query > 2000 chars rejected
+- **test_query_too_long_rejected** - Query exceeding max_length rejected
 - **test_empty_query_rejected** - Empty query rejected
 
 #### `TestQueryLogging` (1 test)
