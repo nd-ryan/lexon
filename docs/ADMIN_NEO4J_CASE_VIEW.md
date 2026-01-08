@@ -9,7 +9,7 @@ This feature adds an **admin-only**, **read-only** case view that renders from *
 ## What it is
 
 - **URL**: `/cases/[id]/neo4j`
-- **Audience**: Admin users only (checked via `isAdminEmail()` in Next.js + session).
+- **Audience**: **Admin role** users only (RBAC via NextAuth session + DB-backed role check).
 - **Purpose**: Inspect the Neo4j Knowledge Graph representation of a case using the same UI layout/components as the normal case page, but with **no edits**, **no saves**, **no deletes**, and **no KG writes**.
 
 ---
@@ -20,7 +20,7 @@ This feature adds an **admin-only**, **read-only** case view that renders from *
   - The `/cases/[id]/neo4j` page redirects non-admins back to `/cases/[id]`.
   - The "Neo4j view (admin)" link on `/cases/[id]` is only shown to admins (and only when the case appears KG-submitted).
 - **Admin-only proxy routes**
-  - All Next.js proxy routes under `/api/admin/neo4j-cases/` check `isAdminEmail(session?.user?.email)` and return 401 if not admin.
+  - All Next.js proxy routes under `/api/admin/neo4j-cases/` require `admin` role and return **403** if the user is authenticated but not an admin.
   - Routes: `/api/admin/neo4j-cases/[caseId]/view` and `/api/admin/neo4j-cases/[caseId]/compare`
 - **Backend API key protection**
   - FastAPI routes under `/api/ai/neo4j-cases/` require `X-API-Key` header.

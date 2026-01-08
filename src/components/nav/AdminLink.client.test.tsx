@@ -21,20 +21,18 @@ const mockedUseSession = vi.mocked(useSession)
 
 describe('AdminLink', () => {
   beforeEach(() => {
-    delete process.env.NEXT_PUBLIC_ADMIN_EMAIL
-    process.env.NEXT_PUBLIC_ADMIN_EMAILS = 'admin@example.com, other@example.com'
     mockedUseSession.mockReset()
   })
 
   it('returns null for non-admin sessions', () => {
-    mockedUseSession.mockReturnValue({ data: { user: { email: 'user@example.com' } } } as any)
+    mockedUseSession.mockReturnValue({ data: { user: { email: 'user@example.com', role: 'user' } } } as any)
 
     const { container } = render(<AdminLink />)
     expect(container.firstChild).toBeNull()
   })
 
   it('shows menu items when admin clicks toggle and closes on outside click', () => {
-    mockedUseSession.mockReturnValue({ data: { user: { email: 'admin@example.com' } } } as any)
+    mockedUseSession.mockReturnValue({ data: { user: { email: 'admin@example.com', role: 'admin' } } } as any)
 
     render(<AdminLink />)
 
@@ -44,16 +42,16 @@ describe('AdminLink', () => {
     fireEvent.click(button)
     expect(screen.getByText(/Bulk Case Upload/i)).toBeInTheDocument()
     expect(screen.getByText(/Shared Nodes/i)).toBeInTheDocument()
+    expect(screen.getByText(/Users/i)).toBeInTheDocument()
 
     fireEvent.mouseDown(document.body)
     expect(screen.queryByText(/Bulk Case Upload/i)).not.toBeInTheDocument()
   })
 
-  it('treats any email in NEXT_PUBLIC_ADMIN_EMAILS as admin', () => {
-    mockedUseSession.mockReturnValue({ data: { user: { email: 'other@example.com' } } } as any)
+  it('returns null when session is missing role', () => {
+    mockedUseSession.mockReturnValue({ data: { user: { email: 'admin@example.com' } } } as any)
 
-    render(<AdminLink />)
-    const button = screen.getByRole('button', { name: /admin/i })
-    expect(button).toBeInTheDocument()
+    const { container } = render(<AdminLink />)
+    expect(container.firstChild).toBeNull()
   })
 })

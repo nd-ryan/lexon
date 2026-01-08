@@ -16,7 +16,7 @@ from app.routes.eval import router as eval_router
 from app.routes.external import external_app, limiter
 from app.lib.logging_config import configure_root_logging, setup_logger, setup_clean_file_logging
 from app.lib.db import engine
-from app.lib.schema import ensure_all_tables
+from sqlalchemy import text
 import os
 from dotenv import load_dotenv
 import warnings
@@ -48,10 +48,13 @@ async def lifespan(app: FastAPI):
     logger.info("✅ Logging configured for real-time output")
     logger.info("📁 Clean logs saved to logs/app.log")
     try:
-        ensure_all_tables(engine)
-        logger.info("🗄️  Verified all database tables in Postgres")
+        # Safety-first: do NOT mutate DB schema at runtime.
+        # Database schema changes should happen via explicit migrations (Alembic).
+        with engine.begin() as conn:
+            conn.execute(text("SELECT 1"))
+        logger.info("🗄️  Connected to Postgres (schema migrations handled externally)")
     except Exception as e:
-        logger.error(f"Failed ensuring database tables: {e}")
+        logger.error(f"Failed connecting to Postgres: {e}")
 
     yield
     # Shutdown (optional)

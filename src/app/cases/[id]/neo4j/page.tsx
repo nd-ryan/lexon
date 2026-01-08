@@ -3,10 +3,11 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { useSession } from 'next-auth/react'
+import type { Session } from 'next-auth'
 
 import type { Schema } from '@/types/case-graph'
 import { useAppStore } from '@/lib/store/appStore'
-import { isAdminEmail } from '@/lib/admin'
+import { hasAtLeastRole } from '@/lib/rbac'
 
 import { useGraphState } from '@/hooks/cases/useGraphState'
 import { useNodeLookups } from '@/app/cases/[id]/_hooks/useNodeLookups'
@@ -46,7 +47,8 @@ export default function Neo4jCaseViewPage() {
   
   const schema = useAppStore((s) => s.schema as Schema | null)
 
-  const isAdmin = isAdminEmail(session?.user?.email)
+  const role = (session?.user as Session['user'])?.role
+  const isAdmin = hasAtLeastRole(role, 'admin')
   const isViewMode = true
 
   const [loading, setLoading] = useState(true)

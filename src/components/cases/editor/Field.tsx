@@ -2,7 +2,7 @@
  * Field component for rendering and editing node properties
  */
 
-import { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { formatLabel } from '@/lib/cases/formatting'
 import { getPropertySchema } from '@/lib/cases/schemaHelpers'
 import { useAppStore } from '@/lib/store/appStore'

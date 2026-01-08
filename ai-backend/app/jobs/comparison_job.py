@@ -280,8 +280,11 @@ def run_batch_comparisons(job_id: str, case_ids: Optional[List[str]] = None, for
         # If no case_ids provided, get all KG-submitted cases
         if case_ids is None:
             from sqlalchemy import text
+            import os, re
+            _schema_raw = os.getenv("POSTGRES_SCHEMA", "public")
+            schema = _schema_raw if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", _schema_raw or "") else "public"
             result = conn.execute(text(
-                "SELECT id FROM cases WHERE kg_submitted_at IS NOT NULL ORDER BY updated_at DESC"
+                f"SELECT id FROM {schema}.cases WHERE kg_submitted_at IS NOT NULL ORDER BY updated_at DESC"
             ))
             case_ids = [str(row[0]) for row in result]
         

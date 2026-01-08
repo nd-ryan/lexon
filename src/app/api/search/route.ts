@@ -3,12 +3,17 @@ import { getServerSession } from 'next-auth/next';
 import { generateCypher } from '@/lib/search/generateCypher';
 import { executeQuery } from '@/lib/search/executeQuery';
 import { authOptions } from '@/lib/auth';
+import { hasDbAtLeastRole } from '@/lib/rbac'
 
 export async function POST(req: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
     if (!session) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const isAdmin = await hasDbAtLeastRole(session, 'admin')
+    if (!isAdmin.ok) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 
     const body = await req.json();

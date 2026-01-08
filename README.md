@@ -27,16 +27,19 @@ JWT_SECRET="your-secure-jwt-secret"
 AI_BACKEND_URL="https://your-backend.fly.dev"
 NEXTAUTH_SECRET="your-nextauth-secret"
 FASTAPI_API_KEY="your-api-key"
-# Comma/semicolon/newline-separated list of emails that can access admin pages/routes
-NEXT_PUBLIC_ADMIN_EMAILS="admin1@example.com,admin2@example.com"
-# Legacy single-admin setting (still supported, but prefer NEXT_PUBLIC_ADMIN_EMAILS)
-# NEXT_PUBLIC_ADMIN_EMAIL="admin1@example.com"
+
+# Prisma / NextAuth Postgres connection.
+# Safety-first setup uses a dedicated Postgres schema for auth tables.
+DATABASE_URL="postgresql://.../yourdb?schema=auth"
 ```
 
 **Backend (.env):**
 ```env
 JWT_SECRET="your-secure-jwt-secret"  # Must match frontend
 FASTAPI_API_KEY="your-api-key"
+DATABASE_URL="postgresql://.../yourdb"
+# Backend-owned tables should live in a dedicated schema (recommended: "app")
+POSTGRES_SCHEMA="app"
 REDIS_URL="redis://localhost:6379"
 NEO4J_URI="bolt://localhost:7687"
 OPENAI_API_KEY="your-openai-key"
@@ -53,6 +56,7 @@ This project uses a secure JWT-based streaming system with Redis job queue that 
 - **No exposed credentials** in the frontend
 
 See [SETUP_STREAMING.md](./SETUP_STREAMING.md) for setup instructions and [ARCHITECTURE.md](./ARCHITECTURE.md) for detailed system design.
+For database safety and schema ownership, see `docs/POSTGRES_OWNERSHIP_AND_MIGRATIONS.md`.
 
 ## 🏗️ Architecture
 
@@ -62,6 +66,17 @@ See [SETUP_STREAMING.md](./SETUP_STREAMING.md) for setup instructions and [ARCHI
 - **Queue**: Redis with RQ for background jobs
 - **Authentication**: NextAuth.js with JWT tokens
 - **Deployment**: Vercel (frontend) + Fly.io (backend)
+
+## 🔐 RBAC (roles)
+
+Lexon uses role-based access control with four roles:
+
+- **`user`**: view cases + chat (no edit/upload/search)
+- **`editor`**: can edit cases + submit to KG
+- **`developer`**: can view API docs (`/api/docs/*`)
+- **`admin`**: full access + user/role management (`/admin/users`)
+
+See `docs/RBAC.md` for details.
 
 ## 📚 Learn More
 

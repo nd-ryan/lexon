@@ -32,7 +32,7 @@ From `ai-backend/`:
 - `NEXTAUTH_SECRET`
 - `FASTAPI_API_KEY` (used by Next.js to call protected backend routes)
 - `LEXON_API_KEY` (used by Next.js to fetch OpenAPI spec for docs pages)
-- `DATABASE_URL` (Prisma/Postgres; required for auth/session features)
+- `DATABASE_URL` (Prisma/Postgres; required for auth/session features). Recommended: use a dedicated Postgres schema via `?schema=auth`.
 
 ### Backend (`ai-backend/.env`)
 
@@ -44,6 +44,8 @@ From `ai-backend/`:
 - `REDIS_URL`
 - `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD`
 - `OPENAI_API_KEY`
+- `DATABASE_URL` (SQLAlchemy/Postgres)
+- `POSTGRES_SCHEMA` (recommended: `app` to isolate backend-owned tables)
 
 ## Testing instructions
 
@@ -74,6 +76,7 @@ Useful docs/scripts:
 ## Notes for agents
 
 - Documentation lives in `docs/`. Add new docs there (don’t scatter `.md` files around the repo root).
+- RBAC roles are `user`, `editor`, `developer`, `admin` (see `docs/RBAC.md`). Admins can manage roles at `/admin/users`.
 - If you add/update/delete tests, update the relevant test manifest file: `src/test/TEST_MANIFEST.md` (frontend) or `ai-backend/tests/TEST_MANIFEST.md` (backend).
 - The backend exposes `/health` and uses port **8000** by default.
 - Many backend routes require an API key; streaming endpoints use JWTs (see `docs/ARCHITECTURE.md`).

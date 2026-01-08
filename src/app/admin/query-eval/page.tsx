@@ -2,9 +2,10 @@
 
 import { useState, useEffect } from 'react';
 import { useSession } from 'next-auth/react';
+import type { Session } from 'next-auth';
 import { useRouter } from 'next/navigation';
 import Button from '@/components/ui/button';
-import { isAdminEmail } from '@/lib/admin';
+import { hasAtLeastRole } from '@/lib/rbac';
 
 type StepName = 'reason' | 'interpret' | 'searches' | 'traversal' | 'answer';
 type StepMode = 'full_chain' | 'isolated';
@@ -56,7 +57,8 @@ export default function QueryEvalPage() {
   const [seedJson, setSeedJson] = useState<string>('');
   const [seedError, setSeedError] = useState<string | null>(null);
 
-  const isAdmin = isAdminEmail(session?.user?.email);
+  const role = (session?.user as Session['user'])?.role
+  const isAdmin = hasAtLeastRole(role, 'admin');
 
   // Protect the page - only allow admin email
   useEffect(() => {

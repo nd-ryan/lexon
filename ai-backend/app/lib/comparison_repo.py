@@ -21,6 +21,12 @@ from sqlalchemy.sql import func
 
 metadata = MetaData()
 
+import os
+import re
+
+_SCHEMA_RAW = os.getenv("POSTGRES_SCHEMA", "public")
+POSTGRES_SCHEMA = _SCHEMA_RAW if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", _SCHEMA_RAW or "") else "public"
+
 case_comparisons = Table(
     "case_comparisons",
     metadata,
@@ -36,6 +42,7 @@ case_comparisons = Table(
     Column("embeddings_missing_count", Integer, default=0),
     Column("required_missing_count", Integer, default=0),
     Column("details", JSONB, nullable=True),
+    schema=POSTGRES_SCHEMA,
 )
 
 

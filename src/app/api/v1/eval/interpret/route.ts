@@ -1,15 +1,22 @@
 import { getServerSession } from 'next-auth/next'
 import { NextRequest, NextResponse } from "next/server";
 import { authOptions } from "@/lib/auth";
-import { isAdminEmail } from '@/lib/admin';
+import { hasDbAtLeastRole } from '@/lib/rbac';
 
 export async function POST(request: NextRequest) {
   // Check authentication - only admin users can access
   const session = await getServerSession(authOptions);
-  if (!isAdminEmail(session?.user?.email)) {
+  if (!session?.user?.id) {
     return NextResponse.json(
       { detail: "Unauthorized. Admin access required." },
       { status: 401 }
+    );
+  }
+  const isAdmin = await hasDbAtLeastRole(session, 'admin')
+  if (!isAdmin.ok) {
+    return NextResponse.json(
+      { detail: "Forbidden. Admin access required." },
+      { status: 403 }
     );
   }
 

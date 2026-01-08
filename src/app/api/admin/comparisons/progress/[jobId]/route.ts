@@ -1,16 +1,23 @@
 import { NextRequest } from 'next/server'
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '@/lib/auth'
-import { isAdminEmail } from '@/lib/admin'
+import { hasDbAtLeastRole } from '@/lib/rbac'
 
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ jobId: string }> }
 ) {
   const session = await getServerSession(authOptions)
-  if (!isAdminEmail(session?.user?.email)) {
+  if (!session?.user?.id) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), { 
       status: 401,
+      headers: { 'Content-Type': 'application/json' }
+    })
+  }
+  const isAdmin = await hasDbAtLeastRole(session, 'admin')
+  if (!isAdmin.ok) {
+    return new Response(JSON.stringify({ error: 'Forbidden' }), { 
+      status: 403,
       headers: { 'Content-Type': 'application/json' }
     })
   }

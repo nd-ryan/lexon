@@ -19,10 +19,14 @@ from sqlalchemy.schema import MetaData
 from sqlalchemy.engine import Connection
 import uuid
 import time
+import os
+import re
 
 
 metadata = MetaData()
 
+_SCHEMA_RAW = os.getenv("POSTGRES_SCHEMA", "public")
+POSTGRES_SCHEMA = _SCHEMA_RAW if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", _SCHEMA_RAW or "") else "public"
 
 cases = Table(
     "cases",
@@ -40,6 +44,7 @@ cases = Table(
     Column("kg_submitted_at", DateTime(timezone=True), nullable=True),
     Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
     Column("updated_at", DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False),
+    schema=POSTGRES_SCHEMA,
 )
 
 

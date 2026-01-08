@@ -5,6 +5,15 @@ function normalizeEmail(email: string): string {
 }
 
 /**
+ * Legacy admin allowlist helper (email-based).
+ *
+ * This repo now uses RBAC (roles on `auth."User".role`) for authorization.
+ * Prefer `hasAtLeastRole()` (UI) and `hasDbAtLeastRole()` (server-side).
+ *
+ * This file is retained only for backwards compatibility / historical reference.
+ *
+ * ---
+ *
  * Admin emails can be configured in either:
  * - NEXT_PUBLIC_ADMIN_EMAILS: comma/semicolon/newline-separated list (preferred)
  * - NEXT_PUBLIC_ADMIN_EMAIL: single email (legacy, still supported)

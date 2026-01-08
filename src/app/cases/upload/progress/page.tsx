@@ -1,12 +1,18 @@
 "use client";
 import { useEffect, useState, useRef, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { useSession } from 'next-auth/react'
+import type { Session } from 'next-auth'
+import { hasAtLeastRole } from '@/lib/rbac'
 
 function UploadProgressContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const jobId = searchParams.get('jobId')
   const caseId = searchParams.get('caseId')
+  const { status: authStatus, data: session } = useSession()
+  const role = (session?.user as Session['user'])?.role
+  const isAdmin = hasAtLeastRole(role, 'admin')
   
   const [status, setStatus] = useState<string>('Initializing...')
   const [phase, setPhase] = useState<string>('init')
@@ -17,6 +23,17 @@ function UploadProgressContent() {
   const eventSourceRef = useRef<EventSource | null>(null)
 
   useEffect(() => {
+    if (authStatus === 'unauthenticated') {
+      router.push('/auth/signin')
+      return
+    }
+    if (authStatus === 'authenticated' && !isAdmin) {
+      router.push('/cases')
+    }
+  }, [authStatus, isAdmin, router])
+
+  useEffect(() => {
+    if (authStatus !== 'authenticated' || !isAdmin) return
     if (!jobId) {
       setError('No job ID provided')
       return
@@ -95,7 +112,7 @@ function UploadProgressContent() {
       try { eventSource.close() } catch {}
       eventSourceRef.current = null
     }
-  }, [jobId, caseId, router])
+  }, [jobId, caseId, router, authStatus, isAdmin])
 
   return (
     <div className="p-8 max-w-2xl mx-auto space-y-6">

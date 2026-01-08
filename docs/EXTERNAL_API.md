@@ -60,7 +60,7 @@ This is by design: external clients should not be able to call internal routes e
 
 ### Internal Staff
 
-Interactive API documentation is available to authenticated Lexon users:
+Interactive API documentation is available to authenticated Lexon users with **`developer` or `admin`** role:
 
 - **Swagger UI:** `https://lexon.law/api/docs/swagger` (requires Lexon login)
 - **ReDoc:** `https://lexon.law/api/docs/redoc` (requires Lexon login)

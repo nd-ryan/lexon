@@ -11,6 +11,10 @@ vi.mock('@/lib/auth', () => ({
   authOptions: {},
 }))
 
+vi.mock('@/lib/rbac', () => ({
+  hasDbAtLeastRole: async (session: any) => ({ ok: session?.user?.role === 'admin', role: session?.user?.role ?? null }),
+}))
+
 import { GET } from '../route'
 import { getServerSession } from 'next-auth/next'
 
@@ -21,7 +25,6 @@ const createParams = (caseId: string) => Promise.resolve({ caseId })
 describe('GET /api/admin/neo4j-cases/[caseId]/graph', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    process.env.NEXT_PUBLIC_ADMIN_EMAIL = 'admin@example.com'
     process.env.AI_BACKEND_URL = 'http://localhost:8000'
     process.env.FASTAPI_API_KEY = 'test-api-key'
   })
@@ -35,7 +38,7 @@ describe('GET /api/admin/neo4j-cases/[caseId]/graph', () => {
 
   it('proxies request to backend for admin users', async () => {
     mockedGetServerSession.mockResolvedValue({
-      user: { email: 'admin@example.com' },
+      user: { id: 'a1', email: 'admin@example.com', role: 'admin' },
     } as any)
 
     const backendSpy = vi.fn()

@@ -13,6 +13,10 @@ vi.mock('@/lib/auth', () => ({
   authOptions: {},
 }))
 
+vi.mock('@/lib/rbac', () => ({
+  hasDbAtLeastRole: async (session: any) => ({ ok: session?.user?.role === 'admin', role: session?.user?.role ?? null }),
+}))
+
 // Import AFTER mocks are set up
 import { GET, PUT, DELETE } from '../route'
 import { getServerSession } from 'next-auth/next'
@@ -25,7 +29,6 @@ const createParams = (label: string, nodeId: string) =>
 describe('GET /api/admin/shared-nodes/[label]/[nodeId]', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    process.env.NEXT_PUBLIC_ADMIN_EMAIL = 'admin@example.com'
     process.env.AI_BACKEND_URL = 'http://localhost:8000'
     process.env.FASTAPI_API_KEY = 'test-api-key'
   })
@@ -41,18 +44,18 @@ describe('GET /api/admin/shared-nodes/[label]/[nodeId]', () => {
 
   it('returns 401 for non-admin users', async () => {
     mockedGetServerSession.mockResolvedValue({
-      user: { email: 'user@example.com' },
+      user: { id: 'u1', email: 'user@example.com', role: 'user' },
     } as any)
 
     const request = new NextRequest('http://localhost:3000/api/admin/shared-nodes/Party/p1')
     const response = await GET(request, { params: createParams('Party', 'p1') })
 
-    expect(response.status).toBe(401)
+    expect(response.status).toBe(403)
   })
 
   it('proxies request to backend for admin users', async () => {
     mockedGetServerSession.mockResolvedValue({
-      user: { email: 'admin@example.com' },
+      user: { id: 'a1', email: 'admin@example.com', role: 'admin' },
     } as any)
 
     const backendSpy = vi.fn()
@@ -76,7 +79,6 @@ describe('GET /api/admin/shared-nodes/[label]/[nodeId]', () => {
 describe('PUT /api/admin/shared-nodes/[label]/[nodeId]', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    process.env.NEXT_PUBLIC_ADMIN_EMAIL = 'admin@example.com'
     process.env.AI_BACKEND_URL = 'http://localhost:8000'
     process.env.FASTAPI_API_KEY = 'test-api-key'
   })
@@ -95,7 +97,7 @@ describe('PUT /api/admin/shared-nodes/[label]/[nodeId]', () => {
 
   it('sends X-User-Id header to backend', async () => {
     mockedGetServerSession.mockResolvedValue({
-      user: { email: 'admin@example.com', id: 'admin-user-id' },
+      user: { email: 'admin@example.com', id: 'admin-user-id', role: 'admin' },
     } as any)
 
     const backendSpy = vi.fn()
@@ -119,7 +121,7 @@ describe('PUT /api/admin/shared-nodes/[label]/[nodeId]', () => {
 
   it('forwards request body to backend', async () => {
     mockedGetServerSession.mockResolvedValue({
-      user: { email: 'admin@example.com', id: 'admin-id' },
+      user: { email: 'admin@example.com', id: 'admin-id', role: 'admin' },
     } as any)
 
     const backendSpy = vi.fn()
@@ -146,7 +148,6 @@ describe('PUT /api/admin/shared-nodes/[label]/[nodeId]', () => {
 describe('DELETE /api/admin/shared-nodes/[label]/[nodeId]', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    process.env.NEXT_PUBLIC_ADMIN_EMAIL = 'admin@example.com'
     process.env.AI_BACKEND_URL = 'http://localhost:8000'
     process.env.FASTAPI_API_KEY = 'test-api-key'
   })
@@ -164,7 +165,7 @@ describe('DELETE /api/admin/shared-nodes/[label]/[nodeId]', () => {
 
   it('sends X-User-Id header to backend', async () => {
     mockedGetServerSession.mockResolvedValue({
-      user: { email: 'admin@example.com', id: 'admin-user-id' },
+      user: { email: 'admin@example.com', id: 'admin-user-id', role: 'admin' },
     } as any)
 
     const backendSpy = vi.fn()
@@ -187,7 +188,7 @@ describe('DELETE /api/admin/shared-nodes/[label]/[nodeId]', () => {
 
   it('forwards force_partial query parameter', async () => {
     mockedGetServerSession.mockResolvedValue({
-      user: { email: 'admin@example.com', id: 'admin-id' },
+      user: { email: 'admin@example.com', id: 'admin-id', role: 'admin' },
     } as any)
 
     const backendSpy = vi.fn()
@@ -211,7 +212,7 @@ describe('DELETE /api/admin/shared-nodes/[label]/[nodeId]', () => {
 
   it('returns backend response status', async () => {
     mockedGetServerSession.mockResolvedValue({
-      user: { email: 'admin@example.com', id: 'admin-id' },
+      user: { email: 'admin@example.com', id: 'admin-id', role: 'admin' },
     } as any)
 
     server.use(
@@ -230,7 +231,7 @@ describe('DELETE /api/admin/shared-nodes/[label]/[nodeId]', () => {
 
   it('returns 500 on fetch error', async () => {
     mockedGetServerSession.mockResolvedValue({
-      user: { email: 'admin@example.com', id: 'admin-id' },
+      user: { email: 'admin@example.com', id: 'admin-id', role: 'admin' },
     } as any)
 
     server.use(

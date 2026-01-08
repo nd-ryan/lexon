@@ -2,6 +2,8 @@
 
 import json
 import logging
+import os
+import re
 from typing import Any, Dict, List, Optional, Set, Tuple
 from fastapi import APIRouter, HTTPException, Depends, Query, Request
 from pydantic import BaseModel
@@ -18,6 +20,9 @@ from app.lib.case_repo import case_repo
 
 logger = setup_logger("shared-nodes")
 router = APIRouter(prefix="/shared-nodes", dependencies=[Depends(get_api_key)])
+
+_SCHEMA_RAW = os.getenv("POSTGRES_SCHEMA", "public")
+POSTGRES_SCHEMA = _SCHEMA_RAW if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", _SCHEMA_RAW or "") else "public"
 
 
 def get_user_id(request: Request) -> str:
@@ -122,9 +127,9 @@ def find_cases_containing_node(db: Session, node_id: str, node_label: str) -> Li
               )
             """
 
-    query = text("""
+    query = text(f"""
         SELECT id, filename, extracted, kg_extracted
-        FROM cases
+        FROM {POSTGRES_SCHEMA}.cases
         WHERE extracted IS NOT NULL
           AND EXISTS (
             SELECT 1 FROM jsonb_array_elements(extracted->'nodes') AS node
@@ -298,11 +303,11 @@ def get_case_connection_counts_for_nodes(
 
     # Build SELECTs (UNION ALL) from nodes and edges
     selects: List[str] = [
-        """
+        f"""
         SELECT
           node->'properties'->>:id_prop AS node_id,
           c.id AS case_id
-        FROM cases c
+        FROM {POSTGRES_SCHEMA}.cases c
         CROSS JOIN LATERAL jsonb_array_elements(c.extracted->'nodes') AS node
         WHERE c.extracted IS NOT NULL
           AND node->>'label' = :label
@@ -320,7 +325,7 @@ def get_case_connection_counts_for_nodes(
             SELECT
               edge->>'{endpoint}' AS node_id,
               c.id AS case_id
-            FROM cases c
+            FROM {POSTGRES_SCHEMA}.cases c
             CROSS JOIN LATERAL jsonb_array_elements(c.extracted->'edges') AS edge
             WHERE c.extracted IS NOT NULL
               AND edge->>'label' = '{edge_label}'

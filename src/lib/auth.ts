@@ -17,20 +17,35 @@ export const authOptions = {
           return null
         }
 
-        const user = await prisma.user.findUnique({
-          where: {
-            email: credentials.email
-          }
-        })
+        // Never allow raw DB/Prisma errors to propagate into NextAuth's redirect
+        // (it can produce invalid Location headers due to newlines/special chars).
+        // If anything fails here, treat it as an auth failure.
+        let user: any
+        try {
+          user = await prisma.user.findUnique({
+            where: {
+              email: credentials.email
+            }
+          })
+        } catch (err) {
+          console.error('Credentials authorize(): Prisma error', err)
+          return null
+        }
 
         if (!user || !user.password) {
           return null
         }
 
-        const isPasswordValid = await bcrypt.compare(
-          credentials.password,
-          user.password
-        )
+        let isPasswordValid = false
+        try {
+          isPasswordValid = await bcrypt.compare(
+            credentials.password,
+            user.password
+          )
+        } catch (err) {
+          console.error('Credentials authorize(): bcrypt error', err)
+          return null
+        }
 
         if (!isPasswordValid) {
           return null
@@ -40,6 +55,7 @@ export const authOptions = {
           id: user.id,
           email: user.email,
           name: user.name || '',
+          role: user.role,
         }
       }
     })
@@ -58,12 +74,16 @@ export const authOptions = {
     async jwt({ token, user }: { token: any, user?: any }) {
       if (user) {
         token.id = user.id
+        token.role = (user as any).role
       }
       return token
     },
     session: async ({ session, token }: { session: any, token: any }) => {
       if (session?.user && token?.id) {
         session.user.id = token.id as string;
+      }
+      if (session?.user && token?.role) {
+        session.user.role = token.role as any
       }
       return session
     },

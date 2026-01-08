@@ -26,8 +26,8 @@ describe('SharedNodesPage', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
-    process.env.NEXT_PUBLIC_ADMIN_EMAIL = 'admin@example.com'
     mockedUseRouter.mockReturnValue({ push: mockPush } as any)
+    window.localStorage.clear()
   })
 
   describe('Authentication', () => {
@@ -43,7 +43,7 @@ describe('SharedNodesPage', () => {
 
     it('redirects non-admin users to home', async () => {
       mockedUseSession.mockReturnValue({
-        data: { user: { email: 'user@example.com' } },
+        data: { user: { email: 'user@example.com', role: 'user' } },
         status: 'authenticated',
       } as any)
 
@@ -71,7 +71,7 @@ describe('SharedNodesPage', () => {
   describe('Page Rendering', () => {
     beforeEach(() => {
       mockedUseSession.mockReturnValue({
-        data: { user: { email: 'admin@example.com', id: 'admin-id' } },
+        data: { user: { email: 'admin@example.com', id: 'admin-id', role: 'admin' } },
         status: 'authenticated',
       } as any)
     })
@@ -125,8 +125,9 @@ describe('SharedNodesPage', () => {
       // Check table headers
       expect(screen.getByText('Type')).toBeInTheDocument()
       expect(screen.getByText('Name')).toBeInTheDocument()
-      expect(screen.getByText('Connections')).toBeInTheDocument()
+      expect(screen.getByText('Case Connections')).toBeInTheDocument()
       expect(screen.getByText('Status')).toBeInTheDocument()
+      expect(screen.getByText('Preset')).toBeInTheDocument()
       expect(screen.getByText('Actions')).toBeInTheDocument()
     })
 
@@ -142,7 +143,7 @@ describe('SharedNodesPage', () => {
   describe('Filtering', () => {
     beforeEach(() => {
       mockedUseSession.mockReturnValue({
-        data: { user: { email: 'admin@example.com', id: 'admin-id' } },
+        data: { user: { email: 'admin@example.com', id: 'admin-id', role: 'admin' } },
         status: 'authenticated',
       } as any)
     })
@@ -201,7 +202,7 @@ describe('SharedNodesPage', () => {
   describe('Edit Modal', () => {
     beforeEach(() => {
       mockedUseSession.mockReturnValue({
-        data: { user: { email: 'admin@example.com', id: 'admin-id' } },
+        data: { user: { email: 'admin@example.com', id: 'admin-id', role: 'admin' } },
         status: 'authenticated',
       } as any)
     })
@@ -289,7 +290,7 @@ describe('SharedNodesPage', () => {
   describe('Delete Modal', () => {
     beforeEach(() => {
       mockedUseSession.mockReturnValue({
-        data: { user: { email: 'admin@example.com', id: 'admin-id' } },
+        data: { user: { email: 'admin@example.com', id: 'admin-id', role: 'admin' } },
         status: 'authenticated',
       } as any)
     })
@@ -322,7 +323,7 @@ describe('SharedNodesPage', () => {
       await user.click(deleteButtons[0])
 
       await waitFor(() => {
-        expect(screen.getByText(/permanently delete/i)).toBeInTheDocument()
+        expect(screen.getByText(/preserved in the Knowledge Graph/i)).toBeInTheDocument()
       })
     })
 
@@ -360,12 +361,12 @@ describe('SharedNodesPage', () => {
       })
 
       // Click the delete button in the modal
-      const confirmDelete = screen.getByRole('button', { name: /Delete Node/i })
+      const confirmDelete = screen.getByRole('button', { name: /Detach from Cases/i })
       await user.click(confirmDelete)
 
       // Should show the min_per_case violation modal
       await waitFor(() => {
-        expect(screen.getByText(/Cannot Delete Completely/i)).toBeInTheDocument()
+        expect(screen.getByText(/Cannot Detach From All Cases/i)).toBeInTheDocument()
       })
     })
   })
@@ -373,7 +374,7 @@ describe('SharedNodesPage', () => {
   describe('Error Handling', () => {
     beforeEach(() => {
       mockedUseSession.mockReturnValue({
-        data: { user: { email: 'admin@example.com', id: 'admin-id' } },
+        data: { user: { email: 'admin@example.com', id: 'admin-id', role: 'admin' } },
         status: 'authenticated',
       } as any)
     })

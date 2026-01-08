@@ -2,12 +2,17 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import jwt from 'jsonwebtoken';
+import { hasDbAtLeastRole } from '@/lib/rbac'
 
 export async function POST(req: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
     if (!session) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const isAdmin = await hasDbAtLeastRole(session, 'admin')
+    if (!isAdmin.ok) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 
     const { jobId } = await req.json();

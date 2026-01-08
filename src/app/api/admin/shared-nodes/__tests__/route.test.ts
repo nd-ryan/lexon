@@ -13,6 +13,10 @@ vi.mock('@/lib/auth', () => ({
   authOptions: {},
 }))
 
+vi.mock('@/lib/rbac', () => ({
+  hasDbAtLeastRole: async (session: any) => ({ ok: session?.user?.role === 'admin', role: session?.user?.role ?? null }),
+}))
+
 // Import AFTER mocks are set up
 import { GET } from '../route'
 import { getServerSession } from 'next-auth/next'
@@ -22,8 +26,6 @@ const mockedGetServerSession = vi.mocked(getServerSession)
 describe('GET /api/admin/shared-nodes', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    process.env.NEXT_PUBLIC_ADMIN_EMAIL = 'admin@example.com'
-    delete process.env.NEXT_PUBLIC_ADMIN_EMAILS
     process.env.AI_BACKEND_URL = 'http://localhost:8000'
     process.env.FASTAPI_API_KEY = 'test-api-key'
   })
@@ -41,18 +43,18 @@ describe('GET /api/admin/shared-nodes', () => {
 
   it('returns 401 for non-admin users', async () => {
     mockedGetServerSession.mockResolvedValue({
-      user: { email: 'user@example.com' },
+      user: { id: 'u1', email: 'user@example.com', role: 'user' },
     } as any)
 
     const request = new NextRequest('http://localhost:3000/api/admin/shared-nodes')
     const response = await GET(request)
 
-    expect(response.status).toBe(401)
+    expect(response.status).toBe(403)
   })
 
   it('proxies request to backend for admin users', async () => {
     mockedGetServerSession.mockResolvedValue({
-      user: { email: 'admin@example.com' },
+      user: { id: 'a1', email: 'admin@example.com', role: 'admin' },
     } as any)
 
     const backendSpy = vi.fn()
@@ -72,29 +74,9 @@ describe('GET /api/admin/shared-nodes', () => {
     expect(intercepted.headers.get('X-API-Key')).toBe('test-api-key')
   })
 
-  it('allows any email included in NEXT_PUBLIC_ADMIN_EMAILS', async () => {
-    delete process.env.NEXT_PUBLIC_ADMIN_EMAIL
-    process.env.NEXT_PUBLIC_ADMIN_EMAILS = 'admin@example.com,other@example.com'
-
-    mockedGetServerSession.mockResolvedValue({
-      user: { email: 'other@example.com' },
-    } as any)
-
-    server.use(
-      http.get('http://localhost:8000/api/ai/shared-nodes', () => {
-        return HttpResponse.json({ success: true, nodes: [] }, { status: 200 })
-      })
-    )
-
-    const request = new NextRequest('http://localhost:3000/api/admin/shared-nodes?label=Party')
-    const response = await GET(request)
-
-    expect(response.status).toBe(200)
-  })
-
   it('forwards query parameters to backend', async () => {
     mockedGetServerSession.mockResolvedValue({
-      user: { email: 'admin@example.com' },
+      user: { id: 'a1', email: 'admin@example.com', role: 'admin' },
     } as any)
 
     const backendSpy = vi.fn()
@@ -120,7 +102,7 @@ describe('GET /api/admin/shared-nodes', () => {
 
   it('returns 500 on fetch error', async () => {
     mockedGetServerSession.mockResolvedValue({
-      user: { email: 'admin@example.com' },
+      user: { id: 'a1', email: 'admin@example.com', role: 'admin' },
     } as any)
 
     server.use(

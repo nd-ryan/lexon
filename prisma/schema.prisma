@@ -11,7 +11,16 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+  // For Postgres schema isolation, set this URL to include `?schema=auth`.
+  // Example: postgresql://.../db?schema=auth
   url      = env("DATABASE_URL")
+}
+
+enum Role {
+  user
+  editor
+  developer
+  admin
 }
 
 model Account {
@@ -48,6 +57,7 @@ model User {
   emailVerified DateTime?
   image         String?
   password      String?
+  role          Role      @default(user)
   accounts      Account[]
   sessions      Session[]
   searchHistory SearchHistory[]

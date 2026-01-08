@@ -1,13 +1,31 @@
 "use client";
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Button from '@/components/ui/button'
 import { useRouter } from 'next/navigation'
+import { useSession } from 'next-auth/react'
+import type { Session } from 'next-auth'
+import { hasAtLeastRole } from '@/lib/rbac'
 
 export default function CaseUploadPage() {
   const [file, setFile] = useState<File | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const router = useRouter()
+  const { status, data: session } = useSession()
+  const role = (session?.user as Session['user'])?.role
+  const isAdmin = hasAtLeastRole(role, 'admin')
+
+  useEffect(() => {
+    if (status === 'unauthenticated') {
+      router.push('/auth/signin')
+    } else if (status === 'authenticated' && !isAdmin) {
+      router.push('/cases')
+    }
+  }, [status, isAdmin, router])
+
+  if (status === 'loading') return null
+  if (status === 'unauthenticated') return null
+  if (!isAdmin) return null
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault()

@@ -1,4 +1,7 @@
 import { NextRequest } from 'next/server'
+import { getServerSession } from 'next-auth/next'
+import { authOptions } from '@/lib/auth'
+import { hasDbAtLeastRole } from '@/lib/rbac'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -8,6 +11,15 @@ export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ jobId: string }> }
 ) {
+  const session = await getServerSession(authOptions)
+  if (!session?.user?.id) {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 })
+  }
+  const isAdmin = await hasDbAtLeastRole(session, 'admin')
+  if (!isAdmin.ok) {
+    return new Response(JSON.stringify({ error: 'Forbidden' }), { status: 403 })
+  }
+
   const { jobId } = await params
   const FASTAPI_URL = process.env.AI_BACKEND_URL || 'http://localhost:8000'
   const apiKey = process.env.FASTAPI_API_KEY || ''

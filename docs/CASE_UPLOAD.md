@@ -8,8 +8,8 @@ Lexon supports two workflows for getting case data into the Knowledge Graph:
 
 | Method | Use Case | Access | Location |
 |--------|----------|--------|----------|
-| **Single Case Upload** | Individual case review & submission | All users | Case Editor page |
-| **Bulk Upload** | Processing multiple cases at once | Admin only | `/admin/bulk-upload` |
+| **Single Case Upload** | Create a case from a document, then review/edit/submit | **Admin** (upload) + **Editor** (edit/submit) | Upload + Case Editor |
+| **Bulk Upload** | Processing multiple cases at once | **Admin** | `/admin/bulk-upload` |
 
 Both methods ultimately use the same backend endpoint (`/api/kg/submit`) for the final KG submission.
 
@@ -19,11 +19,15 @@ Both methods ultimately use the same backend endpoint (`/api/kg/submit`) for the
 
 ### User Flow
 
-1. **Upload Document**: User uploads a `.docx` or `.pdf` file via the case upload page
+1. **Upload Document (admin)**: Admin uploads a `.docx` or `.pdf` via the case upload page
 2. **AI Extraction**: Backend extracts case data using CrewAI (`CaseExtractFlow`)
-3. **Review & Edit**: User reviews extracted data in the Case Editor, making corrections
+3. **Review & Edit (editor+)**: Editors review extracted data in the Case Editor and make corrections
 4. **Save**: Changes are saved to Postgres (`extracted` column)
-5. **Submit to KG**: User clicks "Submit to KG" button to publish to Neo4j
+5. **Submit to KG (editor+)**: Editors click "Submit to KG" to publish to Neo4j
+
+**Notes:**
+- Users with role `user` can view cases and use chat, but cannot edit cases or submit to KG.
+- Uploading new documents is intentionally restricted to admins to control ingestion.
 
 ### Technical Flow
 

@@ -2,11 +2,12 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { useSession } from 'next-auth/react'
+import type { Session } from 'next-auth'
 import { useRouter } from 'next/navigation'
 import type { Schema } from '@/types/case-graph'
 import { ObjectFields } from '@/components/cases/editor/Field'
 import { validateRequiredFields } from '@/lib/cases/validation'
-import { isAdminEmail } from '@/lib/admin'
+import { hasAtLeastRole } from '@/lib/rbac'
 
 interface SchemaNode {
   label: string
@@ -65,7 +66,8 @@ export default function SharedNodesPage() {
   const [deletedCases, setDeletedCases] = useState<Set<string>>(new Set())
   const [validationMessages, setValidationMessages] = useState<string[] | null>(null)
   
-  const isAdmin = isAdminEmail(session?.user?.email)
+  const role = (session?.user as Session['user'])?.role
+  const isAdmin = hasAtLeastRole(role, 'admin')
   
   useEffect(() => {
     if (status === 'loading') return

@@ -14,8 +14,8 @@ Primary goals:
 - **Framework:** Next.js 15 (React 19, TypeScript, Tailwind CSS 4)
 - **State Management:** Zustand
 - **UI Components:** Custom Tailwind CSS components
-- **Authentication:** NextAuth.js with credentials provider
-- **Database:** Prisma ORM with PostgreSQL (user data, sessions, search history)
+- **Authentication:** NextAuth.js (credentials provider) + **role-based access control (RBAC)**
+- **Database:** Prisma ORM with PostgreSQL (**`auth` schema**: users/sessions/search history + user role)
 - **Deployment:** Vercel (serverless functions)
 
 ### Backend
@@ -24,7 +24,7 @@ Primary goals:
 - **Queue System:** Redis with RQ (Python) for background jobs
 - **Database Connections:**
   - Neo4j (knowledge graph) - via official Neo4j driver and MCP integration
-  - PostgreSQL (case metadata, jobs) - via SQLAlchemy
+  - PostgreSQL (case metadata, jobs) - via SQLAlchemy (**`app` schema**; Alembic migrations)
 - **Streaming:** JWT-based streaming with Redis pub/sub (bypasses Vercel 60s timeout)
 - **Security:** API key authentication + JWT tokens for streaming
 - **Deployment:** Fly.io (persistent containers)
@@ -82,3 +82,4 @@ Primary goals:
 - **Multi-agent AI:** Orchestrated CrewAI agents for complex extraction tasks
 - **Batch Enrichment:** Efficient querying of large node sets
 - **Schema-driven:** Dynamic schema validation and property filtering
+- **RBAC:** `user`, `editor`, `developer`, `admin` roles gate UI pages and API routes

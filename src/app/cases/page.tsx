@@ -2,9 +2,10 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
+import type { Session } from 'next-auth';
 import { useAppStore } from '@/lib/store/appStore';
 import { DocumentDownloadButton } from '@/components/cases/DocumentDownloadButton';
-import { isAdminEmail } from '@/lib/admin';
+import { hasAtLeastRole } from '@/lib/rbac';
 
 type ComparisonStatus = 'all' | 'issues' | 'synced' | 'pending' | 'not_checked' | 'not_in_kg' | 'needs_completion';
 
@@ -19,7 +20,8 @@ interface BatchProgress {
 
 export default function CasesListPage() {
   const { data: session } = useSession();
-  const isAdmin = isAdminEmail(session?.user?.email);
+  const role = (session?.user as Session['user'])?.role
+  const isAdmin = hasAtLeastRole(role, 'admin');
   
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState<any>(null);
@@ -297,12 +299,14 @@ export default function CasesListPage() {
                 {batchRunning ? 'Running...' : 'Run Comparisons'}
               </button>
             )}
-          <Link 
-            href="/cases/upload"
-            className="text-blue-600 underline text-sm hover:text-blue-700"
-          >
-            Upload
-          </Link>
+            {isAdmin && (
+              <Link 
+                href="/cases/upload"
+                className="text-blue-600 underline text-sm hover:text-blue-700"
+              >
+                Upload
+              </Link>
+            )}
           </div>
         </div>
 
@@ -394,10 +398,10 @@ export default function CasesListPage() {
           <div className="text-center py-12 text-sm text-gray-500">
             <p>
               {selectedDomain === 'all' && selectedComparisonStatus === 'all'
-                ? 'No cases yet. Get started by uploading a case.' 
+                ? (isAdmin ? 'No cases yet. Get started by uploading a case.' : 'No cases yet.')
                 : 'No cases found with the selected filters.'}
             </p>
-            {selectedDomain === 'all' && selectedComparisonStatus === 'all' && (
+            {isAdmin && selectedDomain === 'all' && selectedComparisonStatus === 'all' && (
               <div className="mt-4">
                 <Link
                   href="/cases/upload"
@@ -437,13 +441,15 @@ export default function CasesListPage() {
                     </div>
                     <div className="flex items-center gap-2">
                       <DocumentDownloadButton caseId={c.id} hasFile={c.has_file} />
-                      <button
-                        type="button"
-                        onClick={() => { setCaseToDelete(c); setDeleteError(null); setConfirmOpen(true); }}
-                        className="text-xs text-red-600 hover:text-red-700 hover:underline"
-                      >
-                        Delete
-                      </button>
+                      {isAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => { setCaseToDelete(c); setDeleteError(null); setConfirmOpen(true); }}
+                          className="text-xs text-red-600 hover:text-red-700 hover:underline"
+                        >
+                          Delete
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>

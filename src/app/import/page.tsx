@@ -3,7 +3,9 @@
 import { useState, useEffect } from 'react';
 import Button from '@/components/ui/button';
 import { useSession } from 'next-auth/react';
+import type { Session } from 'next-auth';
 import { useRouter } from 'next/navigation';
+import { hasAtLeastRole } from '@/lib/rbac'
 
 export default function ImportPage() {
   const [file, setFile] = useState<File | null>(null);
@@ -11,14 +13,18 @@ export default function ImportPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
-  const { status } = useSession();
+  const { status, data: session } = useSession();
   const router = useRouter();
+  const role = (session?.user as Session['user'])?.role
+  const isAdmin = hasAtLeastRole(role, 'admin')
 
   useEffect(() => {
     if (status === 'unauthenticated') {
       router.push('/auth/signin');
+    } else if (status === 'authenticated' && !isAdmin) {
+      router.push('/cases')
     }
-  }, [status, router]);
+  }, [status, router, isAdmin]);
 
   if (status === 'loading') {
     return (
@@ -30,6 +36,9 @@ export default function ImportPage() {
 
   if (status === 'unauthenticated') {
     return null; // or a loading spinner, as the redirect is happening
+  }
+  if (status === 'authenticated' && !isAdmin) {
+    return null
   }
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {

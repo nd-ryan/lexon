@@ -5,8 +5,10 @@ import Button from "@/components/ui/button";
 import Card from "@/components/ui/card";
 import Input from "@/components/ui/input";
 import { useSession } from 'next-auth/react';
+import type { Session } from 'next-auth';
 import { useRouter } from 'next/navigation';
 import StructuredResults, { StructuredSearchResponse } from '@/components/search/StructuredResults.client';
+import { hasAtLeastRole } from '@/lib/rbac'
  
 
 // Search history types
@@ -352,14 +354,18 @@ const SearchPage = () => {
 };
 
 export default function SearchPageContainer() {
-  const { status } = useSession();
+  const { status, data: session } = useSession();
   const router = useRouter();
+  const role = (session?.user as Session['user'])?.role
+  const isAdmin = hasAtLeastRole(role, 'admin')
 
   useEffect(() => {
     if (status === 'unauthenticated') {
       router.push('/auth/signin');
+    } else if (status === 'authenticated' && !isAdmin) {
+      router.push('/cases')
     }
-  }, [status, router]);
+  }, [status, router, isAdmin]);
 
   if (status === 'loading') {
     return (
@@ -370,6 +376,10 @@ export default function SearchPageContainer() {
   }
 
   if (status === 'unauthenticated') {
+    return null;
+  }
+
+  if (status === 'authenticated' && !isAdmin) {
     return null;
   }
 

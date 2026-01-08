@@ -1,15 +1,16 @@
 "use client";
-import React, { useMemo, useState, useCallback } from 'react'
+import React, { useMemo, useState, useCallback, useEffect } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import { useSession } from 'next-auth/react'
+import type { Session } from 'next-auth'
 import type { Schema } from '@/types/case-graph'
 import { useAppStore } from '@/lib/store/appStore'
 import AddNodeModal from '@/components/cases/AddNodeModal.client'
 import SelectNodeModal from '@/components/cases/SelectNodeModal.client'
 import RelationshipAction from '@/components/cases/RelationshipAction.client'
 import { analyzeRelationship } from '@/lib/relationshipHelpers'
-import { isAdminEmail } from '@/lib/admin'
+import { hasAtLeastRole } from '@/lib/rbac'
 
 // Hooks
 import { useCaseData } from '@/hooks/cases/useCaseData'
@@ -47,6 +48,7 @@ export default function CaseEditorPage() {
   const params = useParams()
   const id = params?.id as string
   const { data: session } = useSession()
+  const role = (session?.user as Session['user'] | undefined)?.role
   const schema = useAppStore(s => s.schema as Schema | null)
   const catalogNodes = useAppStore(s => s.catalogNodes)
   
@@ -128,6 +130,15 @@ export default function CaseEditorPage() {
   
   // UI state
   const [isViewMode, setIsViewMode] = useState(true)
+  const canEdit = hasAtLeastRole(role, 'editor')
+  const setViewMode = useCallback((next: boolean) => {
+    if (!canEdit) return
+    setIsViewMode(next)
+  }, [canEdit])
+
+  useEffect(() => {
+    if (!canEdit) setIsViewMode(true)
+  }, [canEdit])
   const { uiState, uiActions } = useUIState()
 
   // Derived data
@@ -867,7 +878,7 @@ export default function CaseEditorPage() {
       {/* Sidebar Navigation */}
       <CaseSidebar
         isViewMode={isViewMode}
-        setIsViewMode={setIsViewMode}
+        setIsViewMode={setViewMode}
         caseNode={caseNode}
         proceedingNodes={proceedingNodes}
         forumNodes={forumNodes}
@@ -905,7 +916,7 @@ export default function CaseEditorPage() {
                 caseId={id} 
                 hasFile={Boolean(data?.file_key)} 
               />
-              {isAdminEmail(session?.user?.email) && Boolean((data as any)?.kg_submitted_at) && Boolean(caseNode?.properties?.case_id) ? (
+              {hasAtLeastRole(role, 'admin') && Boolean((data as any)?.kg_submitted_at) && Boolean(caseNode?.properties?.case_id) ? (
                 <Link
                   href={`/cases/${id}/neo4j?neo4j_case_id=${encodeURIComponent(caseNode!.properties!.case_id as string)}`}
                   className="ml-2 rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"

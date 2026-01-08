@@ -94,9 +94,10 @@ sequenceDiagram
    - 30-minute expiration
    - Used only for streaming endpoints
 
-3. **NextAuth Session**: For user authentication
-   - Required to get JWT tokens
-   - Handles OAuth providers
+3. **NextAuth Session + RBAC**: For user authentication + authorization
+   - Session is required to access the app and to mint streaming tokens
+   - Users have a `role` (`user`, `editor`, `developer`, `admin`) stored in Postgres
+   - UI and Next.js API routes enforce role-based access (server-side checks are DB-backed)
 
 ### Security Benefits
 
@@ -198,12 +199,13 @@ async def event_stream():
 **Frontend Specific:**
 - `AI_BACKEND_URL`: Points to backend for direct connections
 - `NEXTAUTH_SECRET`: Session management
-- `DATABASE_URL`: User data storage
+- `DATABASE_URL`: Prisma/NextAuth storage (**recommended `?schema=auth`**)
 
 **Backend Specific:**
 - `FASTAPI_API_KEY`: Server-to-server authentication
 - `REDIS_URL`: Job queue and pub/sub
 - `NEO4J_URI`: Knowledge graph database
 - `OPENAI_API_KEY`: AI model access
+- `POSTGRES_SCHEMA`: Backend-owned Postgres schema (recommended `app`)
 
 This architecture provides a robust, scalable, and secure foundation for long-running AI-powered search operations while maintaining excellent user experience. 

@@ -2,8 +2,9 @@
 
 import React, { useState, useRef, useEffect } from 'react'
 import { useSession } from 'next-auth/react'
+import type { Session } from 'next-auth'
 import Link from 'next/link'
-import { isAdminEmail } from '@/lib/admin'
+import { hasAtLeastRole } from '@/lib/rbac'
 
 export default function AdminLink() {
   const { data: session } = useSession()
@@ -20,7 +21,8 @@ export default function AdminLink() {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
   
-  if (!session || !isAdminEmail(session.user?.email)) {
+  const role = (session?.user as Session['user'])?.role
+  if (!session || !hasAtLeastRole(role, 'admin')) {
     return null
   }
   
@@ -65,6 +67,13 @@ export default function AdminLink() {
             onClick={() => setIsOpen(false)}
           >
             Event Logs
+          </Link>
+          <Link
+            href="/admin/users"
+            className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+            onClick={() => setIsOpen(false)}
+          >
+            Users
           </Link>
         </div>
       )}

@@ -1,9 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth/next'
+import { authOptions } from '@/lib/auth'
+import { hasDbAtLeastRole } from '@/lib/rbac'
 
 const AI_BACKEND_URL = process.env.AI_BACKEND_URL || 'http://localhost:8000';
 const API_KEY = process.env.FASTAPI_API_KEY;
 
 export async function POST(req: NextRequest) {
+  const session = await getServerSession(authOptions)
+  if (!session?.user?.id) {
+    return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
+  }
+  const isAdmin = await hasDbAtLeastRole(session, 'admin')
+  if (!isAdmin.ok) {
+    return NextResponse.json({ detail: 'Forbidden' }, { status: 403 })
+  }
+
   console.log('=== Search Crew Stream Proxy Debug ===');
   console.log('AI_BACKEND_URL:', AI_BACKEND_URL);
   console.log('API_KEY exists:', !!API_KEY);

@@ -1,9 +1,10 @@
 "use client";
 import { useState, useEffect, useCallback } from 'react'
 import { useSession } from 'next-auth/react'
+import type { Session } from 'next-auth'
 import { useRouter } from 'next/navigation'
 import Button from '@/components/ui/button'
-import { isAdminEmail } from '@/lib/admin'
+import { hasAtLeastRole } from '@/lib/rbac'
 
 interface GraphEvent {
   id: string
@@ -38,7 +39,8 @@ export default function EventLogsPage() {
   const [userFilter, setUserFilter] = useState<string>('')
   const [limit, setLimit] = useState(100)
 
-  const isAdmin = isAdminEmail(session?.user?.email)
+  const role = (session?.user as Session['user'])?.role
+  const isAdmin = hasAtLeastRole(role, 'admin')
 
   // Protect the page
   useEffect(() => {
