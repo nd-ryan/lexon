@@ -62,11 +62,11 @@ or client-side code. CORS is not enabled for `/external` endpoints.
 ### Data Handling
 
 - **Lexon does not persist request bodies.** Operational logs store metadata only (request_id, timing, counts).
-- **Query content IS sent to OpenAI** via the OpenAI API for processing.
-- OpenAI's API data usage and retention terms apply to query text.
+- **Query content IS sent to Google** via the Gemini API for processing.
+- Google's Gemini API data usage and retention terms apply to query text.
 - If you require specific data retention or non-retention guarantees, discuss with Lexon before enabling production traffic.
 
-**Current subprocessors:** OpenAI (LLM reasoning + embeddings). Contact Lexon for current list and terms.
+**Current subprocessors:** Google (Gemini LLM reasoning + embeddings). Contact Lexon for current list and terms.
 
 ### Authentication
 

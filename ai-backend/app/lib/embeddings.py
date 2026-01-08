@@ -2,13 +2,17 @@ import os
 import asyncio
 import logging
 from typing import List, Dict, Any, Optional
-from openai import OpenAI
+from litellm import embedding
 from .neo4j_client import neo4j_client
 
 logger = logging.getLogger(__name__)
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+# Gemini API key for embeddings (litellm uses GEMINI_API_KEY env var automatically)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+# Embedding model configuration
+EMBEDDING_MODEL = "gemini/gemini-embedding-001"
+EMBEDDING_DIMENSIONS = 1536  # Match existing Neo4j vector indices
 
 def _load_embedding_config() -> Dict[str, List[str]]:
     """Derive embedding targets from schema.json.
@@ -47,13 +51,13 @@ def generate_embeddings_for_nodes(
 
     - For each label in nodes_by_label, look up properties to embed from `config`.
     - For each node instance, if the property exists and is non-empty, compute
-      an OpenAI embedding and store it as `<property>_embedding` on the node in Neo4j.
+      a Gemini embedding and store it as `<property>_embedding` on the node in Neo4j.
 
     Returns True on success (best-effort; logs and continues on individual failures).
     """
     try:
-        if client is None:
-            logger.warning("Embeddings disabled: OPENAI_API_KEY is not set")
+        if not GEMINI_API_KEY:
+            logger.warning("Embeddings disabled: GEMINI_API_KEY is not set")
             return False
         if not nodes_by_label:
             logger.info("No nodes provided for embedding generation; skipping")
@@ -96,12 +100,13 @@ def generate_embeddings_for_nodes(
                     per_prop_attempts[prop_name] += 1
 
                     try:
-                        # Compute embedding for the property text
-                        response = client.embeddings.create(
-                            model="text-embedding-3-small",
-                            input=text,
+                        # Compute embedding for the property text using Gemini
+                        response = embedding(
+                            model=EMBEDDING_MODEL,
+                            input=[text],
+                            dimensions=EMBEDDING_DIMENSIONS,
                         )
-                        vector = response.data[0].embedding
+                        vector = response.data[0]["embedding"]
                         total_requests += 1
 
                         # Persist to Neo4j on a per-property embedding field
@@ -174,13 +179,14 @@ async def generate_embeddings_for_cases(case_ids: List[str]) -> bool:
                 continue
             
             try:
-                # Generate embedding using OpenAI
-                response = client.embeddings.create(
-                    model="text-embedding-3-small",
-                    input=summary_text
+                # Generate embedding using Gemini
+                response = embedding(
+                    model=EMBEDDING_MODEL,
+                    input=[summary_text],
+                    dimensions=EMBEDDING_DIMENSIONS,
                 )
                 
-                embedding_vector = response.data[0].embedding
+                embedding_vector = response.data[0]["embedding"]
                 
                 # Store embedding in Neo4j
                 update_query = """
@@ -209,20 +215,21 @@ async def generate_embeddings_for_cases(case_ids: List[str]) -> bool:
 
 def generate_embedding_sync(text: str) -> List[float]:
     """
-    Synchronous function to generate an embedding for text.
+    Synchronous function to generate an embedding for text using Gemini.
     
     Args:
         text: Text to generate embedding for
         
     Returns:
-        Embedding vector as list of floats
+        Embedding vector as list of floats (1536 dimensions)
     """
     try:
-        response = client.embeddings.create(
-            model="text-embedding-3-small",
-            input=text
+        response = embedding(
+            model=EMBEDDING_MODEL,
+            input=[text],
+            dimensions=EMBEDDING_DIMENSIONS,
         )
-        return response.data[0].embedding
+        return response.data[0]["embedding"]
     except Exception as e:
         logger.error(f"Error generating embedding: {e}")
-        raise 
+        raise
