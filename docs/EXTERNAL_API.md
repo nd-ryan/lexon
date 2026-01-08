@@ -121,28 +121,28 @@ http://localhost:8000/external/v1
 - Request body content
 - Any user-provided text
 
-### What Is Sent to Google
+### What Is Sent to OpenAI
 
-Query text **IS sent to Google** via the Gemini API for processing. This is required for the query pipeline to work:
+Query text **IS sent to OpenAI** via the OpenAI API for processing. This is required for the query pipeline to work:
 
-1. **Reasoning** - Gemini analyzes your query to identify relevant node types
-2. **Planning** - Gemini creates a search strategy
-3. **Embeddings** - Gemini generates embeddings for semantic search
+1. **Reasoning** - GPT analyzes your query to identify relevant node types
+2. **Planning** - GPT creates a search strategy
+3. **Embeddings** - OpenAI generates embeddings for semantic search
 
-**Google Data Handling:**
-- Google's Gemini API data usage and retention terms apply to query text
-- Review [Google's Gemini API Terms of Service](https://ai.google.dev/gemini-api/terms) for details
+**OpenAI Data Handling:**
+- OpenAI's API data usage and retention terms apply to query text
+- Review [OpenAI's API Data Usage Policy](https://openai.com/policies/api-data-usage-policies) for details
 - If you require specific data retention or non-retention guarantees, discuss with Lexon before enabling production traffic
 
 ### Subprocessors
 
-**Current subprocessors for this endpoint:** Google (Gemini LLM reasoning + embeddings).
+**Current subprocessors for this endpoint:** OpenAI (LLM reasoning + embeddings).
 
 Contact Lexon for the current subprocessor list and applicable terms.
 
 ### Sensitive Data Guidance
 
-Since query text is sent to Google, we recommend:
+Since query text is sent to OpenAI, we recommend:
 
 - **Avoid including** client names, deal terms, trade secrets, or personally identifiable information in queries where possible
 - **Prefer generalized descriptions** (e.g., "antitrust implications of vertical integration" rather than "Company X's acquisition of Company Y")
@@ -150,7 +150,7 @@ Since query text is sent to Google, we recommend:
 
 ### Summary
 
-| Data | Logged by Lexon | Persisted by Lexon | Sent to Google |
+| Data | Logged by Lexon | Persisted by Lexon | Sent to OpenAI |
 |------|-----------------|-------------------|----------------|
 | Query text | **No** | **No** | **Yes** |
 | Request metadata | Yes | No | No |
@@ -272,7 +272,7 @@ curl -X POST "https://api.lexon.law/v1/query" \
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `query` | string | Yes | - | Natural language query (1-12,000 chars). **Not logged. Sent to Google Gemini.** |
+| `query` | string | Yes | - | Natural language query (1-12,000 chars). **Not logged. Sent to OpenAI.** |
 | `limit` | integer | No | 50 | Maximum nodes to return (1-200) |
 
 **Note:** Unknown fields are rejected (HTTP 422).
@@ -506,9 +506,9 @@ The knowledge graph contains the following node types:
 
 When you submit a query, it goes through a multi-stage pipeline:
 
-1. **Reasoning**: Analyzes your query to identify relevant node types (uses Google Gemini)
-2. **Planning**: Creates a search strategy with embedding and traversal steps (uses Google Gemini)
-3. **Vector Search**: Performs semantic search using embeddings (uses Google Gemini for embedding generation)
+1. **Reasoning**: Analyzes your query to identify relevant node types (uses OpenAI GPT)
+2. **Planning**: Creates a search strategy with embedding and traversal steps (uses OpenAI GPT)
+3. **Vector Search**: Performs semantic search using embeddings (uses OpenAI for embedding generation)
 4. **Traversal**: Follows graph relationships to find connected nodes (local processing)
 5. **Enrichment**: Fetches complete data for all matching nodes (local processing)
 
@@ -520,7 +520,7 @@ When you submit a query, it goes through a multi-stage pipeline:
    - Good: "What doctrines apply to tying arrangements in antitrust law?"
    - Less effective: "Tell me about antitrust"
 
-2. **Minimize sensitive data**: Avoid including client names, deal terms, or trade secrets in queries as they are sent to Google for processing (see [Sensitive Data Guidance](#sensitive-data-guidance))
+2. **Minimize sensitive data**: Avoid including client names, deal terms, or trade secrets in queries (see [Sensitive Data Guidance](#sensitive-data-guidance))
 
 3. **Use the limit parameter**: Control response size with `limit` (default: 50, max: 200)
 
@@ -551,7 +551,7 @@ def query_lexon(query: str, limit: int = 50) -> dict:
     Query the Lexon knowledge graph with retry logic.
     
     Args:
-        query: Natural language query (NOT logged by Lexon, IS sent to Google Gemini)
+        query: Natural language query (NOT logged by Lexon, IS sent to OpenAI)
         limit: Maximum number of nodes to return (1-200, default: 50)
     
     Returns:
@@ -559,7 +559,7 @@ def query_lexon(query: str, limit: int = 50) -> dict:
     
     Note:
         Avoid including sensitive data (client names, deal terms) in queries
-        as they are sent to Google for processing.
+        as they are sent to OpenAI for processing.
     """
     headers = {
         "Content-Type": "application/json",
@@ -736,7 +736,7 @@ In production, the following endpoints should return 403/404:
 - **Auth:** Added `Authorization: Bearer` support (preferred over `X-API-Key`)
 - **Security:** `key_id` in logs is now a one-way hash (not raw key prefix)
 - **Security:** Clarified data persistence policy - request bodies are not persisted
-- **Security:** Added subprocessor disclosure (Google)
+- **Security:** Added subprocessor disclosure (OpenAI)
 - **Reliability:** `X-Request-ID` now always present, even on validation errors
 - **Docs:** Added comprehensive retry guidance for each error type
 - Added `limit` parameter (1-200, default: 50) to control result count

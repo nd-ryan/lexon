@@ -6,7 +6,7 @@ returning structured node data from the knowledge graph.
 
 SECURITY POLICY - REQUEST TEXT IS NEVER LOGGED:
 - Query content is NEVER logged by Lexon (only query length is recorded)
-- Query content IS sent to Google Gemini for processing (reasoning, planning, embeddings)
+- Query content IS sent to OpenAI for processing (reasoning, planning, embeddings)
 - Response data is sanitized to whitelist allowed fields only
 - Rate limiting is applied per API key
 - Request timeout prevents hung queries
@@ -145,7 +145,7 @@ class ExternalQueryRequest(BaseModel):
         ...,
         description=(
             "Natural language query to search the knowledge graph. "
-            "This field is NOT logged by Lexon, but IS sent to Google Gemini for processing."
+            "This field is NOT logged by Lexon, but IS sent to OpenAI for processing."
         ),
         min_length=1,
         max_length=QUERY_MAX_LENGTH,
@@ -223,7 +223,7 @@ async def run_query_flow(query: str) -> Dict[str, Any]:
     """
     Execute QueryFlow and return the results.
     
-    NOTE: This sends query text to Google Gemini for:
+    NOTE: This sends query text to OpenAI for:
     - Reasoning (planning the search strategy)
     - Planning (converting to formal search steps)
     - Embedding generation (for semantic search)
@@ -258,7 +258,7 @@ async def run_query_flow_with_timeout(
     Execute QueryFlow with a timeout.
     
     Args:
-        query: The query to execute (sent to Google Gemini)
+        query: The query to execute (sent to OpenAI)
         timeout_seconds: Maximum time to wait (default: 30s)
         
     Returns:
@@ -296,8 +296,8 @@ The query is processed through a multi-stage pipeline that:
 
 **Data Handling:**
 - Query content is **NOT logged** by Lexon (only metadata: request_id, query length, timing, node counts)
-- Query content **IS sent to Google Gemini** for processing (reasoning, planning, embedding generation)
-- See documentation for Google Gemini API data handling policies
+- Query content **IS sent to OpenAI** for processing (reasoning, planning, embedding generation)
+- See documentation for OpenAI data retention policies
 
 **Result Limits:** Use the `limit` parameter to control the number of results (1-{QUERY_RESULT_LIMIT_MAX}, default: {QUERY_RESULT_LIMIT_DEFAULT}).
 The response includes `total_count` and `truncated` to indicate if more results are available.
@@ -317,7 +317,7 @@ async def query(
     """
     Execute a knowledge graph query and return enriched nodes.
     
-    SECURITY: Query content is never logged (only length). Query IS sent to Google Gemini.
+    SECURITY: Query content is never logged (only length). Query IS sent to OpenAI.
     """
     start_time = time.time()
     request_id = auth.request_id
@@ -351,7 +351,7 @@ async def query(
     
     try:
         # Execute with timeout
-        # NOTE: Query content is sent to Google Gemini here
+        # NOTE: Query content is sent to OpenAI here
         result = await run_query_flow_with_timeout(body.query)
         
         enriched_nodes = result.get("enriched_nodes", [])

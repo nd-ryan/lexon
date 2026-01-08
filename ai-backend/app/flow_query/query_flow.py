@@ -418,7 +418,7 @@ class QueryFlow(Flow[QueryState]):
             t_llm_start = time.time()
             # Using a fast model for reasoning
             response = await acompletion(
-                model="gemini/gemini-3-pro", 
+                model="gpt-5.1", 
                 messages=[
                     {"role": "system", "content": system_instruction}, 
                     {"role": "user", "content": user_input}
@@ -671,7 +671,7 @@ class QueryFlow(Flow[QueryState]):
         try:
             t_llm_start = time.time()
             response = await acompletion(
-                model="gemini/gemini-3-pro",
+                model="gpt-5.1",
                 messages=[
                     {"role": "system", "content": system_instruction}, 
                     {"role": "user", "content": user_input}

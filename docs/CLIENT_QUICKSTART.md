@@ -163,7 +163,7 @@ for attempt in range(3):
 ## Data Handling
 
 - **Query content is NOT logged** by Lexon (only metadata like timing and counts)
-- **Query content IS sent to Google Gemini** for processing (reasoning, planning, embeddings)
+- **Query content IS sent to OpenAI** for processing (reasoning, planning, embeddings)
 - Response data is sanitized (no internal fields exposed)
 
 ## Support
