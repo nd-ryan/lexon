@@ -110,7 +110,35 @@ export default function RedocPage() {
   }
 
   return (
-    <div className="min-h-screen bg-white">
+    <div className="min-h-screen bg-white redoc-wrap">
+      {/* Fix vertical alignment in Redoc right panel - examples should be at top, not centered */}
+      <style>{`
+        /* Redoc wraps each endpoint in a flex row that centers content vertically.
+           Override to align at the top instead. Target multiple possible structures. */
+        .redoc-wrap [data-section-id] > div {
+          align-items: flex-start !important;
+        }
+        .redoc-wrap div[id^="operation"] > div {
+          align-items: flex-start !important;
+        }
+        .redoc-wrap div[id^="tag/"] > div > div {
+          align-items: flex-start !important;
+        }
+        /* Target styled-components generated classes (sc- prefix) */
+        .redoc-wrap div[class^="sc-"] {
+          align-items: flex-start !important;
+        }
+        .redoc-wrap div[class*=" sc-"] {
+          align-items: flex-start !important;
+        }
+        /* Target the wrap container around content rows */
+        .redoc-wrap .api-content > div {
+          align-items: flex-start !important;
+        }
+        .redoc-wrap section > div {
+          align-items: flex-start !important;
+        }
+      `}</style>
       <div id="redoc-container" />
       {!spec && (
         <div className="flex min-h-[50vh] items-center justify-center">

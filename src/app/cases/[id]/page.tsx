@@ -879,6 +879,7 @@ export default function CaseEditorPage() {
       <CaseSidebar
         isViewMode={isViewMode}
         setIsViewMode={setViewMode}
+        canEdit={canEdit}
         caseNode={caseNode}
         proceedingNodes={proceedingNodes}
         forumNodes={forumNodes}

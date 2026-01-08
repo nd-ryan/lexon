@@ -7,10 +7,10 @@ import type { Session } from 'next-auth'
 import { hasAtLeastRole } from '@/lib/rbac'
 
 const docsLinks = [
-  { href: '/docs/api/swagger', label: 'Swagger UI', description: 'Interactive API explorer' },
-  { href: '/docs/api/redoc', label: 'ReDoc', description: 'API reference documentation' },
   { href: '/docs/api/quickstart', label: 'Quick Start', description: 'Get started in 5 minutes' },
   { href: '/api/docs/postman', label: 'Postman Collection', description: 'Download for Postman', download: true },
+  { href: '/docs/api/swagger', label: 'Swagger UI', description: 'Interactive API explorer' },
+  { href: '/docs/api/redoc', label: 'ReDoc', description: 'API reference documentation' },
 ]
 
 export default function ApiDocsDropdown() {

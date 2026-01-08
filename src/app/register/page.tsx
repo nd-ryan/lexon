@@ -6,36 +6,43 @@ import Link from 'next/link'
 import Button from "@/components/ui/button"
 import Card from "@/components/ui/card"
 import Input from "@/components/ui/input"
-import { useSession } from 'next-auth/react'
+import { useSession, signIn } from 'next-auth/react'
 
 export default function SignUpPage() {
   const [formData, setFormData] = useState({
     name: '',
     email: '',
-    password: ''
+    password: '',
+    accessCode: ''
   })
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [accessCodeRequired, setAccessCodeRequired] = useState(false)
+  const [registrationEnabled, setRegistrationEnabled] = useState<boolean | null>(null)
   const router = useRouter()
   const { status } = useSession();
 
+  // Check registration feature flag first - before rendering anything
   useEffect(() => {
-    if (status === 'authenticated') {
-      router.replace('/');
-    }
-  }, [status, router]);
-
-  useEffect(() => {
-    // Check if registration is enabled, redirect if not
     fetch('/api/features')
       .then(res => res.json())
       .then(data => {
         if (!data.registrationEnabled) {
           router.replace('/auth/signin');
+          return;
         }
+        setRegistrationEnabled(true)
+        setAccessCodeRequired(data.accessCodeRequired ?? false)
       })
       .catch(() => router.replace('/auth/signin'))
   }, [router]);
+
+  // Redirect authenticated users
+  useEffect(() => {
+    if (status === 'authenticated') {
+      router.replace('/');
+    }
+  }, [status, router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -62,8 +69,12 @@ export default function SignUpPage() {
       if (!res.ok) {
         setError(data.error || 'Something went wrong')
       } else {
-        // Redirect to sign-in page with a success message
-        router.push('/auth/signin?message=Signup successful! Please sign in.')
+        // Auto sign-in after successful registration
+        await signIn('credentials', {
+          email: formData.email,
+          password: formData.password,
+          callbackUrl: '/cases',
+        })
       }
     } catch {
       setError('Network error. Please try again.')
@@ -77,6 +88,11 @@ export default function SignUpPage() {
       ...prev,
       [e.target.name]: e.target.value
     }))
+  }
+
+  // Don't render anything until we've confirmed registration is enabled
+  if (registrationEnabled !== true) {
+    return null
   }
 
   return (
@@ -127,6 +143,20 @@ export default function SignUpPage() {
                   onChange={handleChange}
                 />
               </div>
+              {accessCodeRequired && (
+                <div>
+                  <Input
+                    id="accessCode"
+                    name="accessCode"
+                    type="text"
+                    placeholder="Access code"
+                    autoComplete="off"
+                    required
+                    value={formData.accessCode}
+                    onChange={handleChange}
+                  />
+                </div>
+              )}
               <Button type="submit" disabled={loading} className="w-full">
                 {loading ? 'Signing up...' : 'Sign up'}
               </Button>
@@ -139,4 +169,4 @@ export default function SignUpPage() {
       </div>
     </section>
   )
-} 
+}

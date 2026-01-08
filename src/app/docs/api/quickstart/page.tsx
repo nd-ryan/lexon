@@ -5,6 +5,7 @@ import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import type { Session } from 'next-auth'
 import { hasAtLeastRole } from '@/lib/rbac'
+import { CodeBlock } from '@/components/ui/CodeBlock'
 
 export default function QuickStartPage() {
   const { data: session, status } = useSession()
@@ -48,30 +49,30 @@ export default function QuickStartPage() {
 
         <h2>Authentication</h2>
         <p>All authenticated endpoints require your API key. <strong>Send both headers</strong> for reliable rate limiting:</p>
-        <pre><code>{`Authorization: Bearer YOUR_API_KEY
-X-API-Key: YOUR_API_KEY`}</code></pre>
+        <CodeBlock>{`Authorization: Bearer YOUR_API_KEY
+X-API-Key: YOUR_API_KEY`}</CodeBlock>
 
         <h2>Quick Test</h2>
 
         <h3>1. Verify connectivity (no auth required)</h3>
-        <pre><code>{`curl "https://api.lexon.law/v1/health"`}</code></pre>
+        <CodeBlock language="bash">{`curl "https://api.lexon.law/v1/health"`}</CodeBlock>
         <p>Expected response:</p>
         <pre><code>{`{"status": "ok", "timestamp": "2026-01-08T..."}`}</code></pre>
 
         <h3>2. Check API version (no auth required)</h3>
-        <pre><code>{`curl "https://api.lexon.law/v1/version"`}</code></pre>
+        <CodeBlock language="bash">{`curl "https://api.lexon.law/v1/version"`}</CodeBlock>
         <p>Expected response:</p>
         <pre><code>{`{"version": "1.2.0", "api": "Lexon External API"}`}</code></pre>
 
         <h3>3. Make your first query</h3>
-        <pre><code>{`curl -X POST "https://api.lexon.law/v1/query" \\
+        <CodeBlock language="bash">{`curl -X POST "https://api.lexon.law/v1/query" \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer YOUR_API_KEY" \\
   -H "X-API-Key: YOUR_API_KEY" \\
   -d '{
     "query": "What are the elements of a monopolization claim?",
     "limit": 10
-  }'`}</code></pre>
+  }'`}</CodeBlock>
 
         <h2>Postman Collection</h2>
         <p>Import the Lexon API into Postman:</p>

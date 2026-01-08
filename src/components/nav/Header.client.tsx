@@ -16,7 +16,7 @@ export default function Header() {
   const isAdmin = hasAtLeastRole(role, 'admin')
   
   // Don't show header on home page or auth pages
-  if (pathname === '/' || pathname === '/auth/signin' || pathname === '/auth/signup') {
+  if (pathname === '/' || pathname === '/auth/signin' || pathname === '/register') {
     return null
   }
   

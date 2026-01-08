@@ -31,7 +31,7 @@ export default function UserNav() {
         </Link>
         {registrationEnabled && (
           <Link 
-            href="/auth/signup"
+            href="/register"
             className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 rounded-md text-sm font-medium"
           >
             Sign Up

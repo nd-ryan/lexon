@@ -21,7 +21,7 @@ function SignInPageContent() {
 
   useEffect(() => {
     if (status === 'authenticated') {
-      router.replace('/');
+      router.replace('/cases');
     }
   }, [status, router]);
 
@@ -34,7 +34,7 @@ function SignInPageContent() {
       const result = await signIn('credentials', {
         email: formData.email,
         password: formData.password,
-        callbackUrl: '/',
+        callbackUrl: '/cases',
       })
       if (result?.error) {
         setError('Invalid email or password')

@@ -9,6 +9,7 @@ interface CaseSidebarProps {
   isViewMode: boolean
   setIsViewMode: (mode: boolean) => void
   hideModeToggle?: boolean
+  canEdit?: boolean
   caseNode: any
   proceedingNodes: any[]
   forumNodes: any[]
@@ -37,6 +38,7 @@ export function CaseSidebar({
   isViewMode,
   setIsViewMode,
   hideModeToggle = false,
+  canEdit = true,
   caseNode,
   proceedingNodes,
   forumNodes,
@@ -163,7 +165,7 @@ export function CaseSidebar({
 
   return (
     <div className="w-64 border-r bg-gray-50 flex-shrink-0 sticky top-0 max-h-screen overflow-y-auto">
-      {!hideModeToggle && (
+      {!hideModeToggle && canEdit && (
         <div className="p-4 border-b bg-white">
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-gray-700">Mode:</span>

@@ -11,6 +11,14 @@ export default withAuth(
         if (req.nextUrl.pathname === '/') {
           return true
         }
+        // Allow registration page without authentication
+        if (req.nextUrl.pathname === '/register') {
+          return true
+        }
+        // Allow features API without authentication (needed by registration page)
+        if (req.nextUrl.pathname === '/api/features') {
+          return true
+        }
         // Allow PDF files (like white paper) without authentication
         if (req.nextUrl.pathname.endsWith('.pdf')) {
           return true
@@ -28,7 +36,7 @@ export default withAuth(
 
 export const config = {
   matcher: [
-    // Protect all routes except: NextAuth pages, NextAuth API, static assets
-    '/((?!api/auth|auth/signin|auth/signout|auth/error|_next|static|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|pdf)$).*)',
+    // Protect all routes except: NextAuth pages, NextAuth API, static assets, registration, features API
+    '/((?!api/auth|api/features|auth/signin|auth/signout|auth/error|register|_next|static|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|pdf)$).*)',
   ]
 }

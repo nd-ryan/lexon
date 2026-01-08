@@ -13,7 +13,17 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const { name, email, password } = await request.json()
+    const { name, email, password, accessCode } = await request.json()
+
+    // Validate access code if required
+    if (features.registrationAccessCode) {
+      if (!accessCode || accessCode !== features.registrationAccessCode) {
+        return NextResponse.json(
+          { error: 'Invalid access code' },
+          { status: 403 }
+        )
+      }
+    }
 
     // Validation
     if (!name || !email || !password) {
