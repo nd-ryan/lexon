@@ -45,7 +45,7 @@ def get_api_key_from_header(request: Request) -> str:
 
 limiter = Limiter(key_func=get_api_key_from_header)
 
-router = APIRouter(prefix="/query", tags=["External Query"])
+router = APIRouter(prefix="/external/v1/query", tags=["External Query"])
 
 
 # Whitelist of allowed fields in response nodes

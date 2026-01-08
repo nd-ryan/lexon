@@ -99,6 +99,10 @@ external_app = FastAPI(
     docs_url=None,  # Disabled - use /admin/api-docs instead
     redoc_url=None,  # Disabled - use /admin/api-docs/redoc instead
     openapi_url=None,  # Disabled - custom authenticated route below
+    servers=[
+        {"url": "https://api.lexon.law/v1", "description": "Production"},
+        {"url": "http://localhost:8000/external/v1", "description": "Local development"},
+    ],
     contact={
         "name": "Lexon Support",
     },
@@ -347,6 +351,7 @@ async def get_openapi_spec(
             routes=external_app.routes,
             contact=external_app.contact,
             license_info=external_app.license_info,
+            servers=external_app.servers,
         )
     return external_app.openapi_schema
 

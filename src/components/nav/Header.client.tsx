@@ -4,6 +4,7 @@ import { usePathname } from 'next/navigation'
 import Link from 'next/link'
 import UserNav from '@/components/auth/user-nav.client'
 import AdminLink from '@/components/nav/AdminLink.client'
+import ApiDocsDropdown from '@/components/nav/ApiDocsDropdown.client'
 import { useSession } from 'next-auth/react'
 import type { Session } from 'next-auth'
 import { hasAtLeastRole } from '@/lib/rbac'
@@ -13,7 +14,6 @@ export default function Header() {
   const { data: session } = useSession()
   const role = (session?.user as Session['user'])?.role
   const isAdmin = hasAtLeastRole(role, 'admin')
-  const canSeeDocs = hasAtLeastRole(role, 'developer')
   
   // Don't show header on home page or auth pages
   if (pathname === '/' || pathname === '/auth/signin' || pathname === '/auth/signup') {
@@ -34,11 +34,7 @@ export default function Header() {
             <Link href="/chat" className="text-gray-700 hover:text-gray-900">
               Chat
             </Link>
-            {canSeeDocs && (
-              <Link href="/api/docs/swagger" className="text-gray-700 hover:text-gray-900">
-                API Docs
-              </Link>
-            )}
+            <ApiDocsDropdown />
             {isAdmin && (
               <Link href="/cases/upload" className="text-gray-700 hover:text-gray-900">
                 Upload
