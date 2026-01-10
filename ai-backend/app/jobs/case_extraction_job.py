@@ -2,6 +2,7 @@
 import os
 import json
 import asyncio
+from typing import Optional, Tuple
 from app.lib.queue import redis_conn
 from app.lib.logging_config import setup_logger
 from app.lib.db import SessionLocal
@@ -9,6 +10,32 @@ from app.lib.case_repo import case_repo
 
 
 logger = setup_logger("case-extraction-job")
+
+
+def get_prescreened_text(job_id: str) -> Optional[Tuple[str, str]]:
+    """Retrieve prescreened text from Redis if available.
+    
+    Returns:
+        Tuple of (text, source) if found, None otherwise
+    """
+    prescreened_key = f"prescreened:{job_id}"
+    data = redis_conn.get(prescreened_key)
+    
+    if data:
+        try:
+            parsed = json.loads(data)
+            text = parsed.get("text", "")
+            source = parsed.get("source", "unknown")
+            
+            # Clean up Redis key
+            redis_conn.delete(prescreened_key)
+            
+            if text:
+                return (text, source)
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.warning(f"Failed to parse prescreened text data: {e}")
+    
+    return None
 
 
 def publish_progress(job_id: str, message: str, phase: str = "", progress: int = 0):
@@ -63,6 +90,15 @@ def run_case_extraction(job_id: str, filename: str, file_extension: str, case_id
     logger.info(f"Starting case extraction job {job_id} for case {case_id}")
     logger.info(f"Redis connection: {redis_conn}")
     
+    # Check for prescreened text first
+    prescreened = get_prescreened_text(job_id)
+    if prescreened:
+        prescreened_text, text_source = prescreened
+        logger.info(f"Using prescreened text: {len(prescreened_text)} chars, source: {text_source}")
+    else:
+        prescreened_text = None
+        text_source = None
+    
     # Retrieve file content from Redis
     redis_key = f"file_upload:{job_id}"
     file_bytes = redis_conn.get(redis_key)
@@ -113,6 +149,13 @@ def run_case_extraction(job_id: str, filename: str, file_extension: str, case_id
         flow.state.file_path = tmp_path
         flow.state.filename = filename
         flow.state.case_id = case_id
+        
+        # If prescreened text is available, set it on the flow state
+        # The flow will use this instead of reading from the file
+        if prescreened_text:
+            flow.state.document_text = prescreened_text
+            flow.state.text_source = text_source
+            logger.info(f"Set prescreened text on flow state ({text_source})")
         
         # Set progress callback so the flow can publish updates
         flow.state.progress_callback = lambda msg, phase, pct: publish_progress(job_id, msg, phase, pct)

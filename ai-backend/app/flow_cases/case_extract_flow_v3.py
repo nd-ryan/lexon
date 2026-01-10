@@ -229,6 +229,7 @@ class CaseExtractState(BaseModel):
     flow_config: Dict[str, Any] | None = None
     # Working context
     document_text: str = ""
+    text_source: str = ""  # Source of document_text: "pdf_text", "courtlistener", "ocr", or empty
     nodes_accumulated: List[Dict[str, Any]] | None = None
     edges_accumulated: List[Dict[str, Any]] | None = None
 
@@ -516,40 +517,46 @@ class CaseExtractFlow(Flow[CaseExtractState]):
             logger.warning(f"Failed to load flow_config_v3.json: {e}; using defaults")
             self.state.flow_config = {"batch_sizes": {}}
 
-        # Read document once and store text
-        try:
-            logger.info(f"Reading document: file_path='{self.state.file_path}', filename='{self.state.filename}'")
-            
-            # Add file existence check with detailed logging
-            if not os.path.exists(self.state.file_path):
-                error_msg = f"File not found: {self.state.file_path}"
-                logger.error(error_msg)
-                logger.error(f"Current working directory: {os.getcwd()}")
-                logger.error(f"Directory contents: {os.listdir(os.path.dirname(self.state.file_path) if os.path.dirname(self.state.file_path) else '.')}")
-                self.state.document_text = ""
-                return ctx
-            
-            file_size = os.path.getsize(self.state.file_path)
-            logger.info(f"File exists, size: {file_size} bytes")
-            
-            doc_res = read_document(self.state.file_path, self.state.filename)
-            logger.info(f"Document read result type: {type(doc_res)}, is_dict: {isinstance(doc_res, dict)}")
-            if isinstance(doc_res, dict):
-                logger.info(f"Document read result keys: {list(doc_res.keys())}, ok={doc_res.get('ok')}")
-                if doc_res.get("ok"):
-                    text_content = doc_res.get("text") or ""
-                    self.state.document_text = str(text_content)
-                    logger.info(f"Document text loaded successfully, length: {len(self.state.document_text)}")
-                else:
-                    error_msg = doc_res.get("error", "Unknown error")
-                    logger.error(f"Document read failed: {error_msg}")
+        # Read document once and store text (skip if prescreened text already provided)
+        if self.state.document_text:
+            logger.info(
+                f"Using pre-set document text ({len(self.state.document_text)} chars, source: {self.state.text_source or 'unknown'})"
+            )
+        else:
+            try:
+                logger.info(f"Reading document: file_path='{self.state.file_path}', filename='{self.state.filename}'")
+                
+                # Add file existence check with detailed logging
+                if not os.path.exists(self.state.file_path):
+                    error_msg = f"File not found: {self.state.file_path}"
+                    logger.error(error_msg)
+                    logger.error(f"Current working directory: {os.getcwd()}")
+                    logger.error(f"Directory contents: {os.listdir(os.path.dirname(self.state.file_path) if os.path.dirname(self.state.file_path) else '.')}")
                     self.state.document_text = ""
-            else:
-                logger.warning(f"Document read returned unexpected type: {type(doc_res)}")
+                    return ctx
+                
+                file_size = os.path.getsize(self.state.file_path)
+                logger.info(f"File exists, size: {file_size} bytes")
+                
+                doc_res = read_document(self.state.file_path, self.state.filename)
+                logger.info(f"Document read result type: {type(doc_res)}, is_dict: {isinstance(doc_res, dict)}")
+                if isinstance(doc_res, dict):
+                    logger.info(f"Document read result keys: {list(doc_res.keys())}, ok={doc_res.get('ok')}")
+                    if doc_res.get("ok"):
+                        text_content = doc_res.get("text") or ""
+                        self.state.document_text = str(text_content)
+                        self.state.text_source = "pdf_text"
+                        logger.info(f"Document text loaded successfully, length: {len(self.state.document_text)}")
+                    else:
+                        error_msg = doc_res.get("error", "Unknown error")
+                        logger.error(f"Document read failed: {error_msg}")
+                        self.state.document_text = ""
+                else:
+                    logger.warning(f"Document read returned unexpected type: {type(doc_res)}")
+                    self.state.document_text = ""
+            except Exception as e:
+                logger.error(f"Exception while reading document: {e}", exc_info=True)
                 self.state.document_text = ""
-        except Exception as e:
-            logger.error(f"Exception while reading document: {e}", exc_info=True)
-            self.state.document_text = ""
 
         # Build existing catalogs for:
         # - labels where can_create_new is False 

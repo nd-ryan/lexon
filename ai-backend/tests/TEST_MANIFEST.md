@@ -4,9 +4,9 @@
 
 This document provides a centralized reference for all backend tests, organized by test file and category.
 
-**Total Tests:** 151  
+**Total Tests:** 218  
 **Test Framework:** pytest with async support  
-**Coverage Areas:** Case extraction flow (V3), shared nodes management, preset node behavior, graph event logging, Neo4j uploader helpers, optional Neo4j/Search integration checks, API security  
+**Coverage Areas:** Case extraction flow (V3), shared nodes management, preset node behavior, graph event logging, Neo4j uploader helpers, concept auto-linking, optional Neo4j/Search integration checks, API security  
 **Pass Rate:** 100% ✅
 
 ---
@@ -351,7 +351,148 @@ Tests mapping of temporary node IDs to permanent Neo4j UUIDs.
 
 ---
 
-## 12. Integration Tests (optional / external dependencies)
+## 12. `tests/lib/pdf_prescreening/` - PDF Pre-screening (43 tests) ✨NEW
+
+**Purpose:** Tests for the PDF pre-screening pipeline that handles flattened/scanned PDFs in bulk upload.
+
+### `test_text_extractor.py` (12 tests)
+
+Tests for PDF text extraction and quality assessment.
+
+#### `TestAssessQuality` (6 tests)
+- **test_good_quality_text** - Text with good quality marked as usable
+- **test_low_character_count** - Low char count flagged appropriately
+- **test_few_pages_with_content** - Documents with few text pages flagged
+- **test_non_printable_characters** - Non-printable chars detected
+- **test_low_alpha_ratio** - Low alphabetic ratio flagged
+- **test_empty_text** - Empty text not usable
+
+#### `TestDetectJunkPatterns` (3 tests)
+- **test_pdf_header_pattern** - Detects PDF header in text
+- **test_pdf_stream_pattern** - Detects PDF stream objects
+- **test_clean_text** - Clean text doesn't trigger junk detection
+
+#### `TestExtractTextWithQuality` (2 tests)
+- **test_invalid_pdf_bytes** - Handles invalid PDF gracefully
+- **test_empty_bytes** - Handles empty bytes
+
+#### `TestExtractFirstPageText` (2 tests)
+- **test_invalid_pdf** - Returns None for invalid PDF
+- **test_empty_bytes** - Returns None for empty bytes
+
+### `test_courtlistener_client.py` (22 tests)
+
+Tests for CourtListener API client and candidate scoring.
+
+#### `TestCourtListenerClient` (4 tests)
+- **test_build_search_queries_with_citation** - Builds citation-based query
+- **test_build_search_queries_with_docket** - Builds docket-based query
+- **test_build_search_queries_with_case_name** - Builds case name query
+- **test_build_search_queries_empty_identifiers** - Returns empty for no identifiers
+
+#### `TestCandidateScoring` (6 tests)
+- **test_score_exact_docket_match** - Docket match gives high score
+- **test_score_citation_match** - Citation match contributes to score
+- **test_score_court_match** - Court match contributes to score
+- **test_score_case_name_similarity** - Similar case names contribute
+- **test_score_date_exact_match** - Exact date beats year match
+- **test_score_capped_at_one** - Score capped at 1.0
+
+#### `TestNormalization` (5 tests)
+- **test_normalize_docket** - Docket normalization works
+- **test_normalize_citation** - Citation normalization handles whitespace
+- **test_extract_year** - Year extraction from various formats
+- **test_case_name_similarity** - Case name similarity calculation
+
+#### `TestExtractCitations` (3 tests)
+- **test_extract_federal_reporter_citation** - Extracts F.3d citations
+- **test_extract_us_citation** - Extracts U.S. citations
+- **test_empty_text** - Returns empty for empty text
+
+#### `TestResolve` (2 tests)
+- **test_resolve_insufficient_identifiers** - Fails gracefully with insufficient data
+- **test_resolve_with_mocked_api** - Resolves with mocked API
+
+### `test_pipeline.py` (9 tests)
+
+Tests for the pre-screening pipeline orchestrator.
+
+#### `TestPrescreeningAnalyze` (5 tests)
+- **test_good_text_layer_returns_immediately** - Returns text_layer_ok for good PDFs
+- **test_flattened_pdf_attempts_courtlistener** - Attempts CourtListener for flattened
+- **test_falls_back_to_ocr_when_courtlistener_fails** - Falls back to OCR
+- **test_fails_when_all_methods_fail** - Returns failed status
+- **test_skip_courtlistener_flag** - Respects skip_courtlistener flag
+
+#### `TestIdentifiersSufficientData` (6 tests)
+- **test_citation_is_sufficient** - Citation alone is sufficient
+- **test_case_name_plus_court_is_sufficient** - Case name + court sufficient
+- **test_case_name_plus_date_is_sufficient** - Case name + date sufficient
+- **test_docket_plus_court_is_sufficient** - Docket + court sufficient
+- **test_case_name_alone_is_not_sufficient** - Case name alone insufficient
+- **test_empty_is_not_sufficient** - Empty identifiers insufficient
+
+---
+
+## 13. `test_concept_linking.py` - Concept Linking Feature (28 tests) ✨NEW
+
+**Purpose:** Tests for the retroactive concept auto-linking feature that uses AI to find matches between shared concepts (Doctrines, Policies, etc.) and case data.
+
+### Schema Parser Tests (9 tests)
+
+#### `TestSchemaParser` (9 tests)
+Tests for `app/lib/concept_linking/schema_parser.py`.
+
+- **test_get_linkable_concepts_returns_expected_types** - Identifies Doctrine, Policy, FactPattern, Law as linkable
+- **test_get_linkable_concepts_maps_to_correct_targets** - Maps concepts to correct target labels
+- **test_get_concept_targets_returns_targets_for_valid_concept** - Returns targets for valid concepts
+- **test_get_concept_targets_returns_empty_for_invalid_concept** - Returns empty for invalid concepts
+- **test_get_relationship_label_returns_correct_label** - Returns correct relationship label
+- **test_get_relationship_label_returns_none_for_invalid_pair** - Returns None for invalid pairs
+- **test_get_concept_id_property_converts_to_snake_case** - Converts to snake_case_id format
+- **test_get_target_text_properties_returns_text_fields** - Returns text fields for analysis
+- **test_get_schema_info_returns_complete_info** - Returns complete schema information
+
+### Analysis Service Tests (7 tests)
+
+#### `TestAnalysisService` (7 tests)
+Tests for `app/lib/concept_linking/analysis_service.py`.
+
+- **test_get_node_text_preview_extracts_text** - Extracts text from node properties
+- **test_get_node_text_preview_truncates_long_text** - Truncates text longer than 200 chars
+- **test_get_node_text_preview_handles_missing_props** - Handles missing properties
+- **test_build_analysis_prompt_includes_concept_info** - Includes concept information in prompt
+- **test_fetch_concept_details_returns_props** - Returns concept properties
+- **test_fetch_concept_details_returns_none_when_not_found** - Returns None when not found
+- **test_list_concepts_by_label** - Returns formatted concepts list
+
+### Commit Service Tests (5 tests)
+
+#### `TestCommitService` (5 tests)
+Tests for `app/lib/concept_linking/commit_service.py`.
+
+- **test_get_target_id_property_converts_correctly** - Converts label to snake_case_id
+- **test_add_edge_to_extracted_adds_new_edge** - Adds new edge to extracted data
+- **test_add_edge_to_extracted_skips_duplicate** - Skips duplicate edges
+- **test_find_node_temp_id_in_extracted_finds_node** - Finds node by permanent ID
+- **test_find_node_temp_id_in_extracted_returns_none_when_not_found** - Returns None when not found
+
+### API Route Tests (7 tests)
+
+#### `TestConceptLinkingRoutes` (7 tests)
+Tests for `app/routes/concept_linking.py` API endpoints.
+
+- **test_get_schema_returns_linkable_concepts** - Returns linkable concepts
+- **test_list_concepts_rejects_invalid_label** - Rejects invalid labels
+- **test_list_concepts_returns_concepts** - Returns concepts list
+- **test_analyze_rejects_invalid_label** - Rejects invalid concept label
+- **test_commit_rejects_empty_matches** - Rejects empty matches list
+- **test_commit_rejects_invalid_label** - Rejects invalid concept label
+- **test_get_target_counts_returns_counts** - Returns target counts
+
+---
+
+## 14. Integration Tests (optional / external dependencies) ✨UPDATED
 
 These are marked with `@pytest.mark.integration` and are **skipped** unless required environment variables are present.
 

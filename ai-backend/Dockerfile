@@ -33,6 +33,11 @@ FROM python:3.11-slim AS final
 # Set the working directory in the container
 WORKDIR /app
 
+# Install runtime dependencies (poppler for pdf2image)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy the virtual environment from the builder stage
 COPY --from=builder /app/.venv /app/.venv
 

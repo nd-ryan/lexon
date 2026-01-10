@@ -62,6 +62,13 @@ export default function AdminLink() {
             Shared Nodes
           </Link>
           <Link
+            href="/admin/concept-linking"
+            className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+            onClick={() => setIsOpen(false)}
+          >
+            Concept Linking
+          </Link>
+          <Link
             href="/admin/event-logs"
             className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
             onClick={() => setIsOpen(false)}

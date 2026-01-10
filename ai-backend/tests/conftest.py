@@ -129,14 +129,17 @@ async def async_client(monkeypatch, mock_db_session):
     from app.lib.security import get_api_key
     from app.lib.db import get_db
     
-    # Skip DB table creation during tests
-    monkeypatch.setattr(main, "ensure_all_tables", lambda engine: None)
+    # Skip DB table creation during tests (if function exists)
+    if hasattr(main, "ensure_all_tables"):
+        monkeypatch.setattr(main, "ensure_all_tables", lambda engine: None)
     
     # Mock Neo4j client to avoid real connection attempts
     mock_neo4j = MagicMock()
     mock_neo4j.execute_query = MagicMock(return_value=[])
     monkeypatch.setattr("app.lib.neo4j_client.neo4j_client", mock_neo4j)
     monkeypatch.setattr("app.routes.shared_nodes.neo4j_client", mock_neo4j)
+    # Also mock neo4j_client in concept_linking analysis service
+    monkeypatch.setattr("app.lib.concept_linking.analysis_service.neo4j_client", mock_neo4j)
     
     # Override API key dependency to bypass authentication in tests
     async def mock_get_api_key():

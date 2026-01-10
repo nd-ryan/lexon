@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Request, Query
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Request, Query
 from sqlalchemy.orm import Session
 from app.lib.security import get_api_key
 from app.lib.db import get_db
@@ -10,6 +10,7 @@ import os
 import logging
 import uuid
 import re
+import json
 from typing import Dict, Any, List, Set, Optional
 
 
@@ -72,14 +73,26 @@ def _get_node_id_for_label(label: str, node: Dict[str, Any], schema: List[Dict[s
     return None
 
 @router.post("/upload")
-async def upload_case(request: Request, file: UploadFile = File(...), db: Session = Depends(get_db)):
-    """Start async case extraction job and return job_id for progress tracking."""
+async def upload_case(
+    request: Request, 
+    file: UploadFile = File(...), 
+    prescreened_text: Optional[str] = Form(None),
+    text_source: Optional[str] = Form(None),
+    db: Session = Depends(get_db)
+):
+    """Start async case extraction job and return job_id for progress tracking.
+    
+    Optional prescreened_text and text_source can be provided for PDFs that
+    were pre-screened (e.g., flattened PDFs resolved via CourtListener or OCR).
+    """
     try:
         file_bytes = await file.read()
         file_extension = os.path.splitext(file.filename)[1] or '.docx'
         user_id = get_user_id_from_header(request)
         
         logger.info(f"Received file upload: {file.filename}, size: {len(file_bytes)} bytes, user: {user_id}")
+        if prescreened_text:
+            logger.info(f"Prescreened text provided: {len(prescreened_text)} chars, source: {text_source}")
 
         # Create case record with original author
         case_id = case_repo.create_case(db.connection(), file.filename, original_author_id=user_id)
@@ -110,6 +123,16 @@ async def upload_case(request: Request, file: UploadFile = File(...), db: Sessio
         )
         
         logger.info(f"Stored file content in Redis: {redis_key}, size: {len(file_bytes)} bytes")
+        
+        # If prescreened text is provided, store it in Redis as well
+        if prescreened_text:
+            prescreened_key = f"prescreened:{job_id}"
+            prescreened_data = json.dumps({
+                "text": prescreened_text,
+                "source": text_source or "unknown",
+            })
+            redis_conn.setex(prescreened_key, 3600, prescreened_data)
+            logger.info(f"Stored prescreened text in Redis: {prescreened_key}")
 
         # Queue the extraction job
         from app.lib.queue import case_extraction_queue as q
