@@ -310,15 +310,25 @@ class CourtListenerClient:
         """
         Build search queries from identifiers.
         
-        Strategy: Focus on fuzzy case name and docket number searches.
-        Skip citation-based searches as they often fail on incomplete citations.
+        Strategy: 
+        1. Try citation-based lookups first (most reliable)
+        2. Fall back to party name + docket number searches
         """
         queries = []
+        
+        # Query 0: Direct citation lookup (most reliable when we have a good citation)
+        # Citations like "325 U.S. 797" can be searched directly
+        if identifiers.citations:
+            for citation in identifiers.citations[:2]:  # Try first 2 citations
+                # Only use citations that look like reporter citations (e.g., "123 U.S. 456")
+                # Skip malformed citations or section symbols
+                if re.match(r'^\d+\s+[\w\.\s]+\s+\d+', citation):
+                    queries.append(f'citation:"{citation}"')
         
         # Extract party names from case name for fuzzy search
         party_keywords = self._extract_party_keywords(identifiers.case_name) if identifiers.case_name else []
         
-        # Query 1: Party names as keywords (most effective for finding cases)
+        # Query 1: Party names as keywords + year constraint
         # Search for "Alice CLS Bank" rather than exact case name
         if party_keywords:
             keyword_query = " ".join(party_keywords)
@@ -345,7 +355,7 @@ class CourtListenerClient:
                 queries.append(f'docketNumber:"{docket_clean}"')
         
         # Query 3: Broader party keyword search without date constraint
-        if party_keywords and len(queries) < 3:
+        if party_keywords and len(queries) < 4:
             queries.append(" ".join(party_keywords[:3]))  # Use top 3 party keywords
         
         return queries
@@ -437,11 +447,41 @@ def extract_citations_from_text(text: str) -> list[str]:
         text: Text to extract citations from
         
     Returns:
-        List of citation strings
+        List of citation strings (actual citation text, not repr)
     """
     try:
+        from eyecite.models import FullCaseCitation, ShortCaseCitation
+        
         citations = get_citations(text)
-        return [str(c) for c in citations]
+        result = []
+        
+        for c in citations:
+            # Only extract full case citations (e.g., "123 U.S. 456")
+            # Skip UnknownCitation (section symbols, etc.), IdCitation, SupraCitation
+            if isinstance(c, (FullCaseCitation, ShortCaseCitation)):
+                # Use matched_text() to get the actual citation string from the text
+                if hasattr(c, 'matched_text') and callable(c.matched_text):
+                    matched = c.matched_text()
+                    if matched:
+                        result.append(matched)
+                # Fallback: reconstruct from groups if available
+                elif hasattr(c, 'groups') and c.groups:
+                    g = c.groups
+                    volume = g.get('volume', '')
+                    reporter = g.get('reporter', '')
+                    page = g.get('page', '')
+                    if volume and reporter and page:
+                        result.append(f"{volume} {reporter} {page}".strip())
+        
+        # Return unique citations, preserving order
+        seen = set()
+        unique = []
+        for cit in result:
+            if cit not in seen:
+                seen.add(cit)
+                unique.append(cit)
+        
+        return unique
     except Exception as e:
         logger.warning(f"Citation extraction failed: {e}")
         return []

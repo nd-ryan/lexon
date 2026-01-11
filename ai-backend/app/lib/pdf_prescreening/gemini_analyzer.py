@@ -42,17 +42,23 @@ EXTRACTED TEXT FROM PDF (first 1000 chars):
 {extracted_text}
 ---
 
-If the extracted text:
-- Contains readable words that match what you see in the images → is_flattened = false
-- Contains garbage like "(cid:X)", random symbols, or doesn't match the visual text → is_flattened = true
-- Is empty or nearly empty → is_flattened = true
+TEXT QUALITY ASSESSMENT:
+- If the extracted text contains readable words that match the visual text → is_flattened = false
+- If the extracted text is garbage like "(cid:X)", random symbols, or completely different from visual → is_flattened = true
+- If the extracted text is empty or nearly empty → is_flattened = true
+
+IMPORTANT: Text with extra spaces between letters (like "A M E R I C A N  B A N A N A") is still USABLE.
+This is a common OCR artifact but the text is readable. Set is_flattened = false for spaced-out but readable text.
 
 Look for these identifiers in the IMAGES:
 - Case name (e.g., "Smith v. Jones", "In re XYZ Corp")
-- Court name (e.g., "United States Court of Appeals for the Ninth Circuit")
-- Decision date
+- Court name - IMPORTANT: Extract the court that WROTE this opinion, not the court being appealed FROM.
+  - If you see "CERTIORARI TO..." or "ON APPEAL FROM...", the deciding court is the HIGHER court
+  - For documents with "SUPREME COURT OF THE UNITED STATES" header, use that as the court
+  - For slip opinions, look for the court name in the header, not in the procedural history
+- Decision date (the date of THIS opinion, not prior proceedings)
 - Docket number (e.g., "No. 22-1234")
-- Citations (e.g., "123 F.3d 456", "456 U.S. 789")
+- Citations (e.g., "123 F.3d 456", "456 U.S. 789") - extract the primary citation for THIS case if visible
 
 Respond ONLY with valid JSON in this exact format:
 {{
@@ -61,7 +67,7 @@ Respond ONLY with valid JSON in this exact format:
   "text_quality_reason": "Extracted text contains (cid:X) patterns which is garbage",
   "identifiers": {{
     "case_name": "Smith v. Jones",
-    "court": "United States Court of Appeals for the Ninth Circuit",
+    "court": "Supreme Court of the United States",
     "date": "2023-05-15",
     "docket_number": "No. 22-1234",
     "citations": ["123 F.3d 456"]
@@ -96,30 +102,46 @@ I have a PDF document with these identifiers:
 Here are candidate matches from CourtListener:
 {candidates_text}
 
-Your task:
-1. Compare each candidate to the document identifiers
-2. Determine which candidate (if any) is the SAME case as the document
-3. Be flexible with name variations (e.g., "Alice Corp." vs "Alice Corporation Pty. Ltd.")
-4. Focus on matching the core parties (e.g., "Alice" and "CLS Bank") 
-5. Docket numbers and dates should match if both are available
+Your task: Find the candidate that represents the SAME underlying legal case as the document.
 
-IMPORTANT: 
-- Only select a match if you are CONFIDENT it's the same case
-- Different cases from the same parties should NOT match
-- If none are a good match, select "none"
+MATCHING RULES (in order of importance):
+1. CASE NAME is most important - match the core party names (e.g., "Alice" vs "CLS Bank")
+   - Be flexible with variations: "Alice Corp." = "Alice Corporation Pty. Ltd."
+   - Ignore suffixes like "Inc.", "Corp.", "et al.", "LLC"
+   
+2. DOCKET NUMBER match is very strong evidence (same docket = same case)
+   - Minor format differences are OK: "No. 13-298" = "13-298" = "13–298"
+
+3. COURT DIFFERENCES ARE OK for the same case:
+   - Cases are appealed through multiple courts (District → Circuit → Supreme Court)
+   - If document says "7th Circuit" but candidate is "Supreme Court", it may be the SAME case on appeal
+   - CourtListener may only have one stage of the case - that's still a valid match
+   
+4. DATE MATCHING should be flexible:
+   - Same year is usually sufficient
+   - Different dates in the same year are often different stages of the same case (argument, decision, rehearing)
+   - A few months difference is acceptable if case name and docket match
+
+WHAT TO MATCH:
+- Select a candidate if it's the SAME underlying case, even at a different court level
+- A Supreme Court record for a case appealed from the 7th Circuit IS the same case
+
+WHAT NOT TO MATCH:
+- Different cases involving the same parties (e.g., "Smith v. Jones (2010)" vs "Smith v. Jones (2015)")
+- Completely different party names
 
 Respond ONLY with valid JSON:
 {{
   "selected_index": 0,
   "confidence": 0.95,
-  "reasoning": "Case names match (Alice Corp v CLS Bank), docket number matches (13-298), and date matches (2014)"
+  "reasoning": "Case names match (Alice Corp v CLS Bank), docket number matches (13-298). Court differs (7th Cir vs SCOTUS) but this is the same case on appeal."
 }}
 
 Or if no match:
 {{
   "selected_index": null,
   "confidence": 0.0,
-  "reasoning": "None of the candidates match the document identifiers"
+  "reasoning": "None of the candidates match - party names are completely different"
 }}"""
 
 
@@ -316,6 +338,9 @@ async def select_best_candidate(
                     json_lines.append(line)
             json_str = "\n".join(json_lines)
         
+        # Sanitize control characters that can break JSON parsing
+        json_str = _sanitize_json_string(json_str)
+        
         data = json.loads(json_str)
         
         selected_index = data.get("selected_index")
@@ -368,6 +393,15 @@ def _image_to_base64(img: Image.Image) -> str:
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 
+def _sanitize_json_string(json_str: str) -> str:
+    """Remove control characters that break JSON parsing."""
+    # Keep only printable characters plus common whitespace (newline, tab, carriage return)
+    return ''.join(
+        char for char in json_str 
+        if ord(char) >= 32 or char in '\n\r\t'
+    )
+
+
 def _parse_analysis_response(raw_response: str) -> GeminiAnalysisResult:
     """Parse Gemini's JSON response into GeminiAnalysisResult."""
     try:
@@ -387,6 +421,9 @@ def _parse_analysis_response(raw_response: str) -> GeminiAnalysisResult:
                 elif in_block:
                     json_lines.append(line)
             json_str = "\n".join(json_lines)
+        
+        # Sanitize control characters that can break JSON parsing
+        json_str = _sanitize_json_string(json_str)
         
         data = json.loads(json_str)
         

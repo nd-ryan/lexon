@@ -926,3 +926,549 @@ CREATE (:Domain {
   name:               row.name,
   preset:             true
 });
+
+
+
+
+// ============================================================================
+
+// ============================================================================
+// NEW SHARED NODES — JAN 2025
+// ============================================================================
+
+// ============================================================================
+
+
+
+
+// ============================================================================
+// FACT PATTERNS
+// ============================================================================
+
+UNWIND [
+  {
+    code: 'FP40',
+    name: 'Aftermarket Lock-in',
+    description: 'A scenario where a consumer is "locked in" to a specific brand\'s parts or services following the initial purchase of a durable good.'
+  },
+  {
+    code: 'FP41',
+    name: 'Most-Favored-Nation (MFN) Clause',
+    description: 'A contractual agreement where a seller guarantees a buyer that it will not offer a better price or terms to any other purchaser.'
+  },
+  {
+    code: 'FP42',
+    name: 'Reverse Payment Settlement (Pay-for-Delay)',
+    description: 'A settlement of patent litigation where the patent holder pays the alleged infringer (often a generic drug maker) to keep their product off the market.'
+  },
+  {
+    code: 'FP43',
+    name: 'Patent Assertion (Patent Troll Activity)',
+    description: 'An entity (PAE) that does not manufacture products but earns revenue by asserting patents against companies that do.'
+  },
+  {
+    code: 'FP44',
+    name: 'Two-Sided Market Interaction',
+    description: 'Conduct occurring on a platform that serves two distinct user groups (e.g., cardholders and merchants) where demand from one group affects the other.'
+  },
+  {
+    code: 'FP45',
+    name: 'Class-Wide Overcharge',
+    description: 'A fact pattern where the plaintiff seeks to prove that a conspiracy resulted in an inflated price paid by all members of the class.'
+  },
+  {
+    code: 'FP46',
+    name: 'Indirect Purchasing',
+    description: 'A scenario where a consumer buys a product through a middleman rather than directly from the manufacturer.'
+  },
+  {
+    code: 'FP47',
+    name: 'Nascent Competitor Merger',
+    description: 'The acquisition of a small, innovative startup that has the potential to become a major rival.'
+  },
+  {
+    code: 'FP48',
+    name: 'Pay-for-Delay Settlement',
+    description: 'An agreement where a brand-name pharma company pays a generic rival to stay out of the market.'
+  },
+  {
+    code: 'FP49',
+    name: 'Franchisor Opportunism',
+    description: 'A franchisor using "relational power" to force terms or products on a locked-in franchisee.'
+  },
+  {
+    code: 'FP50',
+    name: 'Interlocking Directorates',
+    description: 'When a person serves as an officer or director of two competing corporations.'
+  },
+  {
+    code: 'FP51',
+    name: 'Standard Setting "Ambush"',
+    description: 'A firm hides its IP during industry standard-setting, then sues once the industry is locked into that standard.'
+  },
+  {
+    code: 'FP52',
+    name: 'Foreign Export Restraint',
+    description: 'Conduct occurring outside the U.S. that specifically targets or harms U.S. export commerce.'
+  },
+  {
+    code: 'FP53',
+    name: 'Dual Distribution',
+    description: 'A manufacturer that sells its own products at retail while also selling to independent rival retailers.'
+  },
+  {
+    code: 'FP54',
+    name: 'Product Integration',
+    description: 'The physical or digital bundling of two components into a single "new" product to foreclose rivals.'
+  },
+  {
+    code: 'FP55',
+    name: 'State Sovereign Compulsion',
+    description: 'When a firm claims it was legally forced by a foreign government to engage in anticompetitive conduct.'
+  },
+  {
+    code: 'FP56',
+    name: 'Labor Market Wage Capping',
+    description: 'Competing employers agreeing to a maximum salary or specific benefits for a class of employees.'
+  },
+  {
+    code: 'FP57',
+    name: 'Class-Wide Injury Battle',
+    description: 'Litigation over whether "common proof" can show that every member of a class suffered the same overcharge.'
+  }
+] AS row
+CREATE (:FactPattern {
+  fact_pattern_upload_code: row.code,
+  fact_pattern_id:          randomUUID(),
+  name:                     row.name,
+  name_embedding:           [],
+  description:              row.description,
+  description_embedding:    [],
+  preset:                   true
+});
+
+
+// ============================================================================
+// LAWS
+// ============================================================================
+
+UNWIND [
+  {
+    code: 'L0024',
+    name: 'Clayton Act, Section 3',
+    citation: '15 U.S.C. § 14',
+    text: '',
+    type: 'statute',
+    enactment_date: '1914-10-15'
+  },
+  {
+    code: 'L0025',
+    name: 'Clayton Act, Section 4',
+    citation: '15 U.S.C. § 15',
+    text: '',
+    type: 'statute',
+    enactment_date: '1914-10-15'
+  },
+  {
+    code: 'L0026',
+    name: 'Robinson-Patman Act',
+    citation: '15 U.S.C. § 13',
+    text: '',
+    type: 'statute',
+    enactment_date: '1936-06-19'
+  },
+  {
+    code: 'L0027',
+    name: 'Hart-Scott-Rodino (HSR) Act',
+    citation: '15 U.S.C. § 18a',
+    text: '',
+    type: 'statute',
+    enactment_date: '1976-09-30'
+  },
+  {
+    code: 'L0028',
+    name: 'Capper-Volstead Act',
+    citation: '7 U.S.C. §§ 291–92',
+    text: '',
+    type: 'statute',
+    enactment_date: '1922-02-18'
+  },
+  {
+    code: 'L0029',
+    name: 'Article I – Legislative Power',
+    citation: 'U.S. Const. art. I, § 1',
+    text: '',
+    type: 'constitution',
+    enactment_date: '1789-03-04'
+  },
+  {
+    code: 'L0030',
+    name: 'Article IV – Privileges & Immunities',
+    citation: 'U.S. Const. art. IV, § 2',
+    text: '',
+    type: 'constitution',
+    enactment_date: '1789-03-04'
+  },
+  {
+    code: 'L0031',
+    name: 'Article V – Amendment Process',
+    citation: 'U.S. Const. art. V',
+    text: '',
+    type: 'constitution',
+    enactment_date: '1789-03-04'
+  },
+  {
+    code: 'L0032',
+    name: 'Third Amendment',
+    citation: 'U.S. Const. amend. III',
+    text: '',
+    type: 'constitution',
+    enactment_date: '1791-12-15'
+  },
+  {
+    code: 'L0033',
+    name: 'Seventh Amendment',
+    citation: 'U.S. Const. amend. VII',
+    text: '',
+    type: 'constitution',
+    enactment_date: '1791-12-15'
+  },
+  {
+    code: 'L0034',
+    name: 'Ninth Amendment',
+    citation: 'U.S. Const. amend. IX',
+    text: '',
+    type: 'constitution',
+    enactment_date: '1791-12-15'
+  },
+  {
+    code: 'L0035',
+    name: 'Tenth Amendment',
+    citation: 'U.S. Const. amend. X',
+    text: '',
+    type: 'constitution',
+    enactment_date: '1791-12-15'
+  },
+  {
+    code: 'L0036',
+    name: 'Eleventh Amendment',
+    citation: 'U.S. Const. amend. XI',
+    text: '',
+    type: 'constitution',
+    enactment_date: '1795-02-07'
+  },
+  {
+    code: 'L0037',
+    name: 'Twelfth Amendment',
+    citation: 'U.S. Const. amend. XII',
+    text: '',
+    type: 'constitution',
+    enactment_date: '1804-06-15'
+  },
+  {
+    code: 'L0038',
+    name: 'Thirteenth Amendment',
+    citation: 'U.S. Const. amend. XIII',
+    text: '',
+    type: 'constitution',
+    enactment_date: '1865-12-06'
+  },
+  {
+    code: 'L0039',
+    name: 'Fifteenth Amendment',
+    citation: 'U.S. Const. amend. XV',
+    text: '',
+    type: 'constitution',
+    enactment_date: '1870-02-03'
+  },
+  {
+    code: 'L0040',
+    name: 'Sixteenth Amendment',
+    citation: 'U.S. Const. amend. XVI',
+    text: '',
+    type: 'constitution',
+    enactment_date: '1913-02-03'
+  },
+  {
+    code: 'L0041',
+    name: 'Nineteenth Amendment',
+    citation: 'U.S. Const. amend. XIX',
+    text: '',
+    type: 'constitution',
+    enactment_date: '1920-08-18'
+  },
+  {
+    code: 'L0042',
+    name: 'Securities Act of 1933',
+    citation: '15 U.S.C. § 77a',
+    text: '',
+    type: 'statute',
+    enactment_date: '1933-05-27'
+  },
+  {
+    code: 'L0043',
+    name: 'Securities Exchange Act of 1934',
+    citation: '15 U.S.C. § 78a',
+    text: '',
+    type: 'statute',
+    enactment_date: '1934-06-06'
+  },
+  {
+    code: 'L0044',
+    name: 'Exchange Act Section 10(b)',
+    citation: '15 U.S.C. § 78j(b)',
+    text: '',
+    type: 'statute',
+    enactment_date: '1934-06-06'
+  },
+  {
+    code: 'L0045',
+    name: 'SEC Rule 10b-5',
+    citation: '17 C.F.R. § 240.10b-5',
+    text: '',
+    type: 'rule',
+    enactment_date: '1942-05-21'
+  },
+  {
+    code: 'L0046',
+    name: 'PSLRA (1995)',
+    citation: '15 U.S.C. § 78u-4',
+    text: '',
+    type: 'statute',
+    enactment_date: '1995-12-22'
+  },
+  {
+    code: 'L0047',
+    name: 'Sarbanes-Oxley Act (SOX)',
+    citation: '15 U.S.C. § 7201',
+    text: '',
+    type: 'statute',
+    enactment_date: '2002-07-30'
+  },
+  {
+    code: 'L0048',
+    name: 'Dodd-Frank Act',
+    citation: '12 U.S.C. § 5301',
+    text: '',
+    type: 'statute',
+    enactment_date: '2010-07-21'
+  },
+  {
+    code: 'L0049',
+    name: 'Investment Advisers Act',
+    citation: '15 U.S.C. § 80b-1',
+    text: '',
+    type: 'statute',
+    enactment_date: '1940-08-22'
+  },
+  {
+    code: 'L0050',
+    name: 'Investment Company Act',
+    citation: '15 U.S.C. § 80a-1',
+    text: '',
+    type: 'statute',
+    enactment_date: '1940-08-22'
+  },
+  {
+    code: 'L0051',
+    name: 'SLUSA (1998)',
+    citation: '15 U.S.C. § 78bb',
+    text: '',
+    type: 'statute',
+    enactment_date: '1998-11-03'
+  }
+] AS row
+CREATE (:Law {
+  law_upload_code: row.code,
+  law_id:          randomUUID(),
+  name:            row.name,
+  name_embedding:  [],
+  text:            row.text,
+  text_embedding:  [],
+  type:            row.type,
+  enactment_date:  row.enactment_date,
+  citation:        row.citation,
+  preset:          true
+});
+
+
+// ============================================================================
+// DOCTRINES
+// ============================================================================
+
+UNWIND [
+  {
+    code: 'D33',
+    name: 'Price Squeeze Doctrine',
+    description: 'A theory where a vertically integrated monopolist charges a high wholesale price to rivals and a low retail price to its own customers, making it impossible for rivals to compete.'
+  },
+  {
+    code: 'D34',
+    name: 'Exclusionary Innovation / Product Hopping',
+    description: 'When a firm uses product redesign or innovation strategically to break interoperability or forestall generic competition rather than to improve quality.'
+  },
+  {
+    code: 'D35',
+    name: 'Indirect Purchaser Doctrine (Illinois Brick)',
+    description: 'A rule generally barring indirect purchasers (those who did not buy directly from the conspirator) from recovering damages under federal antitrust law.'
+  },
+  {
+    code: 'D36',
+    name: 'Failing Firm Defense',
+    description: 'A merger defense asserting that a transaction is not anticompetitive because one of the firms is in such poor financial condition it would exit the market anyway.'
+  },
+  {
+    code: 'D37',
+    name: 'Intra-Enterprise Conspiracy Doctrine',
+    description: 'The principle (from Copperweld) that a parent corporation and its wholly-owned subsidiaries are legally incapable of conspiring under Section 1.'
+  },
+  {
+    code: 'D38',
+    name: 'Profit Sacrifice / No Economic Sense Test',
+    description: 'A standard for exclusionary conduct asking whether the defendant\'s behavior would be irrational but for its tendency to eliminate or discipline competition.'
+  },
+  {
+    code: 'D39',
+    name: 'Typicality and Adequacy',
+    description: 'Requirements for class certification ensuring the lead plaintiff\'s interests align with the class and that they can fairly represent the group.'
+  },
+  {
+    code: 'D40',
+    name: 'Predominance of Common Proof',
+    description: 'The requirement that questions of law or fact common to class members predominate over any questions affecting only individual members.'
+  },
+  {
+    code: 'D41',
+    name: 'Antitrust Injury Doctrine',
+    description: 'Requirement that a plaintiff show their injury is of the type the antitrust laws were intended to prevent.'
+  },
+  {
+    code: 'D42',
+    name: 'Efficiencies Defense',
+    description: 'The claim that a merger\'s procompetitive benefits (like cost savings) outweigh potential anticompetitive effects.'
+  },
+  {
+    code: 'D43',
+    name: 'Potential Competition Doctrine',
+    description: 'Used to block mergers that eliminate a "perceived" or "actual" likely entrant into a concentrated market.'
+  },
+  {
+    code: 'D44',
+    name: 'International Comity',
+    description: 'A doctrine where U.S. courts may decline to exercise jurisdiction to avoid conflict with a foreign nation\'s laws.'
+  },
+  {
+    code: 'D45',
+    name: 'Foreign Sovereign Immunities',
+    description: 'Protects foreign government entities from being sued in U.S. courts for sovereign (non-commercial) acts.'
+  },
+  {
+    code: 'D46',
+    name: 'Patent Misuse Doctrine',
+    description: 'An equitable defense preventing a patentee from using their patent to extend their power beyond the scope of the grant.'
+  },
+  {
+    code: 'D47',
+    name: 'Fair Use Doctrine (IP)',
+    description: 'A defense in copyright-related antitrust cases balancing IP protection with the need for competitive access.'
+  },
+  {
+    code: 'D48',
+    name: 'Filed Rate Doctrine',
+    description: 'Prevents antitrust challenges to rates that have been filed with and approved by a regulatory agency.'
+  },
+  {
+    code: 'D49',
+    name: 'Primary Jurisdiction',
+    description: 'A doctrine staying court proceedings so an administrative agency can first rule on a technical issue.'
+  },
+  {
+    code: 'D50',
+    name: 'Causation and Target Area',
+    description: 'Standards for determining if an antitrust violation was the "proximate cause" of a plaintiff\'s specific loss.'
+  },
+  {
+    code: 'D51',
+    name: 'Essential Facility (Joint Venture)',
+    description: 'Analyzes whether a joint venture\'s resource is so critical that denying access to competitors is illegal.'
+  },
+  {
+    code: 'D52',
+    name: 'Strategic Conduct Theory',
+    description: 'Focusing on non-price behaviors (like "product hopping") used to maintain market power.'
+  },
+  {
+    code: 'D53',
+    name: 'Single Brand Market Power',
+    description: 'Analyzes whether a firm can exercise power over its own specific brand (common in franchises/aftermarkets).'
+  }
+] AS row
+CREATE (:Doctrine {
+  doctrine_upload_code:   row.code,
+  doctrine_id:            randomUUID(),
+  name:                   row.name,
+  name_embedding:         [],
+  description:            row.description,
+  description_embedding:  [],
+  preset:                 true
+});
+
+
+// ============================================================================
+// POLICIES
+// ============================================================================
+
+UNWIND [
+  {
+    code: 'P25',
+    name: 'Preventing Wealth Transfer',
+    description: 'Policy focused on preventing the transfer of wealth from consumers to producers with market power.'
+  },
+  {
+    code: 'P26',
+    name: 'Preserving Choice',
+    description: 'Goal of ensuring that consumers have a variety of options in the marketplace, beyond just the lowest price.'
+  },
+  {
+    code: 'P27',
+    name: 'Decentralized Economic Power',
+    description: 'The "populist" value of preventing excessive concentration of economic or political influence in a few large firms.'
+  }
+] AS row
+CREATE (:Policy {
+  policy_upload_code: row.code,
+  policy_id:          randomUUID(),
+  name:               row.name,
+  name_embedding:     [],
+  description:        row.description,
+  description_embedding: [],
+  preset:             true
+});
+
+
+// ============================================================================
+// RELIEF TYPES
+// ============================================================================
+
+UNWIND [
+  {code:'RL0012', type:'Treble Damages'},
+  {code:'RL0013', type:'Consent Decree'},
+  {code:'RL0014', type:'Compulsory Licensing'},
+  {code:'RL0015', type:'Structural Breakup'},
+  {code:'RL0016', type:'Motion to Dismiss Granted'},
+  {code:'RL0017', type:'Motion to Dismiss Denied'},
+  {code:'RL0018', type:'Summary Judgment Granted'},
+  {code:'RL0019', type:'Class Certification Granted'},
+  {code:'RL0020', type:'Class Certification Denied'},
+  {code:'RL0021', type:'Directed Verdict'},
+  {code:'RL0022', type:'Disgorgement'},
+  {code:'RL0023', type:'Officer and Director Bar'},
+  {code:'RL0024', type:'Asset Freeze'},
+  {code:'RL0025', type:'Receivership'}
+] AS row
+CREATE (:ReliefType {
+  relief_type_upload_code: row.code,
+  relief_type_id:          randomUUID(),
+  type:                    row.type,
+  preset:                  true
+});
